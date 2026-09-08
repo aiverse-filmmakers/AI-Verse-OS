@@ -1,0 +1,4 @@
+interface:
+  display_name: "Level Up"
+  short_description: "Use the Three Ms to ship one useful AI-Verse OS improvement."
+  default_prompt: "Use the Three Ms to identify the highest-value improvement, scope it, build the smallest reliable version, and define verification."

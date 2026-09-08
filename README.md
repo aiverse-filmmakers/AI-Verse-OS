@@ -77,6 +77,7 @@ AI-Verse-OS/
 ├── CLAUDE.md
 ├── AGENTS.md
 ├── EXPANSIONS.md
+├── SKILL-AUTHORING.md
 ├── LICENSE
 ├── .gitignore
 ├── ai-verse-os-intake.md
@@ -107,6 +108,8 @@ A lesson becomes much more valuable when it is transformed from information into
 - expected outputs
 - verification or quality-control checks
 - references and reusable assets when needed
+
+See `SKILL-AUTHORING.md` for the full lesson-to-skill conversion standard, including filmmaking handoffs, continuity locks, quality gates, and when material should remain a reference, SOP, template, or script instead of becoming a skill.
 
 The goal is not to create hundreds of vague prompts. The goal is to build a growing library of focused skills that reliably perform real work.
 

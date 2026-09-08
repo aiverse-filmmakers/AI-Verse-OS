@@ -1,0 +1,4 @@
+interface:
+  display_name: "Link Source"
+  short_description: "Make a project, file, folder, or source findable by AI-Verse OS."
+  default_prompt: "Link this source into the smallest useful AI-Verse OS route and verify that the route resolves."

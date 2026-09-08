@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grill Me"
+  short_description: "Interview the operator and turn knowledge in their head into structured AI-Verse OS context."
+  default_prompt: "Interview me one useful question at a time, checkpoint every answer, and separate confirmed context from tentative ideas."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit AI-Verse OS"
+  short_description: "Run an evidence-based Four Cs audit and save a dated report."
+  default_prompt: "Audit this AI-Verse OS using verified evidence, routing probes, compatibility checks, and the Four Cs rubric."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create or Evolve Workspace"
+  short_description: "Build a domain-neutral isolated AI-Verse workspace."
+  default_prompt: "Create or evolve the smallest useful AI-Verse workspace for this scope without assuming a profession."

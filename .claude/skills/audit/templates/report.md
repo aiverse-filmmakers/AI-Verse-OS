@@ -1,65 +1,52 @@
 # AI-Verse OS Audit - {{timestamp}}
 
-## Scope
+Target: {{target}}
+Runtime: {{runtime}}
+Active workspace: {{workspace_or_none}}
+Limitations: {{limitations}}
 
-- Target:
-- Runtime:
-- Operating manuals:
-- Live checks performed:
-- Inspection limitations:
+## Deterministic architecture check
 
-## Score
+{{check_result}}
 
-| Layer | Score | Maximum |
-|---|---:|---:|
-| Context |  | 30 |
-| Connections |  | 25 |
-| Capabilities |  | 30 |
-| Cadence |  | 15 |
-| **Total** |  | **100** |
+## Scores
 
-## Executive summary
+| Area | Score | Evidence summary |
+|---|---:|---|
+| Architecture integrity | /20 | |
+| Context | /20 | |
+| Connections | /20 | |
+| Capabilities | /25 | |
+| Cadence | /15 | |
+| **Total** | **/100** | |
 
-Briefly state what is working, what is unverified, and the most important risk or opportunity.
+## Routing probes
 
-## Retrieval probes
-
-| Probe | Expected source | Route | Result | Freshness |
+| Probe | Expected authority | Route followed | Result | Freshness / notes |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
 
 ## Findings
 
-### {{FINDING-ID}} - {{title}}
+### {{finding-id}} - {{title}}
 
-- Classification:
-- Status:
-- Evidence:
-- Impact:
-- Recommended fix:
-- Verification required:
+Classification: {{confirmed defect / verification gap / stale-conflicting source / isolation-authority defect / intentional runtime difference / optional improvement}}
 
-## Runtime compatibility
+Evidence:
 
-Summarize Claude Code / Codex parity and intentional differences.
+Impact:
 
-## Highest-value next actions
+Recommended action:
 
-1.
-2.
-3.
+Status: {{new / open / resolved / reopened / not rechecked / not applicable}}
 
-**Best next `/level-up` target:**
+## Compatibility
 
-## Comparison with prior audit
+{{runtime_adapter_findings}}
 
-- New:
-- Still open:
-- Resolved:
-- Reopened:
-- Not rechecked:
-- No longer applicable:
+## Best next improvements
+
+1. **{{best action}}** - {{why}}
+2. {{optional}}
+3. {{optional}}
+
+Recommended `/level-up` target: {{target}}

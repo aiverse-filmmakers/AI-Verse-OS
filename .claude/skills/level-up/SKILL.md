@@ -1,161 +1,151 @@
 ---
 name: level-up
-description: Use after AI-Verse OS has basic context or whenever the operator wants to improve leverage, remove recurring manual work, repair a weak workflow, or convert a repeated process into a capability. Uses the Three Ms in order and ends with one shipped or clearly scoped improvement.
+description: Use when the operator wants to remove a recurring constraint, improve leverage, repair a weak workflow, strengthen a workspace, or convert repeated work into a more reliable capability. Uses the Three Ms and ships one scoped improvement without assuming a profession.
 ---
 
 # Level Up
 
-Use the Three Ms to turn one real constraint into one concrete improvement.
+Use the Three Ms to turn one real constraint into one concrete improvement at the correct scope.
 
-Read `references/3ms-framework.md` before running this skill. Read the latest relevant `/audit` report when one exists.
+Read `references/3ms-framework.md`, `AI-VERSE.yaml`, relevant current context, and the latest relevant audit evidence when available.
 
-## Principle
+## Step 1 - scope the improvement
 
-One run should focus on one improvement. Do not end with a giant backlog of vague automation ideas.
+Determine whether the constraint is:
 
-A repair to an existing workflow can be more valuable than adding another skill.
+- operator-wide
+- workspace-specific
+- shared across several workspaces
+- system/architecture-related
 
-## Phase 1 - Mindset: find the opportunity
+Prefer solving it locally before promoting complexity globally.
+
+## Phase 1 - Mindset: find the highest-value constraint
 
 Look at:
 
-- the operator's current priorities
-- repeated manual tasks
-- the biggest current time sink
+- current operator priorities
+- active workspace objectives
+- repeated manual work
 - recent audit findings
-- work that repeatedly requires copy-pasting context
-- workflows that are already partially automated but still fragile
-- important work the operator is not doing because it is too slow or expensive
+- repeated context reconstruction
+- fragile partially automated workflows
+- useful work being avoided because it is too slow, expensive, inconsistent, or difficult
 
-Ask enough questions to identify the highest-value candidate.
+Ask only enough to identify one target.
 
-Useful prompts include:
+## Phase 2 - Method: redesign the work
 
-- What are you doing repeatedly that should feel easier by now?
-- If demand doubled tomorrow, what would break first?
-- What useful work are you avoiding because it takes too long?
-- Where are you repeatedly rebuilding the same prompt or explanation?
-- To what extent can AI be leveraged here?
+### EAD
 
-Select one target and state why it matters.
-
-## Phase 2 - Method: decide what should change
-
-### Run EAD
-
-For the target process:
-
-1. **Eliminate:** can any step disappear entirely?
-2. **Automate:** which steps are repetitive or machine-friendly?
-3. **Delegate:** which steps should remain human or be handled by another person?
+1. **Eliminate:** can a step disappear?
+2. **Automate:** which steps are repetitive and sufficiently reliable?
+3. **Delegate:** which steps should remain human or move to another person/system?
 
 ### Map the process
 
 Capture:
 
 - trigger
-- input sources
+- authoritative inputs
 - transformations
 - decision points
-- output destination
+- approvals/permissions
+- outputs
+- failure paths
 
 ### Choose autonomy
 
-Assign the lowest workable level to each important step:
+Use the lowest workable level:
 
 - L0 manual
 - L1 suggested
 - L2 drafted
-- L3 supervised
-- L4 autonomous
+- L3 supervised execution
+- L4 monitored autonomous execution
+
+High-stakes or external actions may require a lower autonomy level even when technically automatable.
 
 ### Define success
 
-Choose at least one useful outcome such as:
+Choose useful measures appropriate to the actual domain, such as time saved, error reduction, quality, throughput, latency, reliability, cost, fewer handoffs, better coverage, or another evidence-based outcome.
 
-- time saved
-- more outputs shipped
-- lower error rate
-- faster response
-- higher conversion
-- lower cost
-- less context switching
-- fewer manual handoffs
+### Record meaningful decisions
 
-### Record the decision
+Write a settled implementation choice to the narrowest decision log:
 
-If the operator commits to a meaningful implementation, append a concise entry to `decisions/log.md` including the reason and constraints.
+- operator-wide -> `operator/decisions/`
+- workspace -> workspace `decisions/`
+
+Do not duplicate it in the legacy root log.
 
 ## Phase 3 - Machine: build the smallest reliable version
 
-Break the solution into blocks.
+For each block define:
 
-For every block identify:
-
-- input
+- input/source
 - action
 - output
 - deterministic vs AI-driven
 - validation
+- permissions
 - failure behavior
 
-Prefer deterministic code or rules when they are enough.
+Prefer deterministic code/rules when sufficient. Validate each block before chaining it.
 
-Build or specify the smallest useful version first. Validate each step before chaining it.
-
-## Decide the correct artifact
+## Choose the correct artifact and scope
 
 The improvement may be:
 
-- a repaired existing skill
-- a new skill
-- a script
-- a template
-- an SOP
-- a better route to context
-- a new connection
-- a scheduled automation
-- removal of an unnecessary process
+- deletion of unnecessary work
+- better current context or routing
+- connection verification
+- knowledge/SOP
+- template
+- script
+- workspace-local skill
+- shared skill
+- agent
+- automation
+- app
+- policy/approval rule
 
-Do not default to creating a new skill.
+Do not default to a shared skill.
 
-## When the target should become a skill
+### Local-first promotion
 
-A new skill is justified when the process:
+If the method depends on one workspace's terminology, sources, policies, or hidden assumptions, keep it local.
 
-- will be repeated
-- has a recognizable trigger
-- requires consistent reasoning or ordered steps
-- has clear inputs and outputs
-- benefits from guardrails
-- can be verified
-
-If it is only knowledge, store it as a reference. If it is a deterministic helper, prefer a script. If it is a proven process humans also need to understand, an SOP may be appropriate.
+Promote to shared capability only after portability and verification are demonstrated.
 
 ## Rollout
 
-For workflows with real-world actions, recommend staged autonomy:
+For workflows with external or consequential effects, use staged autonomy:
 
-1. manual test
-2. AI draft with review
+1. manual baseline
+2. AI draft/suggestion
 3. supervised execution
 4. monitored autonomy
 
-Use higher autonomy only when evidence supports it.
+Increase autonomy from evidence, not enthusiasm.
+
+## Verification
+
+Verify the actual failure modes of the improvement. If the target is domain-regulated or high-consequence, increase evidence and human review accordingly.
 
 ## Completion
 
-End with a compact implementation summary:
-
 ```text
+Scope:
 Target:
 Constraint:
 What changed:
-Artifact created or repaired:
+Artifact/location:
 Autonomy level:
 Verification:
-Metric to watch:
+Metric/evidence to watch:
+Promotion status: local / shared
 Next audit check:
 ```
 
-If implementation was completed, suggest running `/audit` again to verify the improvement rather than assuming it worked.
+After a meaningful implementation, use `/audit` to verify rather than assuming the change worked.

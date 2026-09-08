@@ -1,91 +1,86 @@
 ---
 name: link
-description: Use when adding a project, file, folder, repository, data source, lesson library, or important reference that AI-Verse OS must be able to find later. Adds the smallest useful route from the operating manual or an existing index and verifies that the route resolves.
+description: Use when adding an important file, folder, repository, record source, data system, document collection, workspace source, or external resource that AI-Verse OS must be able to find later. Adds the smallest durable route without copying the same truth into multiple places.
 ---
 
 # Link
 
-Make important information findable without copying the same content into several places.
+Make important information findable while preserving scope and source authority.
 
-## Goal
+## Read first
 
-Given a target source and its intended purpose, add the smallest durable route that lets a fresh AI session discover it.
-
-Examples:
-
-- `/link projects/client-a "current client project"`
-- `/link references/filmmaking "directing and AI filmmaking knowledge"`
-- `/link /path/to/local/folder "source footage metadata"`
-- `/link https://github.com/example/repo "production codebase"`
+Read `AI-VERSE.yaml` and identify the target scope before choosing where a route belongs.
 
 ## Step 1 - understand the source
 
 Determine:
 
 - what the source is
-- whether it is inside the repository, local, or external
-- what it should be used for
-- whether it is current truth, reference knowledge, historical material, or a live connection
+- whether it is local, repository-contained, or external
+- what scope owns it: operator, workspace, or shared
+- what it is authoritative for
+- whether it is current truth, durable knowledge, historical material, an asset, or a live source
+- whether access is verified
 
-Ask only when the target or intended use is genuinely ambiguous.
+Ask only when the target, authority, or scope is genuinely ambiguous.
 
-## Step 2 - find the correct route
+## Step 2 - choose the smallest canonical route
 
-Read `AGENTS.md` and `CLAUDE.md` plus any nearer scoped operating manual or index.
+Prefer one of these:
 
-Prefer an existing routing pattern. Do not create a second index when one already serves the purpose.
+- workspace `WORKSPACE.yaml` -> authoritative source route or workspace connection
+- workspace `context/CURRENT.md` -> temporary current pointer
+- `connections/registry.yaml` -> live external source mechanism
+- workspace `knowledge/` -> curated workspace-specific knowledge route/index
+- root `knowledge/` -> shared reusable knowledge route/index
+- operator current context/profile -> operator-wide route when genuinely relevant across workspaces
+- a short README/index beside a local source when that is the cleanest discovery point
 
-Possible routes include:
+Do not add routine source pointers to `AGENTS.md`, `CLAUDE.md`, or `AI-VERSE.yaml`. Those are system contracts.
 
-- a bullet under `Where things live`
-- a project index
-- a reference index
-- a connection entry
-- a scoped `AGENTS.md` or `CLAUDE.md`
-- a short README inside a source folder
+## Step 3 - describe authority
 
-## Step 3 - add the smallest useful pointer
-
-A good route tells the AI:
+A durable route should make clear:
 
 1. where the source lives
 2. what it contains
 3. when to use it
-4. which source is authoritative if duplicates exist
+4. what it is authoritative for
+5. scope/privacy limits
+6. whether access has been verified
 
-Do not paste the entire source into the operating manual.
+Do not paste the whole source into an index.
 
 ## Step 4 - verify resolution
 
-From the route you added, simulate a fresh lookup:
+Simulate a fresh lookup from the route:
 
-- can the source actually be reached?
-- does the path exist?
+- does the path/URL/source exist?
+- can the current runtime actually access it?
+- is the route scoped correctly?
 - is the description specific enough to know when it matters?
-- if the source is external, is its mechanism documented in `connections.md` when appropriate?
+- if external, is the connection registry entry safe and free of secrets?
 
-If verification is impossible, label it unverified instead of claiming success.
+If verification is impossible, mark it unverified.
 
-## Source authority rules
+## Authority rules
 
-- Current canonical context beats brainstorm captures.
-- Live connected data generally beats stale exports for current-state questions.
-- Archived information should not silently override current context.
-- A skill should reference durable knowledge rather than duplicate it whenever possible.
+- current scoped context beats older memory for current-state questions
+- verified live sources may beat stale snapshots for external current state
+- curated knowledge beats raw inbox material
+- archives never silently override current truth
+- generated indexes and app copies are derived, not canonical
 
-## Rules
+## Legacy compatibility
 
-- Prefer one pointer over copied content.
-- Do not reorganize unrelated files.
-- Do not create a hot cache unless the workflow specifically needs one.
-- Do not write credentials or secrets into routes.
-- Keep shared operating-manual edits synchronized between `AGENTS.md` and `CLAUDE.md`.
+If an existing installation still uses v1 `connections.md` or root context routes, preserve them. Do not create a second editable source without declaring which one is canonical.
 
 ## Output
 
-Report briefly:
+Report:
 
-- what was linked
-- where the route was added
-- what the source is for
-- whether the route was verified
+- source linked
+- scope
+- route added
+- authority/purpose
+- verification status

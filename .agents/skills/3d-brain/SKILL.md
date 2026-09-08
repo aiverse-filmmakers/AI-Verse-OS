@@ -1,135 +1,90 @@
 ---
 name: 3d-brain
-description: Use when someone asks to build a 3D brain, visualize AI-Verse OS or a second brain, turn saved knowledge into an interactive graph, or run /3d-brain.
+description: Use when someone asks to build a 3D brain, visualize their AI-Verse OS or second brain, turn their knowledge into an interactive graph, or run /3d-brain or /3D brain.
 disable-model-invocation: true
 argument-hint: "[brain name] [categories or existing app path]"
 ---
 
 # 3D Brain
 
-Turn selected AI-Verse OS knowledge into a personalized local visual explorer. The generated application must reflect real saved files and honest relationships. Do not invent knowledge merely to make the graph look more impressive.
+Turn the user's actual AI-Verse OS files into a personalized, local 3D knowledge globe. Use the bundled working application, not a new interpretation of its appearance. Preserve its spherical composition, colored categories, central orb, restrained connection particles, Cinema mode, and interactive growth replay.
 
-## 1. Establish the AI-Verse OS root
+The command is `/3d-brain` in Claude Code. In Codex, select the `3d-brain` skill or use `$3d-brain`. Interpret the natural-language phrase “3D brain” the same way. Input comes from `$ARGUMENTS` and the conversation. Work in the current assistant; no subagents, external services, API keys, paid assets, or deployment are required.
 
-Read the applicable `AGENTS.md`, `CLAUDE.md`, and relevant indexes. Work only inside the intended OS or project root. Do not scan unrelated home folders.
+## 1. Find the AI-Verse OS and the package
 
-Resolve this skill's package directory from the loaded `SKILL.md`.
+Read the applicable local operating manual and relevant index. Establish the actual AI-Verse OS root; do not scan an unrelated ancestor or all of the user's home directory. Resolve this skill's own directory from the loaded `SKILL.md`; all package paths below are relative to it, regardless of whether it lives in `.claude/skills`, `.agents/skills`, or a plugin.
 
-Run the discovery helper when Node.js is available:
+Read [the portable spec](references/portable-spec.md) and [the config guide](references/config.md). Check Node.js 22 or newer. Use the user's existing Node runtime. If unavailable, explain that Node is required and follow the host's installation/approval policy.
+
+Run the path-only discovery helper:
 
 ```text
 node <skill-directory>/scripts/discover.mjs --root <AI-Verse-OS-root>
 ```
 
-The helper should list candidate source folders without exposing file contents unnecessarily.
+It lists candidate folders, not their contents. Also use explicit routes in the operating manual to find custom wiki, meeting, video, or project folders. Do not assume the author's folder names or accounts exist on this machine.
 
-## 2. Choose the display name and categories
+## 2. Ask for the name and categories
 
-Reuse answers already supplied in the conversation.
+Use the host's question tool when available, otherwise ask in plain language. Reuse information already supplied; do not repeat answered questions.
 
-Ask for:
+1. **Name:** “What would you like to call your 3D brain?” Accept the exact display name, such as “Atlas Brain,” “Studio Mind,” or “Maya's Second Brain.” Do not silently choose the author's name or brand. A supplied argument can answer this question.
+2. **Categories:** “Which main categories would you like to see?” Offer the categories actually found, each beside its proposed file/folder path. Examples are Business knowledge, Meetings, Video knowledge, Claude memory, Codex Memory, Projects, and Skills. Let the user rename, omit, or add categories. Suggest three to seven for visual clarity; support one to twelve.
 
-1. **Brain name.** Use exactly the display name the user chooses.
-2. **Categories.** Offer relevant folders actually found in the OS, such as Context, Projects, Skills, Filmmaking, Lessons, References, Decisions, or other real sources.
+The category answer also approves its listed source paths. For a custom category with an unknown path, ask where those files live. Do not guess external memory roots. Codex's curated memory store can cover multiple projects; state that scope when offering it. Include it only if chosen. Claude memory should point to this AI-Verse OS's matching memory folder, not every Claude project.
 
-Three to seven categories usually gives the clearest visualization, but support more when the user needs them.
+Show the compact name/category/path mapping in your progress update. Once these choices are supplied, continue building without another generic confirmation. Ask only about unresolved paths, replacing an existing app, or another material ambiguity.
 
-Do not guess paths for external sources. Ask for the path or use an existing explicit route.
+## 3. Scaffold the exact experience
 
-## 3. Create the application
+Default output: `<AI-Verse-OS-root>/apps/3d-brain/`. If it already exists, inspect its `brain.config.json` and reuse the app. Do not overwrite it blindly. For a requested replacement, archive the existing version first within the same project. If unrelated files occupy the destination, choose a new folder or ask the user.
 
-Default destination:
+Create a setup JSON file in an ignored scratch folder under the user's AI-Verse OS, using the schema in [config.md](references/config.md). Do not include actual note bodies. Use relative paths for sources inside the AI-Verse OS and explicit approved paths for outside sources. Give each category a unique ID, label, color, adapter, and one or more real paths.
 
-`apps/3d-brain/`
+```text
+node <skill-directory>/scripts/scaffold.mjs --root <AI-Verse-OS-root> --config <setup-json> --out apps/3d-brain
+```
 
-If the destination already exists, inspect it first. Do not overwrite unrelated or personalized content blindly. Archive an older version when replacing it.
+This copies an explicit allowlist of application files and writes the personalized local config. It refuses an existing destination. The renderer is prebuilt: `node serve.mjs` works without npm installation. Do not copy `node_modules`, another user's config, a graph snapshot, screenshots, memory files, or session logs into the app or skill.
 
-Copy the bundled template from `assets/template/` into the destination and create `brain.config.json` based on `references/config.md`.
-
-Then run:
+In the generated app folder:
 
 ```text
 node build.mjs
 node serve.mjs
 ```
 
-Default server:
+Start the server through the host's normal background/launch mechanism. On Windows, background launches must be hidden. Default port is 4640. If occupied, pick an available port, update this app's config, and start there. Never stop an unrelated service. Keep the bind address at `127.0.0.1`.
 
-`http://127.0.0.1:4640`
+Read the build's real counts and warnings. A missing folder is a configuration issue to resolve, not a reason to invent nodes. Empty categories are allowed and shown honestly. For an entirely empty AI-Verse OS, explain that it needs saved notes; do not inflate it with synthetic content unless the user separately asks for a labeled example.
 
-Keep the bind address local unless the user explicitly asks for network exposure and understands the implications.
+## 4. Preserve behavior and honest connections
 
-## 4. Build from real knowledge
+The supplied renderer is the visual contract. Retain:
 
-The builder should scan approved Markdown and text sources, then create a graph dataset containing at minimum:
+- A stable spherical layout, distinct source colors, dark background, glowing central orb, and quiet orbital accents.
+- Real explicit Markdown links and wikilinks, with exact-title mentions distinguished from explicit relationships. Ambiguous links remain unresolved.
+- Search, source solo/toggle, inventory, health flags, note reading, and local file reveal.
+- **Play demo:** one central idea, the first real connection, branches springing from parent nodes, accelerating growth, and the full brain after about 29 seconds. Disconnected notes join without invented edges. This is a connectivity replay, not a historical chronology.
+- The central orb is visible from the first frame. Dragging, zooming, or clicking the canvas does not stop growth. Camera input takes over from automatic pullback. Replay resets cleanly.
+- **Cinema:** clean presentation with the growth counter beside the scene. Pause motion, reduced-motion support, responsive source controls, and no stale labels after replay.
 
-- node ID
-- title
-- source category
-- source path
-- relative file path when possible
-- explicit links when discoverable
-- optional health or freshness flags
+All name-bearing UI comes from `brain.config.json`. Do not regenerate the visuals with an image model or replace the scene with a generic force graph. If code changes are needed, use `npm ci`, edit `src/`, and run `npm run build:js`. Keep dependency license notices with the bundle.
 
-Explicit Markdown links or wikilinks can become graph edges. Do not invent edges simply because two notes discuss similar topics unless the UI clearly distinguishes inferred relationships from explicit links.
+The default adapters read Markdown/text and curated Codex memory. For Google Drive, Notion, raw meeting JSON, databases, PDFs, or another unsupported source, explain the gap and use an explicitly approved local export or build and test an adapter. Do not claim those systems are connected merely because their names appear in a category.
 
-Original notes must remain unchanged.
+## 5. Verify and deliver
 
-## 5. Visual behavior
+Follow [the acceptance checklist](references/acceptance.md). Check the actual generated app, not just the template:
 
-The bundled template should retain a clear knowledge-globe experience:
+1. Graph API has the requested name/categories, unique IDs, valid endpoints, and counts matching the source scan.
+2. Read at least one real note from each nonempty category, including exact topic sections for Codex memory. Originals remain unchanged.
+3. Confirm the personal name on the page and test search, a source solo filter, restoration, and the inventory.
+4. Watch early, middle, and complete growth. Drag and zoom while the count increases. Check the initial orb, clean labels, complete final count, and replay reset. Test Cinema and pause/resume.
+5. Inspect desktop and a narrow viewport. Do not manipulate the user's physical mouse; native Pointer Lock is disabled in the supplied app. Browser automation must remain virtual/headless.
+6. Check console errors. If browser verification is unavailable, say exactly which checks remain unverified rather than claiming a visual pass.
 
-- dark presentation background
-- visible central brain/orb element
-- categories with distinct UI treatment
-- stable spatial layout
-- restrained connection lines
-- search
-- category filters
-- inventory/counts
-- note inspection
-- drag to orbit
-- scroll to zoom
-- a presentation or Cinema mode
-- a growth/replay mode when graph ordering can be represented honestly
+Add a small route to the new app's README in the AI-Verse OS's existing project index or operating manual, following its conventions. Synchronize `AGENTS.md`/`CLAUDE.md` when required. Avoid storing private configs, graph data, or note content in a public repository. Do not deploy or push without the user's authorization.
 
-All user-facing names come from `brain.config.json` rather than being hardcoded.
-
-## 6. Unsupported sources
-
-Markdown and text files are the default supported sources.
-
-For PDFs, cloud drives, databases, Notion, raw meeting formats, or other external systems, use an approved local export or a tested adapter. Do not claim an external source is connected merely because the category name exists.
-
-## 7. Verification
-
-Before finishing:
-
-1. confirm the requested brain name appears in the app
-2. confirm configured categories match real paths
-3. compare displayed counts with the builder's scan counts
-4. open at least one real note from each non-empty category when possible
-5. test search
-6. test a category filter and restoration
-7. test orbit and zoom
-8. test Cinema/presentation mode
-9. test replay/growth when enabled
-10. check for console or server errors when browser verification is available
-
-If visual verification cannot be performed, state exactly what remains unverified.
-
-## 8. Delivery
-
-Report:
-
-- brain name
-- local URL
-- app folder
-- categories
-- real node count
-- any source gaps
-- shortest controls: search, filter, Cinema, drag to orbit, scroll to zoom
-
-Add a small route to the generated app in the appropriate project index or operating manual when useful.
-
-Do not publish private graph data or note content to a public repository without explicit approval.
+Finish with the brain name, local link, app folder, actual note/category counts, and the shortest useful instructions: **Play demo**, **Cinema**, drag to orbit, scroll to zoom. Mention source gaps if present. Never promise virality.

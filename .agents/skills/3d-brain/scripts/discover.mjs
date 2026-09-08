@@ -1,37 +1,13 @@
-#!/usr/bin/env node
-import fs from 'node:fs';
+import {promises as fs} from 'node:fs';
 import path from 'node:path';
-
-const args = process.argv.slice(2);
-const rootIndex = args.indexOf('--root');
-if (rootIndex < 0 || !args[rootIndex + 1]) {
-  console.error('Usage: node discover.mjs --root <AI-Verse-OS-root>');
-  process.exit(1);
-}
-
-const root = path.resolve(args[rootIndex + 1]);
-if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
-  console.error(`Root does not exist: ${root}`);
-  process.exit(1);
-}
-
-const candidates = [
-  ['Context', 'context'],
-  ['References', 'references'],
-  ['Projects', 'projects'],
-  ['Skills', '.claude/skills'],
-  ['Decisions', 'decisions'],
-  ['Templates', 'templates'],
-  ['Filmmaking', 'references/filmmaking'],
-  ['Models', 'references/models']
-];
-
-const found = [];
-for (const [label, rel] of candidates) {
-  const full = path.join(root, rel);
-  if (fs.existsSync(full)) {
-    found.push({ label, path: rel, type: fs.statSync(full).isDirectory() ? 'directory' : 'file' });
-  }
-}
-
-console.log(JSON.stringify({ root, candidates: found }, null, 2));
+import os from 'node:os';
+const at=process.argv.indexOf('--root');
+const root=path.resolve(at>=0?process.argv[at+1]:process.cwd());
+const candidates=[];
+async function add(label,p,type='markdown'){try{const stat=await fs.stat(p);candidates.push({label,path:p,type,isDirectory:stat.isDirectory()});}catch{}}
+for(const [label,p] of [['Business knowledge','context'],['Business wiki','wiki'],['Meetings','meetings'],['Projects','projects'],['References','references'],['Skills','.claude/skills'],['Agents','.claude/agents']]) await add(label,path.join(root,p));
+await add('Codex Memory',path.join(process.env.CODEX_HOME||path.join(os.homedir(),'.codex'),'memories'),'codex-memory');
+const claude=path.join(os.homedir(),'.claude','projects');
+const encoded=root.replace(/[^a-zA-Z0-9]/g,'-').toLowerCase();
+try{for(const entry of await fs.readdir(claude,{withFileTypes:true}))if(entry.isDirectory() && entry.name.toLowerCase()===encoded)await add('Claude memory',path.join(claude,entry.name,'memory'));}catch{}
+console.log(JSON.stringify({root,candidates,note:'Candidate paths only. Ask the user for their name and categories; confirm which paths to include before reading external memory. Add custom category paths as needed.'},null,2));

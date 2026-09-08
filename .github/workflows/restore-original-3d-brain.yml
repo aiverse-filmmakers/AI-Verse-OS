@@ -1,0 +1,63 @@
+name: Restore original 3D Brain
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out AI-Verse OS
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out original AIS-OS source
+        uses: actions/checkout@v4
+        with:
+          repository: nateherkai/AIS-OS
+          path: _original_ais_os
+
+      - name: Restore original 3D Brain engine and demo media
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf .claude/skills/3d-brain
+          rm -rf .agents/skills/3d-brain
+          rm -rf docs/media
+
+          mkdir -p .claude/skills .agents/skills docs
+          cp -a _original_ais_os/.claude/skills/3d-brain .claude/skills/3d-brain
+          cp -a _original_ais_os/docs/media docs/media
+          rm -rf _original_ais_os
+
+          # Rebrand product-facing text while preserving the original implementation.
+          while IFS= read -r -d '' file; do
+            perl -0pi -e 's#https://github\.com/nateherkai/AIS-OS#https://github.com/aiverse-filmmakers/AI-Verse-OS#g; s/aios-3d-brain/ai-verse-3d-brain/g; s/<AIOS-root>/<AI-Verse-OS-root>/g; s/AIOS-root/AI-Verse-OS-root/g; s/AIS-OS/AI-Verse OS/g; s/\bAIOS\b/AI-Verse OS/g' "$file"
+          done < <(find .claude/skills/3d-brain docs/media -type f \( -name '*.md' -o -name '*.txt' -o -name '*.yaml' -o -name '*.yml' -o -name '*.json' -o -name '*.js' -o -name '*.mjs' -o -name '*.html' -o -name '*.css' \) -print0)
+
+          # Codex gets the same restored package as Claude.
+          cp -a .claude/skills/3d-brain .agents/skills/3d-brain
+
+          # This is a one-shot maintenance workflow. Remove it and its trigger after success.
+          rm -f .github/workflows/restore-original-3d-brain.yml
+          rm -f .github/restore-original-3d-brain-trigger.txt
+
+          git config user.name "AI-VERSE"
+          git config user.email "hello@bogdanpascal.com"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "Restore original 3D Brain engine and demo media"
+          git push origin HEAD:main

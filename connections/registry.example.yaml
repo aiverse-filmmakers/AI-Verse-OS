@@ -1,0 +1,18 @@
+schema_version: "2.0"
+connections: []
+
+# Example shape only:
+# - id: source-id
+#   name: Human-readable source
+#   purpose: Why AI-Verse OS uses it
+#   mechanism: plugin | api | cli | script | browser | local | export | other
+#   status: planned | configured | verified | degraded | unavailable | retired
+#   scope:
+#     operator: true
+#     workspaces: []
+#   auth:
+#     method: "credential manager / environment / interactive / none"
+#     secret_stored_here: false
+#   authoritative_for: []
+#   last_checked: null
+#   notes: ""

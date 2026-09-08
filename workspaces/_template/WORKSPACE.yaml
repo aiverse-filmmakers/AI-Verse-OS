@@ -1,0 +1,40 @@
+schema_version: "2.0"
+
+id: "replace-with-unique-workspace-id"
+name: "Human-readable workspace name"
+type: "custom"
+status: "active"
+
+# Free-form domains. Use the vocabulary that actually fits the work.
+domains: []
+
+purpose: "Why this workspace exists."
+
+owners: []
+
+success_criteria: []
+
+current_context: "context/CURRENT.md"
+
+canonical_sources: []
+
+connections: []
+
+privacy:
+  classification: "private"
+  notes: "Add workspace-specific boundaries when needed."
+
+approval:
+  external_actions: "confirm"
+  destructive_actions: "confirm"
+  high_stakes_decisions: "human-review"
+
+capabilities:
+  shared: []
+  local: []
+
+automations: []
+
+metadata:
+  created: null
+  last_reviewed: null

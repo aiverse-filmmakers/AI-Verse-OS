@@ -1,17 +1,14 @@
-# Connections
+# Connections v1 Compatibility Pointer
 
-Registry of systems AI-Verse OS can reach or should eventually reach. `/onboard` populates this from the intake and `/audit` checks whether important domains are actually connected and current.
+Architecture v2 uses `connections/registry.yaml` as the canonical user-owned registry and `connections/README.md` for the connection contract.
 
-| # | Domain | Tool / source | Mechanism | Auth | Last checked |
-|---|---|---|---|---|---|
-| 1 | Revenue / financials | _filled by /onboard_ | not yet connected | - | - |
-| 2 | Customer interactions | _filled by /onboard_ | not yet connected | - | - |
-| 3 | Calendar | _filled by /onboard_ | not yet connected | - | - |
-| 4 | Communication | _filled by /onboard_ | not yet connected | - | - |
-| 5 | Projects / tasks | _filled by /onboard_ | not yet connected | - | - |
-| 6 | Meetings / recordings | _filled by /onboard_ | not yet connected | - | - |
-| 7 | Knowledge / files / lessons | _filled by /onboard_ | not yet connected | - | - |
+This file is retained so existing AI-Verse OS installations that already use `connections.md` are not broken or silently migrated.
 
-Common mechanisms include `plugin`, `mcp`, `api`, `script`, `cli`, `export`, `browser`, or `not yet connected`.
+For an existing installation:
 
-When a connection requires durable setup knowledge, save a concise reference such as `references/{tool}-api.md` or `references/{tool}-workflow.md` so future skills do not have to rediscover the integration.
+- preserve any real entries already recorded here
+- do not maintain two editable copies indefinitely
+- migrate deliberately into `connections/registry.yaml`
+- record which registry is canonical during the transition
+
+New installations should use the v2 connection layer.

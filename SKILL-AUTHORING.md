@@ -1,192 +1,151 @@
 # AI-Verse OS Skill Authoring Guide
 
-Use this guide when converting AI-Verse lessons, workflows, tutorials, or production methods into reusable AI skills.
+AI-Verse skills should be portable capabilities that perform repeatable work reliably. The shared skill layer must remain useful across professions; domain-specific assumptions should be explicit, parameterized, or kept inside the workspace that needs them.
 
-## First decide what the lesson really is
+## First decide what the material really is
 
-Not every lesson should become a skill.
+Not everything should become a skill.
 
 | Material | Best home |
 |---|---|
-| Facts, theory, model notes, filmmaking principles | `references/` |
-| A repeatable human procedure | SOP under `references/sops/` |
-| A reusable document or prompt structure | `templates/` |
-| Deterministic file/API/data work | `scripts/` |
-| Repeatable AI-guided work with decisions, guardrails, and verification | `.claude/skills/<skill-name>/` |
+| Current state | operator/workspace `context/` |
+| Historical events and learnings | operator/workspace `memory/` |
+| Durable reusable information | workspace `knowledge/` first, root `knowledge/` when broadly reusable |
+| A settled choice and reasoning | scoped `decisions/` |
+| A repeatable human procedure | knowledge/SOP material |
+| A reusable artifact shape | template |
+| Deterministic file/API/data work | script |
+| Repeatable AI-guided work with judgment, guardrails, and verification | skill |
+| Coordination across multiple capabilities | agent |
+| Reliable scheduled/event-driven execution | automation |
+| Persistent human interface | app |
 
-A lesson can produce more than one artifact. For example, a filmmaking lesson might become a short skill plus a deeper reference file the skill reads when needed.
+A workflow can produce several artifacts. Keep execution logic in the skill and deeper domain knowledge in references/knowledge so either can evolve without duplicating the other.
 
-## Skill folder
+## Current skill packaging
 
-Canonical skill source:
+The current materialized authoring source is:
 
 ```text
 .claude/skills/<skill-name>/
 ├── SKILL.md
 ├── agents/
 │   └── openai.yaml
-├── references/        # only when the skill needs supporting knowledge
-├── assets/            # templates or files the skill copies/uses
-└── scripts/           # deterministic helpers when useful
+├── references/
+├── assets/
+└── scripts/
 ```
 
-After editing canonical skills, synchronize Codex copies with:
+`skills/registry.yaml` is the runtime-neutral capability registry. Codex-compatible packages are synchronized to `.agents/skills/` with:
 
 ```bash
 bash scripts/sync-codex-skills.sh <skill-name>
 ```
 
-## Required skill anatomy
+The capability contract should not depend on Claude-specific behavior unless the skill explicitly declares that limitation.
 
-Every production skill should answer these questions clearly.
+## Required anatomy
 
 ### 1. Trigger
 
-When should the AI use this skill?
-
-Use recognizable user intent rather than obscure command-only triggers.
+Define recognizable intent that should activate the skill. Do not rely only on a slash command.
 
 ### 2. Outcome
 
-What concrete result should exist when the skill finishes?
+State the concrete result that should exist when the skill finishes.
 
-Avoid goals such as "help with storyboards." Prefer outcomes such as "produce a sequential shot plan and the exact still-image assets required for generation."
+### 3. Scope
 
-### 3. Inputs
+Declare whether the skill is:
 
-State what the skill needs before execution:
+- universal/shared
+- domain-aware but portable
+- workspace-local
+- runtime-specific
 
-- user answers
-- files
-- images
-- video references
-- brand assets
-- project context
-- connected data
-- aspect ratio
-- target platform or model
+If a shared skill assumes one profession's terminology or workflow, either parameterize it or move it to a narrower scope.
 
-Reuse known context instead of asking the user for information already available.
+### 4. Inputs
 
-### 4. Execution
+List required context, files, connected data, user decisions, assets, constraints, and permissions.
 
-Write the workflow in the order it should actually happen. Separate deterministic operations from AI judgment.
+Reuse known operator/workspace context instead of asking the user to repeat it.
 
-For complex production workflows, make handoffs explicit so one stage produces exactly what the next stage needs.
+### 5. Execution
 
-### 5. Decision rules
+Write the real ordered workflow. Separate deterministic operations from AI judgment. Make handoffs explicit when another capability consumes the output.
 
-Explain how the AI chooses between valid paths.
+### 6. Decision rules
 
-Examples:
+Explain how the AI chooses between valid paths. Avoid hidden intuition that only the original author understands.
 
-- crop versus extend an image
-- one reference image versus multiple references
-- storyboard first versus direct generation
-- when a shot requires continuity assets
-- when a model-specific prompt adaptation is needed
+### 7. Locks and guardrails
 
-### 6. Locks and guardrails
+State what may not be invented, changed, disclosed, overwritten, published, or acted upon without approval.
 
-State what must remain unchanged.
+For regulated, safety-critical, financial, legal, medical, security-sensitive, or otherwise high-stakes work, include stricter evidence, verification, permissions, and human-approval rules.
 
-For visual workflows this may include:
+### 8. Outputs
 
-- identity
-- character design
-- wardrobe
-- product geometry
-- location architecture
-- lighting continuity
-- camera side / screen direction
-- aspect ratio
-- readable real text
-- shot order
+Define what is produced, where it belongs, and whether it is current context, memory, knowledge, a decision, an artifact, or disposable runtime output.
 
-Also state what the AI must never invent or silently replace.
+### 9. Verification
 
-### 7. Outputs
+Verify the failure modes that would make the result unreliable or unsafe. A skill is incomplete if it cannot say how success is checked.
 
-Define exactly what the user receives and how it is named.
+### 10. Failure behavior
 
-When later stages depend on files, specify filenames and tell the user when those files will be needed again.
+Explain what happens when inputs are missing, a connection fails, the evidence is ambiguous, or the requested action exceeds allowed autonomy.
 
-### 8. Verification
+## Domain adaptation
 
-A skill is incomplete without quality control.
+A shared capability may operate in many domains by loading domain knowledge from the active workspace.
 
-Verify the things that would make the output unusable, such as:
-
-- missing shots
-- duplicated frames
-- continuity drift
-- wrong aspect ratio
-- incorrect character identity
-- broken text
-- unsupported model instructions
-- missing source assets
-- mismatched filenames
-- unverified external connections
-
-## Keep timeless logic separate from changing model knowledge
-
-Fast-changing information should not be hardcoded throughout a skill.
-
-Example structure:
+Prefer this pattern:
 
 ```text
-.claude/skills/image-to-video/
-├── SKILL.md
-└── references/
-    ├── model-selection.md
-    ├── kling.md
-    ├── seedance.md
-    └── wan.md
+shared skill method
+      +
+workspace context
+      +
+workspace knowledge
+      +
+workspace policies
+      +
+approved connections
+      =
+scoped execution
 ```
 
-The skill contains the stable filmmaking workflow. Reference files contain current model-specific prompting, limitations, and tested behavior.
+Do not duplicate a separate version of a generic skill for every profession merely to change terminology.
 
-This makes it possible to update a model reference without rewriting the whole skill.
+A domain-specific skill is appropriate when the reasoning itself materially differs and cannot be represented safely as parameters, references, or policies.
 
-## AI filmmaking quality gate
+## Keep changing knowledge outside stable skill logic
 
-Before shipping a filmmaking skill, check that it handles the relevant parts of this chain:
+Fast-changing model behavior, regulations, vendor APIs, platform quirks, or domain reference material should live in references/knowledge loaded by the skill as needed.
 
-```text
-Idea
-→ Story / objective
-→ Script or beat structure
-→ Asset requirements
-→ Character / product / location locks
-→ Shot design
-→ Storyboard / keyframes
-→ Image generation
-→ Image QC
-→ Video prompt adaptation
-→ Video generation
-→ Video QC
-→ Edit / sound / delivery
-```
+The stable skill should contain the method and guardrails.
 
-A skill does not need to own every stage, but it must clearly state what it receives from the previous stage and what it hands to the next one.
+## Beginner and expert rule
 
-## Beginner rule
+A skill should perform as much reliable reasoning as possible instead of forcing the user to learn internal terminology. Ask a question only when the answer materially changes execution, safety, or output quality.
 
-AI-Verse skills should perform as much expert reasoning as they reliably can. Do not force a beginner to learn terminology or manually perform a filmmaking/planning task when the skill can make that decision safely from the available context.
+At the same time, do not hide consequential assumptions from expert users. Surface important uncertainty, provenance, and approval points.
 
-Ask a question only when the answer materially changes the output.
+## Promotion test
 
-## Final test before adding a new skill
+Before promoting a workspace-local capability to the shared layer, verify:
 
-A skill is ready when a fresh AI session can answer all of these:
+1. The trigger makes sense outside the original workspace.
+2. Required inputs are explicit.
+3. Workspace-specific facts have been removed from the method.
+4. Domain assumptions are parameterized or documented.
+5. Ordered steps are reproducible.
+6. Guardrails and autonomy boundaries are explicit.
+7. Outputs have a canonical destination.
+8. Verification is meaningful.
+9. Failure behavior is defined.
+10. At least one fresh-session run can execute without relying on undocumented context.
 
-1. Why should I invoke this skill?
-2. What do I need before I start?
-3. What steps do I follow?
-4. What decisions am I allowed to make?
-5. What must remain locked?
-6. What do I deliver?
-7. How do I know the result is correct?
-8. What do I do when something is missing or fails?
-
-If those answers are vague, refine the skill before adding more features.
+If those conditions are not met, keep improving it locally instead of expanding the global skill library.

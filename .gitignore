@@ -1,11 +1,62 @@
+# Secrets and local environment
 .env
-.env.local
+.env.*
+!.env.example
 .DS_Store
 *.log
 __pycache__/
 node_modules/
 .claude/settings.local.json
+
+# Legacy private/session outputs
 audits/
 brainstorms/
-apps/3d-brain/data/
+
+# Architecture v2 user-owned operator state
+operator/profile/*.md
+!operator/profile/README.md
+!operator/profile/*.example.md
+operator/context/*.md
+!operator/context/README.md
+!operator/context/*.example.md
+operator/memory/*
+!operator/memory/README.md
+!operator/memory/*.example.md
+operator/inbox/*
+!operator/inbox/README.md
+operator/decisions/*
+!operator/decisions/README.md
+!operator/decisions/*.example.md
+
+# Shared user knowledge. README documents the layer; user material stays local by default.
+knowledge/*
+!knowledge/README.md
+
+# User workspaces. Keep the universal template tracked.
+workspaces/*
+!workspaces/README.md
+!workspaces/_template/
+!workspaces/_template/**
+
+# User-owned registries
+connections/registry.yaml
+connections/*.local.*
+agents/registry.yaml
+agents/*.local.*
+
+# User-owned automation definitions
+automations/jobs/*
+!automations/jobs/README.md
+automations/triggers/*
+!automations/triggers/README.md
+automations/policies/*
+!automations/policies/README.md
+
+# Disposable runtime state
+runtime/*
+!runtime/README.md
+
+# Generated/private app state
+apps/*/data/
+apps/*/*.local.*
 apps/3d-brain/config.local.json

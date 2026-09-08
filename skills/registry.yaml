@@ -1,0 +1,32 @@
+schema_version: "2.0"
+registry: AI-Verse shared capabilities
+
+canonical_materialization: .claude/skills/
+adapters:
+  claude: .claude/skills/
+  codex: .agents/skills/
+
+capabilities:
+  - id: onboard
+    scope: universal
+    purpose: "Establish operator context and initial workspace routes."
+  - id: workspace
+    scope: universal
+    purpose: "Create or evolve a domain-neutral isolated workspace."
+  - id: grill-me
+    scope: universal
+    purpose: "Capture deeper knowledge while separating fact from exploration."
+  - id: link
+    scope: universal
+    purpose: "Create durable routes to important sources without duplication."
+  - id: audit
+    scope: universal
+    purpose: "Verify architecture, Four Cs, routing, freshness, isolation, and evidence."
+  - id: level-up
+    scope: universal
+    purpose: "Use the Three Ms to ship one useful improvement."
+  - id: 3d-brain
+    scope: optional-app
+    purpose: "Build a local interactive knowledge visualization from selected sources."
+
+promotion_rule: "Workspace-local capabilities become shared only when their method is portable, guarded, verifiable, and no longer depends on hidden workspace-specific facts."

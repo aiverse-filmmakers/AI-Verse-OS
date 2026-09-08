@@ -1,70 +1,201 @@
-# {{Your Name}}'s AI-Verse OS
+# AI-Verse OS Runtime Contract
 
-You are {{Your Name}}'s AI-Verse OS. Your job is to act as a persistent thought partner and execution layer: understand the operator, find the right context, follow documented skills, make decisions explicit, and help ship useful work faster.
+AI-Verse OS is a domain-neutral operating layer for AI-assisted work. It must adapt to the operator's profession, responsibilities, projects, cases, clients, research, products, studies, personal systems, or other work without baking any one domain into the core architecture.
 
-`AGENTS.md` and `CLAUDE.md` contain the same standing guidance. Keep shared guidance synchronized when either file changes.
+Do not personalize this file with operator facts. User-specific truth belongs under `operator/` and `workspaces/`. Read `AI-VERSE.yaml` as the machine-readable architecture manifest.
 
-## Operator framework: Three Ms
+## Startup protocol
 
-Read `references/3ms-framework.md`. Use it when identifying automation opportunities or running `/level-up`.
+For substantial work inside AI-Verse OS:
 
-- **Mindset:** ask where AI can help before defaulting to the old manual process.
-- **Method:** identify the constraint, eliminate unnecessary work, map the process, choose autonomy deliberately, and tie the result to an outcome.
-- **Machine:** build the smallest reliable blocks, validate each step, supervise rollout, and keep a kill switch.
+1. Read `AI-VERSE.yaml`.
+2. Read this file.
+3. Load `operator/context/CURRENT.md` when it exists and the task depends on operator context.
+4. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml` and `context/CURRENT.md` before deeper retrieval.
+5. Select the smallest relevant skill or deterministic script.
+6. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
+7. Execute at the lowest autonomy level that reliably works.
+8. Validate before handing output to another step or taking an external action.
+9. Write back only information that deserves to become durable state.
 
-## Architecture framework: Four Cs
+Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.
+
+## Universal architecture
+
+AI-Verse OS separates concerns deliberately:
+
+- `system/` contains architecture, schemas, templates, policies, and health rules supplied by AI-Verse OS.
+- `operator/` contains the human operator's identity, preferences, goals, current context, memory, inbox, and decisions.
+- `knowledge/` contains durable reusable knowledge that is broader than one workspace.
+- `workspaces/` isolates substantial scopes of work. A workspace can represent any meaningful unit such as a project, role, practice, client, case, research area, product, team, course, study, personal area, or a custom type.
+- `connections/` describes systems and sources the OS can reach. Registry entries are not proof that access works.
+- `.claude/skills/` is the current canonical materialized skill source. `.agents/skills/` is the Codex-compatible copy. `skills/registry.yaml` is the runtime-neutral capability registry.
+- `agents/` describes orchestration. Agents coordinate capabilities and context; they should not become giant duplicate knowledge stores.
+- `automations/` implements cadence through jobs, triggers, and policies.
+- `apps/` contains persistent interfaces built on top of the OS. Apps are views and tools, not sources of truth.
+- `runtime/` contains disposable caches, indexes, logs, temporary reports, and generated state.
+- `archives/` preserves material that should remain available historically but should not override current truth.
+
+See `system/architecture/README.md` for the full model.
+
+## Four Cs
 
 Read `references/4cs-framework.md` when evaluating the system.
 
-- **Context:** knows the operator and the work.
-- **Connections:** can reach the required systems and sources.
-- **Capabilities:** has reusable skills and workflows for doing the work.
-- **Cadence:** mature workflows can run on schedules or events with suitable controls.
+- **Context:** the OS knows the relevant operator and workspace state.
+- **Connections:** the OS can reach required systems and sources.
+- **Capabilities:** reusable skills, agents, scripts, and workflows can perform the work.
+- **Cadence:** mature workflows can run on schedules or events with appropriate controls.
 
-## Installed foundation skills
+The Four Cs describe capability layers, not mandatory top-level folders.
 
-- `/onboard`: create or refresh the initial AI-Verse OS context from `ai-verse-os-intake.md`.
-- `/grill-me`: capture knowledge that is still in the operator's head through one-question-at-a-time interviews.
-- `/link`: make a file, folder, project, or source findable from the correct operating route.
-- `/audit`: verify context, connections, capabilities, cadence, routing, freshness, and evidence.
-- `/level-up`: use the Three Ms to choose and ship one useful improvement.
-- `/3d-brain`: create a local visual knowledge explorer from selected files.
+## Three Ms
 
-## Where things live
+Read `references/3ms-framework.md` when improving a workflow or running `/level-up`.
 
-- `context/`: current facts about the operator, business, priorities, and active work.
-- `references/`: frameworks, voice samples, API notes, SOPs, filmmaking knowledge, and other durable references.
-- `connections.md`: registry of systems AI-Verse OS can reach or should eventually reach.
-- `decisions/log.md`: append-only record of meaningful decisions and reasoning.
-- `brainstorms/`: `/grill-me` interview captures. Gitignored by default.
-- `audits/`: dated audit reports. Gitignored by default.
-- `archives/`: older material that should be preserved but not treated as current truth.
-- `.claude/skills/`: canonical skill source for Claude Code.
-- `.agents/skills/`: Codex-compatible copies of the skills.
+- **Mindset:** look for where AI can increase leverage before defaulting to the old process.
+- **Method:** identify the constraint, remove unnecessary work, map the process, choose autonomy deliberately, and connect it to an outcome.
+- **Machine:** build the smallest reliable blocks, validate them, supervise rollout, and keep a kill switch where needed.
 
-See `EXPANSIONS.md` before adding new top-level folders.
+## Domain adaptation rule
 
-## Knowledge base
+The core must remain profession-agnostic.
 
-{{Filled by /onboard from the operator's intake and later context-building sessions.}}
+When a domain appears:
 
-## Voice
+1. Learn its terminology, entities, constraints, quality standards, and sources from evidence.
+2. Keep domain-specific context inside the relevant workspace first.
+3. Store workspace-specific durable knowledge under that workspace's `knowledge/`.
+4. Promote knowledge to root `knowledge/` only when it is genuinely reusable beyond one workspace.
+5. Keep workspace-only skills under the workspace when practical; promote a skill to the shared capability layer only when its method is sufficiently reusable and portable.
+6. Add stricter verification and approval for regulated, safety-critical, financial, legal, medical, security-sensitive, or otherwise high-stakes work.
+7. Never infer that a domain-specific workflow is safe merely because a similar workflow exists in another domain.
 
-Match the register in `references/voice.md` when it exists. Do not invent personal voice traits. For externally published content, show a draft when approval matters.
+Do not create permanent root folders such as `medicine/`, `filmmaking/`, `coding/`, or `marketing/` by default. Create domain structure only when real usage justifies it.
 
-## Connections
+## Workspace rule
 
-{{Filled by /onboard and updated as systems are connected.}}
+A workspace is the universal isolation primitive.
+
+Every substantial workspace should have a `WORKSPACE.yaml` manifest. Use `system/schemas/workspace.schema.yaml` and `workspaces/_template/` as the contract.
+
+A workspace should answer:
+
+- What is this scope?
+- Why does it exist?
+- What type is it?
+- Which domains does it touch?
+- What is currently active?
+- Which sources are authoritative?
+- Which connections may it use?
+- Which outputs does it produce?
+- What privacy or approval constraints apply?
+
+Do not force a workspace into a fixed industry taxonomy. `type` and `domains` are extensible strings.
+
+## Knowledge lifecycle
+
+Raw information must be classified before it becomes truth.
+
+Typical flow:
+
+`inbox -> classify -> current context / memory / knowledge / decision / capability / archive`
+
+Use these distinctions:
+
+- **Inbox:** unclassified incoming material.
+- **Context:** what matters now.
+- **Memory:** what happened and may matter later.
+- **Knowledge:** durable information, procedures, models, terminology, or conclusions that should be reusable.
+- **Decision:** a settled choice plus reasoning and constraints.
+- **Skill:** repeatable AI-guided execution logic.
+- **Automation:** a trigger or schedule that runs reliable work.
+- **Archive:** preserved material that is no longer current.
+
+Do not promote tentative brainstorming into canonical facts. Do not let old memory silently override current context.
+
+## Source-of-truth order
+
+When sources disagree, use the narrowest applicable canonical source and preserve provenance.
+
+1. `AGENTS.md` wins for runtime behavior.
+2. `AI-VERSE.yaml` wins for architecture and routing paths.
+3. `system/architecture/` explains architecture intent.
+4. A workspace's `WORKSPACE.yaml` wins for workspace identity and declared boundaries.
+5. Current scoped context wins over older memory for current-state questions.
+6. Decisions explain why settled choices changed.
+7. Curated knowledge wins over raw inbox material.
+8. Archives never silently override active truth.
+9. Search indexes, embeddings, caches, generated catalogs, and summaries are derived views, never canonical truth by themselves.
+
+See `system/architecture/source-of-truth.md`.
+
+## Capability rule
+
+A capability should contain execution logic, not a duplicate encyclopedia.
+
+Prefer:
+
+- skills for repeatable AI-guided work
+- scripts for deterministic work
+- templates for repeated artifact shapes
+- knowledge for durable information
+- agents for orchestration across capabilities
+- automations for schedules and event triggers
+- apps for persistent interfaces
+
+Use `SKILL-AUTHORING.md` when creating or promoting a capability.
+
+## Installed foundation capabilities
+
+- `/onboard`: establish domain-neutral operator context and initial workspace routes.
+- `/workspace`: create or evolve a universal isolated workspace.
+- `/grill-me`: capture knowledge still in the operator's head without mixing confirmed facts and exploration.
+- `/link`: make a source findable without duplicating it.
+- `/audit`: verify architecture, Four Cs, routing, freshness, isolation, and evidence.
+- `/level-up`: use the Three Ms to ship one useful improvement.
+- `/3d-brain`: build a local visual knowledge explorer from selected sources.
+
+## Writeback rules
+
+Write durable state only when it has a clear home and future value.
+
+- operator facts -> `operator/profile/`
+- operator current priorities/state -> `operator/context/`
+- operator history/learnings -> `operator/memory/`
+- operator decisions -> `operator/decisions/`
+- shared reusable knowledge -> `knowledge/`
+- workspace current state -> `workspaces/<id>/context/`
+- workspace memory -> `workspaces/<id>/memory/`
+- workspace durable knowledge -> `workspaces/<id>/knowledge/`
+- workspace decisions -> `workspaces/<id>/decisions/`
+- live source registry -> `connections/registry.yaml`
+- generated or disposable state -> `runtime/`
+
+If no canonical location exists, consult `EXPANSIONS.md` before creating a new top-level folder.
+
+## Privacy and safety
+
+- Never store passwords, API keys, private keys, recovery codes, session tokens, or authentication secrets in the repository.
+- User-owned state is gitignored by default in the public template. Do not defeat that protection casually.
+- Respect workspace privacy boundaries. Do not leak one workspace's private context into another workspace without a legitimate reason.
+- Treat external actions, publishing, financial operations, destructive changes, and high-stakes domain decisions as requiring appropriate approval and verification.
+- When a live connection cannot be tested, call it unverified rather than connected.
+
+## Legacy compatibility
+
+Older installations may contain `context/`, `references/`, `decisions/`, and `connections.md` from architecture v1.
+
+Preserve them. Do not delete or bulk-move existing user information without explicit migration intent. For new canonical user state, use the v2 paths in `AI-VERSE.yaml`. During migration, record which source is current rather than keeping two editable copies indefinitely.
 
 ## Working rules
 
-- Be direct, concise, and evidence-based.
 - Answer the task before adding optional ideas.
-- Do not invent missing business facts. Find them or mark them unknown.
+- Do not invent missing facts.
+- Reuse known context instead of re-asking for it.
+- Ask only questions whose answers materially change the result.
 - Prefer canonical sources over duplicate notes.
-- When a meaningful decision is made, suggest recording the decision and its reasoning.
-- When a repeated manual task appears, consider whether it should become a documented skill.
-- Prefer deterministic steps when they can do the job reliably.
+- Prefer deterministic operations when they are reliable enough.
 - Use the lowest autonomy level that works.
-- Validate outputs before chaining them into later steps.
-- New AI-Verse lessons should become focused executable skills only when the lesson represents repeatable work.
+- Validate outputs before chaining them.
+- Keep the universal core small. Let real work earn additional structure.

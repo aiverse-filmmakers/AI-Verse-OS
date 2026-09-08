@@ -1,128 +1,259 @@
 # AI-Verse OS
 
-**AI-Verse OS** is a practical AI operating system for creators, filmmakers, operators, consultants, and teams. It gives Claude Code and Codex a persistent structure for context, connections, reusable skills, decisions, and recurring AI workflows.
+**AI-Verse OS** is a domain-neutral AI operating system that gives capable AI runtimes persistent context, isolated workspaces, reusable capabilities, connected systems, durable knowledge, and safe automation structure.
 
-The long-term goal is simple: turn useful knowledge into executable AI skills instead of leaving it trapped inside lessons, notes, videos, and documents.
+It is intentionally not designed around one profession. A doctor, developer, filmmaker, researcher, consultant, student, operator, founder, team, or someone with a completely different type of work should be able to start from the same core. The OS learns the domain from evidence and evolves structure inside the relevant workspace instead of hardcoding industries into the foundation.
 
 **AI-Verse Community:** https://www.skool.com/bogdans-ai-verse-4398
 
-## The litmus test
+## Core design principle
 
-> While you are not at your desk, your AI-Verse OS can observe or receive a real-world event, find the right context, and produce a useful output faster and more consistently than rebuilding the process manually.
+> **One OS. One source of truth. Many isolated workspaces. Reusable capabilities. Connected systems. Automated cadence. Apps on top.**
 
-Every layer, skill, connection, and workflow should contribute to that outcome.
+The conceptual capability stack is:
 
-## How you know it is working
+```text
+Context
+  -> Data / Knowledge
+  -> Connections
+  -> Workspaces
+  -> Skills
+  -> Agents
+  -> Apps / Automations
+```
 
-1. **Knowledge leaves your head.** Important context, decisions, workflows, and lessons become findable by your AI.
-2. **Context switching drops.** You increasingly start with AI-Verse OS instead of manually opening six different apps and reconstructing context.
-3. **Repeatable work becomes a skill.** A short request can trigger a reliable multi-step workflow instead of a fresh prompting session every time.
-4. **Useful work can run on cadence.** Mature workflows can eventually execute on a schedule or from an event trigger.
+Those are capability layers, not seven duplicated folder trees.
 
-## Two operating frameworks
+## Architecture v2: Unified Workspace Architecture
 
-AI-Verse OS uses two complementary frameworks.
+AI-Verse OS v2 organizes the filesystem around four things that matter more than profession names:
 
-### The Three Ms
+1. **Ownership:** what belongs to the OS versus the user.
+2. **Scope:** operator-wide, shared, or isolated workspace state.
+3. **Lifecycle:** inbox, context, memory, knowledge, decisions, capabilities, archive.
+4. **Authority:** which source wins when information conflicts.
 
-| M | Purpose |
-|---|---|
-| **Mindset** | Look at work through an AI-first lens. Ask where AI can assist, accelerate, or remove repetitive effort. |
-| **Method** | Find the constraint, eliminate unnecessary work, map the process, choose the right autonomy level, and connect it to a measurable outcome. |
-| **Machine** | Build small reliable blocks, validate each step, use the least complexity required, supervise rollout, and keep a kill switch. |
+The machine-readable map is `AI-VERSE.yaml`. The full design is in `system/architecture/`.
 
-Full breakdown: `references/3ms-framework.md`
+## Universal workspace model
 
-### The Four Cs
+A workspace is the universal isolation primitive. It can represent any meaningful scope of work:
 
-| Layer | Purpose | Test |
-|---|---|---|
-| **Context** | Knows you and the work | A fresh session can answer important questions from saved context without making things up. |
-| **Connections** | Reaches your systems | The AI can retrieve live or exported information from the tools you actually use. |
-| **Capabilities** | Knows how to do the work | A short instruction can invoke a documented multi-step skill or workflow. |
-| **Cadence** | Runs without repeated prompting | A mature workflow can operate on a schedule or event trigger with suitable controls. |
+- a project
+- a role
+- a client or case
+- a research area
+- a practice
+- a product
+- a team
+- a course or study
+- a personal area
+- any custom type the operator needs
 
-Full breakdown: `references/4cs-framework.md`
+AI-Verse OS does not force those categories. `WORKSPACE.yaml` supports free-form `type` and `domains` so the system can adapt to work that was never anticipated by the template.
 
-## Included skills
+Workspace-specific knowledge stays local first. Only proven reusable knowledge and capabilities should be promoted into shared layers.
 
-| Skill | Purpose |
-|---|---|
-| `/onboard` | Build the initial AI-Verse OS context from a seven-question intake. |
-| `/grill-me` | Deepen context through focused interviews and preserve the answers. |
-| `/link` | Make a project, file, folder, or source findable from the operating manual. |
-| `/audit` | Check the Four Cs, routing, freshness, compatibility, and evidence of real operation. |
-| `/level-up` | Use the Three Ms to find and ship one useful improvement at a time. |
-| `/3d-brain` | Build the full interactive 3D knowledge globe from selected knowledge sources. |
+## System versus user ownership
 
-This is the foundation. AI-Verse lessons can be converted into additional skills over time, including filmmaking, image generation, video workflows, storyboards, continuity, prompting, editing, automation, and distribution.
+### System-owned
 
-## 3D Brain demo
+Safe for AI-Verse OS updates to evolve deliberately:
 
-[![Watch the 3D Brain grow from one idea into a connected knowledge globe](docs/media/3d-brain-preview.gif)](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)
+```text
+AGENTS.md
+CLAUDE.md
+AI-VERSE.yaml
+system/
+skills/registry.yaml
+.claude/skills/
+.agents/skills/
+scripts/
+```
 
-The included preview shows the original full 3D Brain experience, including the growth sequence, interactive knowledge globe, and presentation style. **[Open the full 1080p demo video](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)** for full-resolution playback.
+### User-owned
 
-The demo uses an example knowledge set. When `/3d-brain` runs inside AI-Verse OS, it builds the same style of experience from the user's chosen name, categories, and real saved knowledge.
+Never overwrite casually during updates:
 
-## Quick start
+```text
+operator/
+knowledge/
+workspaces/
+connections/registry.yaml
+agents/registry.yaml
+automations/
+apps/
+```
 
-1. Clone this repository.
-2. Open it in Claude Code or Codex.
-3. Run `/onboard` in Claude Code or select the `onboard` skill in Codex.
-4. Answer the seven intake questions.
-5. Use the system for real work.
-6. Run `/audit` after setup and after meaningful changes.
-7. Use `/grill-me` whenever important knowledge is still only in your head.
-8. Use `/link` when adding new sources.
-9. Run `/level-up` regularly to turn repeated work into stronger workflows and skills.
+### Derived / disposable
+
+```text
+runtime/
+```
+
+If deleting `runtime/` destroys irreplaceable knowledge, something is in the wrong layer.
 
 ## Repository layout
 
 ```text
 AI-Verse-OS/
 ├── README.md
-├── CLAUDE.md
-├── AGENTS.md
+├── AGENTS.md                     # canonical runtime contract
+├── CLAUDE.md                     # Claude adapter
+├── AI-VERSE.yaml                 # machine-readable architecture
 ├── EXPANSIONS.md
 ├── SKILL-AUTHORING.md
-├── LICENSE
-├── .gitignore
 ├── ai-verse-os-intake.md
-├── connections.md
-├── context/
-├── references/
+│
+├── system/
+│   ├── architecture/
+│   ├── schemas/
+│   ├── templates/
+│   └── health/
+│
+├── operator/                     # user-owned operator state
+│   ├── profile/
+│   ├── context/
+│   ├── memory/
+│   ├── inbox/
+│   └── decisions/
+│
+├── knowledge/                    # reusable cross-workspace knowledge
+├── workspaces/                   # isolated scopes of work
+│   └── _template/
+├── connections/                  # live source registry and integration notes
+├── skills/                       # runtime-neutral capability registry
+├── agents/                       # orchestration registry
+├── automations/                  # jobs, triggers, policies
+├── apps/                         # persistent interfaces
+├── runtime/                      # disposable indexes/cache/logs/reports
+├── archives/
+│
+├── references/                   # v1/system framework compatibility
 │   ├── 3ms-framework.md
 │   └── 4cs-framework.md
-├── decisions/
-│   └── log.md
-├── archives/
-├── brainstorms/               # created by /grill-me, gitignored
-├── audits/                    # created by /audit, gitignored
-├── docs/
-│   └── media/                 # 3D Brain preview and full demo
-├── scripts/
-│   └── sync-codex-skills.sh
-├── .claude/skills/            # authoring source
-└── .agents/skills/            # Codex-compatible copies
+├── .claude/skills/               # current Claude skill packages
+├── .agents/skills/               # Codex-compatible copies
+└── scripts/
 ```
 
-## Building the AI-Verse skill library
+User-owned state is gitignored by default in this public template. The tracked example files and `_template` workspace show the contract without encouraging people to publish personal or sensitive data.
 
-A lesson becomes much more valuable when it is transformed from information into an executable workflow. New AI-Verse skills should contain:
+## Knowledge lifecycle
 
-- a clear trigger and purpose
-- required inputs
-- step-by-step execution logic
-- decision rules and guardrails
-- expected outputs
-- verification or quality-control checks
-- references and reusable assets when needed
+AI-Verse OS distinguishes information by what it means:
 
-See `SKILL-AUTHORING.md` for the full lesson-to-skill conversion standard, including filmmaking handoffs, continuity locks, quality gates, and when material should remain a reference, SOP, template, or script instead of becoming a skill.
+```text
+incoming material
+      ↓
+    inbox
+      ↓
+   classify
+      ↓
+ ┌───────────────┬────────────┬────────────┬────────────┐
+ context       memory       knowledge     decision
+ now           history      reusable      settled choice
+                                │
+                                ↓
+                         skill / automation
+                                │
+                                ↓
+                              archive
+```
 
-The goal is not to create hundreds of vague prompts. The goal is to build a growing library of focused skills that reliably perform real work.
+Raw material never becomes canonical truth simply because it arrived.
+
+## Domain adaptation
+
+The core does not pre-create profession folders. Instead, when real work reveals a domain, AI-Verse OS learns:
+
+- terminology and entities
+- authoritative sources
+- quality standards
+- constraints and approvals
+- common workflows
+- useful outputs
+- domain-specific failure modes
+
+That structure begins inside a workspace. Reusable knowledge can later be promoted to root `knowledge/`, and portable workflows can become shared skills.
+
+See `system/architecture/domain-adaptation.md`.
+
+## Source of truth
+
+AI-Verse OS uses explicit authority rules instead of hoping the newest-looking file is correct.
+
+At a high level:
+
+- `AGENTS.md` -> runtime behavior
+- `AI-VERSE.yaml` -> architecture and routing
+- operator/workspace current context -> current state
+- decisions -> why settled choices changed
+- curated knowledge -> durable reusable truth
+- archives -> history only
+- vector/search indexes -> derived views only
+
+See `system/architecture/source-of-truth.md`.
+
+## Four Cs
+
+| Layer | Purpose |
+|---|---|
+| **Context** | Knows the relevant operator and workspace state |
+| **Connections** | Reaches required systems and sources |
+| **Capabilities** | Performs repeatable work through skills, agents, scripts, and workflows |
+| **Cadence** | Runs mature work from schedules or events with appropriate controls |
+
+Full breakdown: `references/4cs-framework.md`.
+
+## Three Ms
+
+| M | Purpose |
+|---|---|
+| **Mindset** | Look for where AI can create leverage |
+| **Method** | Find the constraint, remove unnecessary work, map the process, choose autonomy, define the outcome |
+| **Machine** | Build the smallest reliable blocks, validate them, supervise rollout, keep controls |
+
+Full breakdown: `references/3ms-framework.md`.
+
+## Included foundation capabilities
+
+| Capability | Purpose |
+|---|---|
+| `/onboard` | Build universal operator context and initial workspace routes from a seven-question intake |
+| `/workspace` | Create or evolve an isolated workspace without assuming a profession |
+| `/grill-me` | Capture deeper knowledge while separating confirmed facts from exploration |
+| `/link` | Make a source findable without duplicating it |
+| `/audit` | Verify architecture, Four Cs, routing, freshness, isolation, and evidence |
+| `/level-up` | Use the Three Ms to ship one high-value improvement |
+| `/3d-brain` | Build the interactive 3D knowledge explorer from selected sources |
+
+## 3D Brain
+
+The included `/3d-brain` capability remains an optional application layer. It visualizes selected knowledge sources without becoming the source of truth itself.
+
+[![Watch the 3D Brain grow from one idea into a connected knowledge globe](docs/media/3d-brain-preview.gif)](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)
+
+## Quick start
+
+1. Clone the repository.
+2. Open it in a supported capable AI coding/runtime environment.
+3. Run `/onboard` or invoke the onboarding capability.
+4. Answer the seven universal intake questions.
+5. Let AI-Verse OS create operator state and the minimum useful workspace structure.
+6. Use `/workspace` when a substantial new scope of work deserves isolation.
+7. Use `/link` for important sources and `/grill-me` for knowledge still in your head.
+8. Run `/audit` after setup or major changes.
+9. Run `/level-up` when a repeated constraint should become a better process, skill, script, connection, or automation.
+
+## Privacy by default
+
+This repository is a public template. User-owned state is ignored by Git by default. Never store secrets in the repository. People who deliberately keep AI-Verse OS in a private repository can choose a different version-control policy for their own state.
+
+## Legacy installations
+
+Architecture v1 used root `context/`, `references/`, `decisions/`, and `connections.md`. Those paths remain supported for deliberate migration and system-framework compatibility. Existing user data must be preserved. New canonical user state should use the v2 paths in `AI-VERSE.yaml`.
 
 ## License
 
-This repository is distributed under the MIT terms in `LICENSE`. AI-Verse OS-specific modifications and additions are maintained by AI-VERSE.
+See `LICENSE` and `THIRD-PARTY-NOTICES.md`.

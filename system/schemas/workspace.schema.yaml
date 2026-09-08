@@ -1,0 +1,68 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: "AI-Verse OS Workspace Manifest"
+type: object
+additionalProperties: true
+required:
+  - schema_version
+  - id
+  - name
+  - type
+  - status
+  - purpose
+properties:
+  schema_version:
+    type: string
+  id:
+    type: string
+    pattern: "^[a-z0-9][a-z0-9-]*$"
+  name:
+    type: string
+    minLength: 1
+  type:
+    type: string
+    minLength: 1
+    description: "Free-form workspace type. The core does not enforce an industry taxonomy."
+  status:
+    type: string
+    enum: [active, paused, archived]
+  domains:
+    type: array
+    items:
+      type: string
+    uniqueItems: true
+  purpose:
+    type: string
+  owners:
+    type: array
+    items:
+      type: string
+  success_criteria:
+    type: array
+    items:
+      type: string
+  current_context:
+    type: string
+  canonical_sources:
+    type: array
+    items:
+      type: string
+  connections:
+    type: array
+    items:
+      type: string
+  privacy:
+    type: object
+    additionalProperties: true
+  approval:
+    type: object
+    additionalProperties: true
+  capabilities:
+    type: object
+    additionalProperties: true
+  automations:
+    type: array
+    items:
+      type: string
+  metadata:
+    type: object
+    additionalProperties: true

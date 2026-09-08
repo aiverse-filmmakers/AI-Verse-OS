@@ -1,63 +1,65 @@
-# AI-Verse OS Intake
+# AI-Verse OS Universal Intake
 
-This is the source-of-truth intake for your AI-Verse OS. Fill it in directly or run `/onboard` for a guided conversation. The onboarding skill reads this file and uses it to build the initial context files.
+This is the source-of-truth onboarding intake for a new AI-Verse OS installation. It is intentionally profession-neutral. Run `/onboard` for a guided one-question-at-a-time conversation or fill this file directly.
 
-**Hard cap: 7 questions.** Keep answers practical. You can edit this file and re-run `/onboard` later.
+**Hard cap: 7 primary questions.** Follow-up clarification is allowed only when an answer is too ambiguous to route safely.
 
-## Q1 - Who are you, what do you do or sell, and who is it for?
+## Q1 - Who are you and what roles or areas of responsibility matter to this AI-Verse OS?
 
-```text
-[Your answer here]
-```
-
-## Q2 - Paste 1 or 2 real examples of how you write
-
-Use unedited examples from real emails, posts, messages, documents, or scripts. Do not manufacture a sample just for the intake.
-
-```text
-[Sample 1]
-```
-
-```text
-[Sample 2]
-```
-
-## Q3 - What are your 2 or 3 biggest priorities for the next 90 days?
-
-```text
-1. [Priority 1]
-2. [Priority 2]
-3. [Priority 3]
-```
-
-## Q4 - Where does revenue land and where is it tracked?
-
-Examples: Stripe, Skool, bank account, Shopify, QuickBooks, spreadsheet, CRM.
+This may include professional roles, personal responsibilities, studies, practices, teams, research, businesses, creative work, technical work, or anything else that should shape the system.
 
 ```text
 [Your answer here]
 ```
 
-## Q5 - Where do you communicate with customers, your team, and the outside world?
+## Q2 - What outcomes, responsibilities, or priorities matter most over the next 90 days?
 
-Examples: Gmail, Outlook, Slack, Teams, Discord, Skool, WhatsApp, DMs.
+Use concrete outcomes where possible. Not every priority needs to be commercial.
+
+```text
+1. [Priority / outcome 1]
+2. [Priority / outcome 2]
+3. [Priority / outcome 3]
+```
+
+## Q3 - How should the AI work and communicate with you?
+
+Include preferences about detail, initiative, approvals, quality, format, working style, or things it should avoid. If the OS will write publicly or on your behalf, you may also paste 1 or 2 real writing samples.
+
+```text
+[Your answer and optional samples here]
+```
+
+## Q4 - What active areas of work should stay separate from one another?
+
+Think in scopes, not industries: projects, roles, clients, cases, products, research areas, teams, studies, personal areas, or any custom category. These may become workspaces.
 
 ```text
 [Your answer here]
 ```
 
-## Q6 - Where do recordings, notes, files, lessons, and important documents live?
+## Q5 - Where does important information or evidence currently live?
 
-Examples: Google Drive, Notion, Dropbox, GitHub, Skool, local folders, meeting-recording tools.
-
-```text
-[Your answer here]
-```
-
-## Q7 - What recurring task consumes the most time, and where do you track work?
+Examples may include local files, repositories, documents, records, databases, notes, calendars, dashboards, cloud storage, specialist software, or physical/offline sources. Name only what is relevant to your work.
 
 ```text
 [Your answer here]
 ```
 
-When the file is filled, run `/onboard`. It should create or refresh `context/`, `references/voice.md`, `connections.md`, and the personalized sections of `CLAUDE.md` and `AGENTS.md`.
+## Q6 - Which tools, systems, people, or channels does your work pass through?
+
+Include communication, collaboration, execution, publishing, data, scheduling, code, finance, operations, specialist systems, or any other important handoff. Do not provide passwords or secrets.
+
+```text
+[Your answer here]
+```
+
+## Q7 - What repeated, high-friction, or high-value task would you most like this OS to improve, and what boundaries must it respect?
+
+Include approval requirements, privacy boundaries, regulated/high-stakes constraints, or actions the AI must never take automatically.
+
+```text
+[Your answer here]
+```
+
+When complete, run `/onboard`. The skill should create the minimum useful operator state, connection registry, and workspace structure without hardcoding a profession.

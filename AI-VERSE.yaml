@@ -1,0 +1,128 @@
+schema_version: "2.0"
+architecture: unified-workspace
+
+identity:
+  name: AI-Verse OS
+  purpose: "A domain-neutral AI operating system that adapts to the operator and the work without hardcoding a profession, industry, or tool vendor into the core."
+
+principles:
+  domain_neutral_core: true
+  one_source_of_truth: true
+  workspace_isolation: true
+  progressive_disclosure: true
+  local_inspectable_truth: true
+  generated_indexes_are_derived: true
+  user_data_is_user_owned: true
+  runtime_is_disposable: true
+
+paths:
+  runtime_contract: AGENTS.md
+  runtime_adapters:
+    claude: CLAUDE.md
+    codex_skills: .agents/skills/
+    claude_skills: .claude/skills/
+  architecture: system/architecture/
+  schemas: system/schemas/
+  templates: system/templates/
+  operator: operator/
+  shared_knowledge: knowledge/
+  workspaces: workspaces/
+  connections: connections/
+  skills_registry: skills/registry.yaml
+  agents: agents/
+  automations: automations/
+  apps: apps/
+  runtime: runtime/
+  archives: archives/
+
+ownership:
+  system_owned:
+    - AGENTS.md
+    - CLAUDE.md
+    - AI-VERSE.yaml
+    - system/
+    - skills/registry.yaml
+    - .claude/skills/
+    - .agents/skills/
+    - scripts/
+  user_owned:
+    - operator/
+    - knowledge/
+    - workspaces/
+    - connections/registry.yaml
+    - agents/registry.yaml
+    - automations/jobs/
+    - automations/triggers/
+    - automations/policies/
+    - apps/
+  derived:
+    - runtime/
+
+source_of_truth:
+  runtime_behavior: AGENTS.md
+  architecture_and_paths: AI-VERSE.yaml
+  architecture_intent: system/architecture/
+  shared_skill_methodology: .claude/skills/
+  capability_registry: skills/registry.yaml
+  operator_facts: operator/profile/
+  operator_current_context: operator/context/CURRENT.md
+  operator_memory: operator/memory/
+  operator_decisions: operator/decisions/
+  shared_reusable_knowledge: knowledge/
+  workspace_manifest: workspaces/{workspace}/WORKSPACE.yaml
+  workspace_current_context: workspaces/{workspace}/context/CURRENT.md
+  workspace_memory: workspaces/{workspace}/memory/
+  workspace_knowledge: workspaces/{workspace}/knowledge/
+  connection_registry: connections/registry.yaml
+  generated_search_or_vector_index: runtime/indexes/
+
+routing:
+  order:
+    - identify_intent
+    - identify_scope
+    - load_current_context
+    - choose_capability
+    - retrieve_minimum_required_knowledge
+    - resolve_connections
+    - execute
+    - validate
+    - write_back_only_when_warranted
+  scopes:
+    - system
+    - operator
+    - workspace
+    - shared
+
+knowledge_lifecycle:
+  stages:
+    - inbox
+    - classify
+    - context
+    - memory
+    - knowledge
+    - decision
+    - skill_or_automation
+    - archive
+  rule: "Raw input does not become canonical truth merely because it was received."
+
+domain_adaptation:
+  rule: "The core never assumes a profession. Domain structure emerges from operator and workspace evidence."
+  workspace_first: true
+  promote_shared_knowledge_when_reused: true
+  promote_shared_skills_when_portable: true
+  allow_custom_workspace_types: true
+  allow_custom_domain_vocabulary: true
+
+privacy:
+  default_public_template: true
+  user_state_gitignored_by_default: true
+  never_store_secrets: true
+  high_stakes_domains_require_stricter_approval: true
+
+legacy_compatibility:
+  paths:
+    - context/
+    - references/
+    - decisions/
+    - connections.md
+  rule: "Preserve existing v1 data. New installs and new canonical user state should use the v2 paths above. Migrate deliberately, never destructively."

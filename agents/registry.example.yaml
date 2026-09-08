@@ -1,0 +1,12 @@
+schema_version: "2.0"
+agents: []
+
+# Example shape:
+# - id: agent-id
+#   name: Human-readable agent name
+#   purpose: What larger objective it coordinates
+#   scopes: [operator, workspace]
+#   capabilities: []
+#   required_connections: []
+#   autonomy: supervised
+#   approval_policy: default

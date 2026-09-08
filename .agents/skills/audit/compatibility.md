@@ -1,35 +1,31 @@
-# Claude Code and Codex Compatibility
+# Runtime Compatibility
 
-AI-Verse OS keeps canonical skill packages in `.claude/skills/` and compatible copies in `.agents/skills/`.
+AI-Verse OS treats capabilities as logically runtime-neutral while currently materializing canonical shared packages under `.claude/skills/` and synchronized Codex-compatible copies under `.agents/skills/`.
+
+`skills/registry.yaml` describes the shared capability layer.
 
 ## What should normally match
 
-For each skill, compare:
+For each shared skill compare:
 
-- `SKILL.md` execution logic
+- `SKILL.md` method and safety logic
 - supporting references
-- templates
-- assets required at runtime
-- scripts used by the skill
+- templates/assets
+- deterministic scripts
+- required package structure
 
-## Differences that may be intentional
+## Intentional differences
 
-Runtime-specific metadata such as `agents/openai.yaml`, invocation syntax, menu labels, or instructions that explicitly refer to one runtime may differ.
-
-Do not report an intentional adaptation as logic drift.
+Runtime-specific invocation metadata, menu labels, adapter configuration, or instructions explicitly required by one runtime may differ when documented.
 
 ## Defects
 
 Treat these as meaningful problems:
 
-- a skill exists in one runtime and is missing in the other without explanation
-- the execution logic has materially different steps or safety rules
-- a required asset is missing from one copy
-- one runtime points to a path that does not exist
-- a supporting reference changed in the canonical package but the copy was not refreshed
+- a shared capability exists in one supported adapter and is missing in another without explanation
+- execution or safety logic materially differs
+- required assets/references/scripts are missing
+- one adapter points to invalid paths
+- canonical materialization changed without refreshing the compatible copy
 
-## Verification
-
-Use `bash scripts/sync-codex-skills.sh` to regenerate Codex copies from canonical Claude skill packages when appropriate.
-
-After synchronization, verify that runtime-specific metadata still works as intended.
+Use `bash scripts/sync-codex-skills.sh` to refresh Codex packages when appropriate, then verify the runtime-specific metadata still works.

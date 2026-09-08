@@ -1,19 +1,8 @@
-# Decisions Log
+# Decisions v1 Compatibility Log
 
-Append-only record of meaningful decisions and why they were made. `/level-up` can write scoped workflow or automation decisions here. Other skills may suggest logging a decision when future work depends on remembering the reasoning.
+Architecture v2 separates decisions by scope:
 
-## Entry format
+- operator-wide decisions -> `operator/decisions/`
+- workspace decisions -> `workspaces/<id>/decisions/`
 
-```text
-## YYYY-MM-DD - Short title
-
-Decision: what was decided.
-
-Why: reasoning, constraints, evidence, and what would change the decision.
-
-Alternatives considered: other realistic options.
-
-Owner: who is accountable.
-```
-
-Capture the reason, not only the outcome. Do not rewrite old decisions to make history look cleaner. Add a new entry when a decision changes.
+This root log is retained for existing architecture v1 installations. Preserve any historical entries already present during migration. New decisions should be written to the narrowest applicable v2 scope rather than duplicated here.

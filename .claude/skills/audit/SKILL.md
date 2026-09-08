@@ -1,164 +1,152 @@
 ---
 name: audit
-description: Use after onboarding, after meaningful AI-Verse OS changes, before increasing automation autonomy, or during regular reviews. Performs an evidence-based Four Cs audit, checks routing and freshness, records a dated report, and identifies the smallest high-value improvement.
+description: Use after onboarding, after meaningful AI-Verse OS changes, before increasing automation autonomy, or during regular reviews. Performs an evidence-based architecture v2 and Four Cs audit covering source authority, workspace isolation, routing, privacy, compatibility, freshness, capabilities, and real cadence.
 ---
 
 # Audit
 
 Measure verified operational reliability, not folder counts.
 
+## Read
+
 Read:
 
-- `references/4cs-framework.md`
+- `AI-VERSE.yaml`
 - `AGENTS.md`
-- `CLAUDE.md`
-- `connections.md`
+- `system/architecture/README.md`
+- `system/architecture/source-of-truth.md`
+- `references/4cs-framework.md`
+- `connections/registry.yaml` when it exists, otherwise note legacy registry state
 - `rubric.md`
 - `compatibility.md`
 - `history.md`
 
-Do not modify the inspected system merely to improve its score. The default write is the audit report itself.
+Run `bash scripts/check-architecture.sh` when the script is available. Treat its result as evidence, not as the entire audit.
 
-## Step 1 - define the audit scope
+Do not modify the inspected system merely to improve its score. The default write is the audit report.
 
-Audit the repository or project in which the skill is being run unless the user specifies a different target.
+## Step 1 - define scope
 
 Record:
 
-- target
+- target installation/workspace
 - date/time
-- runtime being used
-- relevant operating manuals
-- whether live connections can actually be tested
-- important limitations of the inspection
+- runtime
+- active workspace, if any
+- whether live connections can be tested
+- important inspection limitations
 
-## Step 2 - inspect the Four Cs
+## Step 2 - inspect architecture integrity
+
+Check:
+
+### Ownership
+
+- system-owned files are not being personalized with user facts
+- user-owned state is not casually overwritten by system updates
+- public-template privacy rules are intact unless deliberately changed
+
+### Authority
+
+- current facts have identifiable canonical sources
+- there are no unexplained editable duplicates
+- indexes/apps/summaries are not being treated as sole truth
+
+### Workspace isolation
+
+- substantial scopes have clear workspace boundaries when isolation is useful
+- workspace-specific context is not polluting unrelated scopes
+- manifests identify source routes, privacy, and approvals where relevant
+
+### Domain neutrality
+
+- profession/domain specialization occurs locally or through optional overlays
+- the universal root has not fragmented into one mini-OS per function/domain
+- domain-specific shared structure is justified by real reuse
+
+### Runtime hygiene
+
+- derived state is rebuildable
+- irreplaceable knowledge is not trapped in `runtime/` or an app cache
+
+## Step 3 - inspect the Four Cs
 
 ### Context
 
-Check whether important current information exists, is discoverable, and has an identifiable canonical source.
-
-Look for:
-
-- operator and business context
-- priorities
-- active project routes
-- voice or brand guidance when relevant
-- decisions
-- source authority
-- stale or conflicting context
+Check operator and active-workspace current state, memory separation, priorities, decisions, freshness cues, and routing to deeper sources.
 
 ### Connections
 
-Use `connections.md` as a registry, not as proof.
-
-For important connections determine whether there is evidence of:
-
-- actual access
-- known mechanism
-- appropriate permissions
-- source freshness
-- documented integration knowledge when needed
-
-If a connection cannot be tested, mark it unverified.
+A registry entry is not evidence of working access. For important connections determine whether there is evidence of actual access, known mechanism, appropriate permissions, scope, source freshness, and safe authentication handling.
 
 ### Capabilities
 
-Inspect installed skills, scripts, SOPs, and reusable workflows.
-
-Do not award reliability merely because a skill folder exists. Look for:
-
-- clear triggers
-- known inputs and outputs
-- guardrails
-- verification
-- references
-- evidence of successful use when available
+Inspect shared and workspace-local skills, scripts, agents, templates, and reusable workflows. Look for triggers, inputs, outputs, decision rules, guardrails, verification, failure behavior, and evidence of use.
 
 ### Cadence
 
-Look for real schedules, event triggers, recurring runs, monitoring, approval rules, and failure handling.
+Look for real schedules/event triggers, permissions, approval rules, retries, deduplication, monitoring, failure handling, and evidence of execution. A filename is not runtime evidence.
 
-A file named "daily" is not evidence that anything runs daily.
+## Step 4 - routing probes
 
-## Step 3 - routing probes
+From a fresh-session perspective test a small set such as:
 
-Run a small set of retrieval probes from a fresh-session perspective.
+1. Where are operator-wide current priorities?
+2. How is the active workspace identified and loaded?
+3. Which source is authoritative for a workspace-specific fact?
+4. Where is live-source access registered and what proves it works?
+5. Where should a new specialized piece of knowledge be stored first?
+6. How would a local skill be promoted to shared capability?
+7. Which file defines architecture when adapters disagree?
 
-Examples:
+Record expected source, route followed, resolution, freshness, and authority.
 
-1. Where would the AI find the operator's current priorities?
-2. Where is the source of truth for connections?
-3. How would it discover a relevant project or lesson reference?
-4. Which file explains the Three Ms?
-5. Which skill should be used to add a new source?
+## Step 5 - compatibility
 
-For each probe record:
+Compare `.claude/skills/` and `.agents/skills/` using `compatibility.md` and the architecture check.
 
-- expected source
-- route followed
-- whether the route resolves
-- whether the retrieved source appears current
+Distinguish missing packages, meaningful logic drift, expected runtime metadata differences, and broken dependencies.
 
-## Step 4 - compatibility check
+## Step 6 - classify findings
 
-Compare `.claude/skills/` and `.agents/skills/`.
+Use:
 
-Distinguish:
+- confirmed defect
+- verification gap
+- stale/conflicting source
+- isolation/authority defect
+- intentional runtime difference
+- optional improvement
 
-- missing copies
-- expected runtime-specific metadata differences
-- meaningful logic drift
-- package assets missing from one runtime
+Use stable IDs when useful.
 
-Do not treat every textual difference as a defect.
-
-## Step 5 - classify findings
-
-Every finding should be one of:
-
-- **confirmed defect**
-- **verification gap**
-- **stale or conflicting source**
-- **intentional runtime difference**
-- **optional improvement**
-
-Give stable finding IDs when possible so later audits can track whether an issue is new, still open, resolved, reopened, not rechecked, or no longer applicable.
-
-## Step 6 - score using evidence
+## Step 7 - score evidence
 
 Apply `rubric.md`.
 
-Missing or unverified foundational layers should cap the score. A large number of skills must not compensate for broken context or nonexistent connections.
+A large number of skills or folders must not compensate for broken authority, missing context, unsafe connection assumptions, or nonexistent execution evidence.
 
-The score is a summary of verified operational reliability, not a measure of the operator's intelligence, business quality, or overall usefulness of AI.
+## Step 8 - save report
 
-## Step 7 - save the report
+Save private point-in-time audit evidence under:
 
-Create `audits/` when needed and save a unique report such as:
+`runtime/reports/YYYY-MM-DD-HHMM-audit.md`
 
-`audits/YYYY-MM-DD-HHMM-audit.md`
+Create the folder when needed. Use `templates/report.md`.
 
-Use `templates/report.md` as the structure.
+If a finding changes durable current state or leads to a settled decision, promote that small result to the appropriate operator/workspace context or decision source rather than treating the entire audit report as canonical truth.
 
-Audit reports are gitignored because they may contain private project details.
+## Step 9 - recommend the next improvement
 
-If prior audit reports exist, compare the relevant findings and distinguish actual fixes from changes in evidence coverage.
+Recommend at most three improvements ordered by dependency and expected value. Highlight one best next action for `/level-up`.
 
-## Step 8 - choose the next improvement
-
-Recommend no more than three improvements, ordered by expected value and dependency.
-
-Highlight one best next action for `/level-up`.
-
-A valid improvement may be a repair, route fix, connection, script, verification step, or deletion. Do not assume the answer is another skill.
+A valid improvement may be deletion, migration, routing repair, verification, connection work, context cleanup, a script, a skill, an automation, or a policy. Do not default to adding complexity.
 
 ## Rules
 
 - Evidence beats presence.
 - Unknown is not the same as broken.
 - Do not claim live verification you did not perform.
-- Preserve previous audit reports.
 - Do not expose secrets in reports.
-- Keep current truth separate from point-in-time audit evidence.
+- Preserve workspace privacy boundaries.
 - Do not silently change the target while auditing it.

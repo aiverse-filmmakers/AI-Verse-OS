@@ -1,0 +1,11 @@
+.env
+.env.local
+.DS_Store
+*.log
+__pycache__/
+node_modules/
+.claude/settings.local.json
+audits/
+brainstorms/
+apps/3d-brain/data/
+apps/3d-brain/config.local.json

@@ -1,0 +1,13 @@
+{
+  "name": "ai-verse-3d-brain",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "start": "node build.mjs && node serve.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "AI-Verse Brain",
+  "port": 4640,
+  "categories": [
+    {
+      "id": "context",
+      "label": "Context",
+      "paths": ["../../context"]
+    },
+    {
+      "id": "references",
+      "label": "References",
+      "paths": ["../../references"]
+    },
+    {
+      "id": "skills",
+      "label": "Skills",
+      "paths": ["../../.claude/skills"]
+    }
+  ]
+}

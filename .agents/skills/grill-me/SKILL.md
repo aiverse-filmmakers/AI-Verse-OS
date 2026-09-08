@@ -21,49 +21,105 @@ Use `/onboard` for first-time setup. Use `/grill-me` for depth after onboarding.
 
 Create a dated Markdown capture under `brainstorms/`.
 
-Recommended filename: `brainstorms/YYYY-MM-DD-topic-slug.md`.
+Recommended filename:
 
-Include topic, purpose, status, questions and verbatim answers, confirmed facts, tentative ideas, unresolved questions, and a resume point if interrupted. Save every answer immediately.
+`brainstorms/YYYY-MM-DD-topic-slug.md`
+
+Include:
+
+- topic
+- purpose of the interview
+- status: in-progress or complete
+- questions and verbatim answers
+- extracted confirmed facts
+- tentative ideas
+- unresolved questions
+- resume point if interrupted
+
+Write each answer immediately after it is given. Do not wait until the end to save the entire interview.
 
 ## Interview behavior
 
-Ask one useful question at a time. Start broad, then narrow based on the answer. Avoid a rigid questionnaire when the user's answers reveal a more useful direction.
+Ask one useful question at a time.
 
-Useful areas include outcome, current workflow, why choices are made, what stays consistent, what varies, failure cases, quality standards, tools, terminology, examples, handoffs, and assumptions the AI must never make.
+Start broad enough to understand the topic, then narrow based on the answer. Avoid a rigid questionnaire when the user's answers reveal a more useful direction.
 
-## Separate fact from exploration
+Useful question categories include:
 
-- **Confirmed:** current truth, rule, preference, or settled decision.
-- **Tentative:** brainstorming, future plans, guesses, experiments, unresolved choices.
-- **Historical:** previously true information that should not override current context.
+- what outcome matters
+- how the operator currently does the work
+- why they make certain choices
+- what always stays consistent
+- what varies
+- failure cases
+- quality standards
+- tools and sources
+- terminology
+- examples and counterexamples
+- handoff requirements
+- what the AI must never assume
 
-Do not promote tentative ideas into canonical context as confirmed truth.
+Do not repeat questions the operator has already answered.
 
-## Promote confirmed knowledge
+## Separating fact from exploration
 
-When requested, route confirmed information into the smallest appropriate canonical source:
+Classify captured information carefully.
 
-- personal/working preferences -> `context/about-me.md`
+**Confirmed context:** the operator states it as current truth, a rule, a preference, or a settled decision.
+
+**Tentative:** brainstorming, possible future plans, guesses, experiments, or unresolved choices.
+
+**Historical:** previously true information that may explain a decision but should not overwrite current context.
+
+Do not promote tentative ideas into canonical context as if they are confirmed.
+
+## Promoting knowledge into AI-Verse OS
+
+When the user explicitly wants the interview to update the system, route confirmed information into the smallest appropriate canonical source.
+
+Examples:
+
+- personal or working preferences -> `context/about-me.md`
 - business facts -> `context/about-business.md`
 - priorities -> `context/priorities.md`
 - durable workflow knowledge -> `references/` or an SOP
 - repeated executable process -> candidate AI-Verse skill
-- meaningful decision -> `decisions/log.md`
-- live external source -> `connections.md` plus an appropriate route
+- meaningful settled decision -> `decisions/log.md`
+- live external source -> `connections.md` plus a route or integration reference
+
+Link back to the brainstorm capture when provenance would be useful.
 
 ## Lesson-to-skill mode
 
-When interviewing about an AI-Verse lesson, extract:
+When the interview is about an AI-Verse lesson, also determine whether the lesson should become a skill.
 
-1. desired outcome
+Extract:
+
+1. the learner's desired outcome
 2. required inputs or reference assets
 3. ordered execution steps
 4. decisions the AI must make
-5. locked rules
+5. rules that must remain locked
 6. expected deliverables
-7. verification and QC checks
+7. verification and quality-control checks
 8. model-specific details that belong in references rather than timeless skill logic
 
-At completion, state whether the material is best stored as reference knowledge, an SOP, a template, an executable skill, or a combination.
+At the end, state whether the material is best stored as:
 
-Stop when further questions no longer materially improve the system.
+- reference knowledge
+- an SOP
+- a reusable template
+- an executable skill
+- a combination of those
+
+## Completion
+
+When the useful information has been captured, summarize:
+
+- what was learned
+- which facts are confirmed
+- which ideas remain tentative
+- what was added or should be added to canonical context
+- whether a new skill or workflow is justified
+
+Do not manufacture a fixed number of questions. Stop when additional questions are no longer materially improving the system.

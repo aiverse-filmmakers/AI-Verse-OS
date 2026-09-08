@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-Verse 3D Brain</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">AI-VERSE OS</div>
+        <h1 id="brain-name">3D Brain</h1>
+      </div>
+      <div class="actions">
+        <button id="replay">Play demo</button>
+        <button id="cinema">Cinema</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside id="panel" class="panel">
+        <label class="search-wrap">
+          <span>Search</span>
+          <input id="search" type="search" placeholder="Find a note..." autocomplete="off">
+        </label>
+        <div class="stats" id="stats"></div>
+        <div class="categories" id="categories"></div>
+        <div class="selected" id="selected">
+          <div class="muted">Select a node to inspect it.</div>
+        </div>
+      </aside>
+
+      <section class="scene-wrap">
+        <canvas id="scene"></canvas>
+        <div class="scene-label">
+          <span id="visible-count">0</span>
+          <span class="muted">visible notes</span>
+        </div>
+        <div class="controls-hint">Drag to orbit · Scroll to zoom · Click a node</div>
+      </section>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

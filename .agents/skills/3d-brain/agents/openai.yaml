@@ -1,0 +1,4 @@
+interface:
+  display_name: "3D Brain"
+  short_description: "Build a local visual explorer from selected AI-Verse OS knowledge."
+  default_prompt: "Build a 3D Brain from real approved AI-Verse OS sources, verify the graph, and keep it local by default."

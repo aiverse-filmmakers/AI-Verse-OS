@@ -53,9 +53,17 @@ Full breakdown: `references/4cs-framework.md`
 | `/link` | Make a project, file, folder, or source findable from the operating manual. |
 | `/audit` | Check the Four Cs, routing, freshness, compatibility, and evidence of real operation. |
 | `/level-up` | Use the Three Ms to find and ship one useful improvement at a time. |
-| `/3d-brain` | Build a local visual explorer for selected knowledge sources. |
+| `/3d-brain` | Build the full interactive 3D knowledge globe from selected knowledge sources. |
 
 This is the foundation. AI-Verse lessons can be converted into additional skills over time, including filmmaking, image generation, video workflows, storyboards, continuity, prompting, editing, automation, and distribution.
+
+## 3D Brain demo
+
+[![Watch the 3D Brain grow from one idea into a connected knowledge globe](docs/media/3d-brain-preview.gif)](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)
+
+The included preview shows the original full 3D Brain experience, including the growth sequence, interactive knowledge globe, and presentation style. **[Open the full 1080p demo video](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)** for full-resolution playback.
+
+The demo uses an example knowledge set. When `/3d-brain` runs inside AI-Verse OS, it builds the same style of experience from the user's chosen name, categories, and real saved knowledge.
 
 ## Quick start
 
@@ -91,6 +99,8 @@ AI-Verse-OS/
 ├── archives/
 ├── brainstorms/               # created by /grill-me, gitignored
 ├── audits/                    # created by /audit, gitignored
+├── docs/
+│   └── media/                 # 3D Brain preview and full demo
 ├── scripts/
 │   └── sync-codex-skills.sh
 ├── .claude/skills/            # authoring source

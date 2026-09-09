@@ -113,6 +113,16 @@ domain_adaptation:
   allow_custom_workspace_types: true
   allow_custom_domain_vocabulary: true
 
+extensions:
+  memory:
+    supported: true
+    optional: true
+    provider: null
+    version: null
+    engine: null
+    index: null
+    rule: "AI-Verse OS remains fully functional without an external memory engine. When one is installed, it must use the canonical operator and workspace memory locations, keep indexes derived, and never create a competing source of truth."
+
 privacy:
   default_public_template: true
   user_state_gitignored_by_default: true

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Onboard AI-Verse OS"
+  short_description: "Build universal operator context and initial workspace routes."
+  default_prompt: "Run the domain-neutral AI-Verse OS onboarding workflow, preserve existing user state, and create only the minimum useful workspace structure."

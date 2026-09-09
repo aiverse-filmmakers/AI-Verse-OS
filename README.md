@@ -6,6 +6,44 @@ It is intentionally not designed around one profession. A doctor, developer, fil
 
 **AI-Verse Community:** https://www.skool.com/bogdans-ai-verse-4398
 
+## Install
+
+AI-Verse OS now ships with a small cross-platform CLI.
+
+### Test directly from GitHub
+
+```bash
+npx --yes github:aiverse-filmmakers/AI-Verse-OS install
+```
+
+That downloads the latest AI-Verse OS into `./AI-Verse-OS`, validates the core architecture, and confirms the Claude and Codex onboarding skills are present.
+
+### Install the `ai-verse-os` command
+
+Until the CLI package is published to the npm registry, install the command directly from GitHub once:
+
+```bash
+npm install -g github:aiverse-filmmakers/AI-Verse-OS
+```
+
+Then the normal commands are:
+
+```bash
+ai-verse-os install
+ai-verse-os doctor
+ai-verse-os onboard
+ai-verse-os update
+ai-verse-os version
+```
+
+Once the npm package is published, the first-run experience can become simply:
+
+```bash
+npx ai-verse-os install
+```
+
+The CLI requires Node.js 18+ and Git. Node.js 22+ is recommended if you want the full 3D Brain.
+
 ## Core design principle
 
 > **One OS. One source of truth. Many isolated workspaces. Reusable capabilities. Connected systems. Automated cadence. Apps on top.**
@@ -236,15 +274,16 @@ The included `/3d-brain` capability remains an optional application layer. It vi
 
 ## Quick start
 
-1. Clone the repository.
-2. Open it in a supported capable AI coding/runtime environment.
-3. Run `/onboard` or invoke the onboarding capability.
-4. Answer the seven universal intake questions.
-5. Let AI-Verse OS create operator state and the minimum useful workspace structure.
-6. Use `/workspace` when a substantial new scope of work deserves isolation.
-7. Use `/link` for important sources and `/grill-me` for knowledge still in your head.
-8. Run `/audit` after setup or major changes.
-9. Run `/level-up` when a repeated constraint should become a better process, skill, script, connection, or automation.
+1. Install with `npx --yes github:aiverse-filmmakers/AI-Verse-OS install`, or clone the repository manually.
+2. Enter the new `AI-Verse-OS` folder.
+3. Run `ai-verse-os onboard`, or open it in a supported capable AI coding/runtime environment.
+4. In Claude Code run `/onboard`; in Codex run or select `$onboard`.
+5. Answer the seven universal intake questions.
+6. Let AI-Verse OS create operator state and the minimum useful workspace structure.
+7. Use `/workspace` when a substantial new scope of work deserves isolation.
+8. Use `/link` for important sources and `/grill-me` for knowledge still in your head.
+9. Run `/audit` after setup or major changes.
+10. Run `/level-up` when a repeated constraint should become a better process, skill, script, connection, or automation.
 
 ## Privacy by default
 

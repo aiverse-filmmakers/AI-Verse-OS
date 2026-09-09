@@ -1,0 +1,69 @@
+name: Repository QC
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qc:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check architecture and skill parity
+        run: bash scripts/check-architecture.sh
+
+      - name: Validate CLI package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const cli = fs.readFileSync('bin/ai-verse-os.mjs', 'utf8');
+
+          if (pkg.name !== 'ai-verse-os') throw new Error('package name must be ai-verse-os');
+          if (pkg.bin?.['ai-verse-os'] !== 'bin/ai-verse-os.mjs') throw new Error('ai-verse-os bin mapping is missing or wrong');
+          if (!cli.includes(`const CLI_VERSION = '${pkg.version}'`)) throw new Error('CLI_VERSION does not match package.json version');
+          NODE
+          node bin/ai-verse-os.mjs version
+          npm pack --dry-run
+
+      - name: Verify member install documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'npx --yes github:aiverse-filmmakers/AI-Verse-OS install' README.md
+          grep -Fq 'npm install -g github:aiverse-filmmakers/AI-Verse-OS' README.md
+          grep -Fq 'ai-verse-os update' README.md
+
+      - name: Validate 3D Brain package and demo assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .claude/skills/3d-brain/scripts/test-package.mjs
+          test -s docs/media/3d-brain-demo.mp4
+          test -s docs/media/3d-brain-preview.gif
+          test -f .claude/skills/3d-brain/assets/template/dist/app.js
+          test -f .claude/skills/3d-brain/assets/template/src/app.js
+
+      - name: Check for legacy product branding in text
+        shell: bash
+        run: |
+          set -euo pipefail
+          legacy_pattern='AIS''-OS|AI''OS|Herk''Brain'
+          if git grep -I -n -E "$legacy_pattern" -- . ':(exclude)**/THIRD-PARTY-NOTICES.txt'; then
+            echo 'Legacy product branding was found in member-facing text.' >&2
+            exit 1
+          fi
+          echo 'No legacy product branding found in member-facing text.'

@@ -8,6 +8,9 @@ __pycache__/
 node_modules/
 .claude/settings.local.json
 
+# Local extension installation state. Extensions register here instead of editing tracked OS files.
+.aiverse/extensions/
+
 # Legacy private/session outputs
 audits/
 brainstorms/

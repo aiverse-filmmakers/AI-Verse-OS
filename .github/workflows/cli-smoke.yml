@@ -32,6 +32,18 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Test first-run npx bootstrap
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$RUNNER_TEMP/AI-Verse-OS-npx-test"
+          rm -rf "$TARGET"
+          npx --yes github:aiverse-filmmakers/AI-Verse-OS install --dir "$TARGET"
+          test -f "$TARGET/AI-VERSE.yaml"
+          test -f "$TARGET/.claude/skills/onboard/SKILL.md"
+          test -f "$TARGET/.agents/skills/onboard/SKILL.md"
+
       - name: Install CLI globally
         run: npm install -g .
 

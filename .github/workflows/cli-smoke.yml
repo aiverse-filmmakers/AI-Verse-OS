@@ -33,7 +33,6 @@ jobs:
           node-version: '22'
 
       - name: Test first-run npx bootstrap
-        if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail

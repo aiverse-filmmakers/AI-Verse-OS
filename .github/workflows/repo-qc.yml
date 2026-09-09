@@ -47,6 +47,30 @@ jobs:
           grep -Fq 'npm install -g github:aiverse-filmmakers/AI-Verse-OS' README.md
           grep -Fq 'ai-verse-os update' README.md
 
+      - name: Verify local extension registry contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq '.aiverse/extensions/registry.json' AGENTS.md
+          grep -Fq '.aiverse/extensions/' .gitignore
+          test -f system/extensions/README.md
+          mkdir -p .aiverse/extensions
+          cat > .aiverse/extensions/registry.json <<'JSON'
+          {
+            "schema_version": "1.0",
+            "extensions": {
+              "qc-extension": {
+                "id": "qc-extension",
+                "supported": true,
+                "installed": true,
+                "enabled": true
+              }
+            }
+          }
+          JSON
+          git check-ignore -q .aiverse/extensions/registry.json
+          test -z "$(git status --porcelain)"
+
       - name: Validate 3D Brain package and demo assets
         shell: bash
         run: |

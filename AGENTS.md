@@ -25,17 +25,17 @@ Do not load the entire OS just because it exists. Prefer scoped retrieval and pr
 
 AI-Verse OS separates concerns deliberately:
 
-- `system/` contains architecture, schemas, templates, policies, and health rules supplied by AI-Verse OS.
+- `system/` contains architecture, schemas, templates, policies, health rules, and the canonical OS capability sources supplied by AI-Verse OS.
 - `operator/` contains the human operator's identity, preferences, goals, current context, memory, inbox, and decisions.
 - `knowledge/` contains durable reusable knowledge that is broader than one workspace.
 - `workspaces/` isolates substantial scopes of work. A workspace can represent any meaningful unit such as a project, role, practice, client, case, research area, product, team, course, study, personal area, or a custom type.
 - `connections/` describes systems and sources the OS can reach. Registry entries are not proof that access works.
-- `.claude/skills/` is the current canonical materialized skill source. `.agents/skills/` is the Codex-compatible copy. `skills/registry.yaml` is the runtime-neutral capability registry.
+- `system/capabilities/` is the canonical editable source for OS-built-in capabilities. `.claude/skills/` and `.agents/skills/` are generated runtime adapter peers. `skills/registry.yaml` is the runtime-neutral capability registry.
 - `.aiverse/extensions/registry.json` is local installation metadata for optional extensions. It is gitignored by the OS and must be used instead of modifying upstream-owned runtime contracts or capability registries.
 - `agents/` describes orchestration. Agents coordinate capabilities and context; they should not become giant duplicate knowledge stores.
 - `automations/` implements cadence through jobs, triggers, and policies.
 - `apps/` contains persistent interfaces built on top of the OS. Apps are views and tools, not sources of truth.
-- `runtime/` contains disposable caches, indexes, logs, temporary reports, and generated state.
+- `runtime/` contains disposable caches, indexes, logs, temporary reports, generated state, and the local adapter-ownership ledger.
 - `archives/` preserves material that should remain available historically but should not override current truth.
 
 See `system/architecture/README.md` for the full model.
@@ -45,10 +45,11 @@ See `system/architecture/README.md` for the full model.
 Optional extensions must not edit tracked OS files during normal install, update, rollback, or uninstall.
 
 - Register local installation state in `.aiverse/extensions/registry.json`.
-- Keep `AGENTS.md`, `AI-VERSE.yaml`, and `skills/registry.yaml` under OS ownership.
+- Keep `AGENTS.md`, `AI-VERSE.yaml`, `skills/registry.yaml`, and `system/capabilities/` under OS ownership.
 - Extension entries must distinguish `supported`, `installed`, and `enabled`; health is checked live rather than asserted by registration.
 - Treat extension instruction, engine, and adapter paths as repository-relative references. Reject absolute paths, `..` traversal, or paths that resolve outside the OS root before loading them.
 - Unknown extension entries are preserved by other extensions and by OS updates.
+- Runtime adapter synchronization may replace only files recorded as OS-owned whose current digest still matches the last generated digest. Unknown files and locally modified files must be preserved and reported as conflicts.
 - A registration never grants workspace access, connection permission, action approval, or Brain authority.
 - See `system/extensions/README.md` for the local registry contract and migration rules.
 

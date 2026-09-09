@@ -84,3 +84,7 @@ See `domain-adaptation.md`.
 - `ownership.md`
 - `../schemas/workspace.schema.yaml`
 - `../../AI-VERSE.yaml`
+
+## Next capability integration contract
+
+[Capability Provider Contract v1](../contracts/capability-provider-v1/README.md) specifies ownership, identity, readiness, generation safety, and extension compatibility for the next implementation stage. It does not change current v2 paths or activate providers.

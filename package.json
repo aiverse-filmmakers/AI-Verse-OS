@@ -1,0 +1,34 @@
+{
+  "name": "ai-verse-os",
+  "version": "0.1.0",
+  "description": "CLI installer and manager for AI-Verse OS",
+  "type": "module",
+  "bin": {
+    "ai-verse-os": "bin/ai-verse-os.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "LICENSE",
+    "README.md"
+  ],
+  "keywords": [
+    "ai",
+    "operating-system",
+    "agents",
+    "claude",
+    "codex",
+    "ai-verse"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aiverse-filmmakers/AI-Verse-OS.git"
+  },
+  "homepage": "https://github.com/aiverse-filmmakers/AI-Verse-OS#readme",
+  "bugs": {
+    "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/issues"
+  }
+}

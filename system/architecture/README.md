@@ -18,7 +18,7 @@ UWA organizes by ownership, scope, lifecycle, and authority instead.
 
 ```text
 SYSTEM
-  architecture / schemas / templates / health
+  architecture / schemas / templates / health / capabilities
 
 USER
   operator
@@ -56,6 +56,8 @@ Each workspace uses the same contract, then evolves local structure as the work 
 
 Keeping those meanings distinct is more important than having many folders.
 
+OS-built-in capability methodology lives under `system/capabilities/`. Runtime trees such as `.claude/skills/` and `.agents/skills/` are generated peers, not competing editable sources. See `adapter-synchronization.md`.
+
 ## Domain neutrality
 
 The architecture does not mean domain ignorance. It means domain knowledge is learned at the right scope rather than assumed globally.
@@ -73,7 +75,8 @@ See `domain-adaptation.md`.
 5. Agents should orchestrate capabilities rather than duplicate them.
 6. Apps and indexes are derived interfaces, not hidden truth stores.
 7. User-owned state must survive system upgrades.
-8. New top-level structure must earn its existence through cross-domain architectural need.
+8. Generated adapters must never silently overwrite unknown or locally modified files.
+9. New top-level structure must earn its existence through cross-domain architectural need.
 
 ## Related documents
 
@@ -82,9 +85,10 @@ See `domain-adaptation.md`.
 - `routing.md`
 - `domain-adaptation.md`
 - `ownership.md`
+- `adapter-synchronization.md`
 - `../schemas/workspace.schema.yaml`
 - `../../AI-VERSE.yaml`
 
 ## Next capability integration contract
 
-[Capability Provider Contract v1](../contracts/capability-provider-v1/README.md) specifies ownership, identity, readiness, generation safety, and extension compatibility for the next implementation stage. It does not change current v2 paths or activate providers.
+[Capability Provider Contract v1](../contracts/capability-provider-v1/README.md) specifies ownership, identity, readiness, generation safety, and extension compatibility for the next implementation stage. The built-in source migration to `system/capabilities/` is now implemented; external provider discovery and later integration stages remain separate work.

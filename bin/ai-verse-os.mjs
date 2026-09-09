@@ -98,8 +98,14 @@ function validateInstall(root) {
     'AGENTS.md',
     'CLAUDE.md',
     'AI-VERSE.yaml',
+    'system/architecture/README.md',
+    'system/schemas/workspace.schema.yaml',
+    'workspaces/_template/WORKSPACE.yaml',
+    'skills/registry.yaml',
     '.claude/skills/onboard/SKILL.md',
     '.agents/skills/onboard/SKILL.md',
+    '.claude/skills/3d-brain/SKILL.md',
+    '.agents/skills/3d-brain/SKILL.md',
   ];
   return required.filter((item) => !fs.existsSync(path.join(root, item)));
 }
@@ -131,7 +137,9 @@ function install(options) {
   if (isRoot(target)) {
     out(`AI-Verse OS is already installed at:\n${target}`);
     out('');
-    out(`Run: ai-verse-os doctor --dir "${target}"`);
+    out('If the CLI is installed globally, run:');
+    out(`  ai-verse-os doctor --dir "${target}"`);
+    out('Otherwise, open the folder in Claude Code or Codex and continue there.');
     return;
   }
 
@@ -172,10 +180,10 @@ function install(options) {
 
   out('Next:');
   out(`  cd "${target}"`);
-  out('  ai-verse-os onboard');
+  out('  Open this folder in Claude Code and run /onboard');
+  out('  or open it in Codex and run $onboard');
   out('');
-  out('Or open the folder in Claude Code and run /onboard.');
-  out('In Codex, select or run $onboard.');
+  out('If you installed the CLI globally, you can also run: ai-verse-os onboard');
 }
 
 function doctor(options) {

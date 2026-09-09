@@ -31,6 +31,7 @@ required_files=(
   "automations/README.md"
   "apps/README.md"
   "runtime/README.md"
+  "scripts/sync-runtime-adapters.mjs"
 )
 
 for path in "${required_files[@]}"; do
@@ -57,23 +58,31 @@ for key in schema_version id name type status purpose; do
   fi
 done
 
-if [[ -d .claude/skills && -d .agents/skills ]]; then
-  for source in .claude/skills/*; do
+if grep -Fq 'canonical_materialization: system/capabilities/' skills/registry.yaml; then
+  ok "system/capabilities is the canonical capability source"
+else
+  err "skills/registry.yaml must name system/capabilities/ as canonical_materialization"
+fi
+
+if [[ -d system/capabilities && -d .claude/skills && -d .agents/skills ]]; then
+  for source in system/capabilities/*; do
     [[ -d "$source" ]] || continue
     skill="$(basename "$source")"
-    target=".agents/skills/$skill"
-    if [[ ! -d "$target" ]]; then
-      err "Codex adapter missing skill: $skill"
-      continue
-    fi
-    if diff -qr "$source" "$target" >/dev/null 2>&1; then
-      ok "skill adapters synchronized: $skill"
-    else
-      err "skill adapter drift: $skill (run scripts/sync-codex-skills.sh $skill)"
-    fi
+    for runtime in .claude/skills .agents/skills; do
+      target="$runtime/$skill"
+      if [[ ! -d "$target" ]]; then
+        err "runtime adapter missing OS capability: $runtime/$skill"
+        continue
+      fi
+      if diff -qr "$source" "$target" >/dev/null 2>&1; then
+        ok "OS capability adapter synchronized: $runtime/$skill"
+      else
+        err "OS capability adapter drift: $runtime/$skill (run scripts/sync-codex-skills.sh $skill and review any reported conflict)"
+      fi
+    done
   done
 else
-  err "skill adapter directories are missing"
+  err "canonical capability or runtime adapter directories are missing"
 fi
 
 # Public-template privacy warning. This is advisory because a private installation

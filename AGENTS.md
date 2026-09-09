@@ -10,13 +10,14 @@ For substantial work inside AI-Verse OS:
 
 1. Read `AI-VERSE.yaml`.
 2. Read this file.
-3. Load `operator/context/CURRENT.md` when it exists and the task depends on operator context.
-4. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml` and `context/CURRENT.md` before deeper retrieval.
-5. Select the smallest relevant skill or deterministic script.
-6. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
-7. Execute at the lowest autonomy level that reliably works.
-8. Validate before handing output to another step or taking an external action.
-9. Write back only information that deserves to become durable state.
+3. If `.aiverse/extensions/registry.json` exists, read it and load only task-relevant extension instructions from entries that are explicitly supported, installed, and enabled. Registration is not proof of health, permission, approval, or execution readiness.
+4. Load `operator/context/CURRENT.md` when it exists and the task depends on operator context.
+5. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml` and `context/CURRENT.md` before deeper retrieval.
+6. Select the smallest relevant skill or deterministic script.
+7. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
+8. Execute at the lowest autonomy level that reliably works.
+9. Validate before handing output to another step or taking an external action.
+10. Write back only information that deserves to become durable state.
 
 Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.
 
@@ -30,6 +31,7 @@ AI-Verse OS separates concerns deliberately:
 - `workspaces/` isolates substantial scopes of work. A workspace can represent any meaningful unit such as a project, role, practice, client, case, research area, product, team, course, study, personal area, or a custom type.
 - `connections/` describes systems and sources the OS can reach. Registry entries are not proof that access works.
 - `.claude/skills/` is the current canonical materialized skill source. `.agents/skills/` is the Codex-compatible copy. `skills/registry.yaml` is the runtime-neutral capability registry.
+- `.aiverse/extensions/registry.json` is local installation metadata for optional extensions. It is gitignored by the OS and must be used instead of modifying upstream-owned runtime contracts or capability registries.
 - `agents/` describes orchestration. Agents coordinate capabilities and context; they should not become giant duplicate knowledge stores.
 - `automations/` implements cadence through jobs, triggers, and policies.
 - `apps/` contains persistent interfaces built on top of the OS. Apps are views and tools, not sources of truth.
@@ -37,6 +39,18 @@ AI-Verse OS separates concerns deliberately:
 - `archives/` preserves material that should remain available historically but should not override current truth.
 
 See `system/architecture/README.md` for the full model.
+
+## Local extension rule
+
+Optional extensions must not edit tracked OS files during normal install, update, rollback, or uninstall.
+
+- Register local installation state in `.aiverse/extensions/registry.json`.
+- Keep `AGENTS.md`, `AI-VERSE.yaml`, and `skills/registry.yaml` under OS ownership.
+- Extension entries must distinguish `supported`, `installed`, and `enabled`; health is checked live rather than asserted by registration.
+- Treat extension instruction, engine, and adapter paths as repository-relative references. Reject absolute paths, `..` traversal, or paths that resolve outside the OS root before loading them.
+- Unknown extension entries are preserved by other extensions and by OS updates.
+- A registration never grants workspace access, connection permission, action approval, or Brain authority.
+- See `system/extensions/README.md` for the local registry contract and migration rules.
 
 ## Four Cs
 

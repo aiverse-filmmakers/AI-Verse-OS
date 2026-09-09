@@ -20,8 +20,17 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Check architecture and skill parity
+      - name: Check architecture and adapter parity
         run: bash scripts/check-architecture.sh
+
+      - name: Test ownership-aware adapter synchronization
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/test-adapter-sync.mjs
+          node scripts/sync-runtime-adapters.mjs
+          test -f runtime/adapters/os-owned.json
+          test -z "$(git status --porcelain)"
 
       - name: Validate CLI package metadata
         shell: bash
@@ -71,15 +80,16 @@ jobs:
           git check-ignore -q .aiverse/extensions/registry.json
           test -z "$(git status --porcelain)"
 
-      - name: Validate 3D Brain package and demo assets
+      - name: Validate canonical 3D Brain package and generated peers
         shell: bash
         run: |
           set -euo pipefail
-          node .claude/skills/3d-brain/scripts/test-package.mjs
+          node system/capabilities/3d-brain/scripts/test-package.mjs
           test -s docs/media/3d-brain-demo.mp4
           test -s docs/media/3d-brain-preview.gif
+          test -f system/capabilities/3d-brain/assets/template/dist/app.js
           test -f .claude/skills/3d-brain/assets/template/dist/app.js
-          test -f .claude/skills/3d-brain/assets/template/src/app.js
+          test -f .agents/skills/3d-brain/assets/template/dist/app.js
 
       - name: Check for legacy product branding in text
         shell: bash
@@ -91,3 +101,60 @@ jobs:
             exit 1
           fi
           echo 'No legacy product branding found in member-facing text.'
+
+  adapter-integration:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install current AI-Verse Memory
+        shell: bash
+        run: |
+          set -euo pipefail
+          MEMORY="$RUNNER_TEMP/AI-Verse-Memory"
+          git clone --depth 1 https://github.com/aiverse-filmmakers/AI-Verse-Memory.git "$MEMORY"
+          python "$MEMORY/scripts/install.py" --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY"
+          test -f .claude/skills/ai-verse-memory/SKILL.md
+          test -f .agents/skills/ai-verse-memory/SKILL.md
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Preserve Memory, custom adapters, and edited Codex files
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLAUDE_MEMORY_BEFORE="$(sha256sum .claude/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          CODEX_MEMORY_BEFORE="$(sha256sum .agents/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+
+          mkdir -p .agents/skills/custom-local
+          printf '%s\n' 'custom adapter must survive' > .agents/skills/custom-local/SKILL.md
+
+          node scripts/sync-runtime-adapters.mjs
+          grep -Fq 'custom adapter must survive' .agents/skills/custom-local/SKILL.md
+
+          printf '%s\n' 'LOCAL CODEX EDIT MUST SURVIVE' >> .agents/skills/onboard/SKILL.md
+          set +e
+          node scripts/sync-runtime-adapters.mjs > "$RUNNER_TEMP/adapter-sync.out" 2> "$RUNNER_TEMP/adapter-sync.err"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          grep -Fq 'locally modified since the last OS generation; preserved' "$RUNNER_TEMP/adapter-sync.err"
+          grep -Fq 'LOCAL CODEX EDIT MUST SURVIVE' .agents/skills/onboard/SKILL.md
+
+          CLAUDE_MEMORY_AFTER="$(sha256sum .claude/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          CODEX_MEMORY_AFTER="$(sha256sum .agents/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          test "$CLAUDE_MEMORY_BEFORE" = "$CLAUDE_MEMORY_AFTER"
+          test "$CODEX_MEMORY_BEFORE" = "$CODEX_MEMORY_AFTER"
+          grep -Fq 'custom adapter must survive' .agents/skills/custom-local/SKILL.md
+
+          git checkout -- .agents/skills/onboard/SKILL.md
+          node scripts/sync-runtime-adapters.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"

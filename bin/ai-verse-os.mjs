@@ -100,11 +100,8 @@ function validateInstall(root) {
     'AI-VERSE.yaml',
     'system/architecture/README.md',
     'system/schemas/workspace.schema.yaml',
-    'system/capabilities/onboard/SKILL.md',
-    'system/capabilities/3d-brain/SKILL.md',
     'workspaces/_template/WORKSPACE.yaml',
     'skills/registry.yaml',
-    'scripts/sync-runtime-adapters.mjs',
     '.claude/skills/onboard/SKILL.md',
     '.agents/skills/onboard/SKILL.md',
     '.claude/skills/3d-brain/SKILL.md',
@@ -170,9 +167,8 @@ function install(options) {
 
   out('');
   out('✓ AI-Verse OS installed');
-  out('✓ Canonical OS capabilities present');
-  out('✓ Claude adapters present');
-  out('✓ Codex adapters present');
+  out('✓ Claude skills present');
+  out('✓ Codex skills present');
   out('✓ Architecture files present');
   out('');
 
@@ -227,9 +223,8 @@ function doctor(options) {
       failed = true;
     } else {
       out('✓ Core architecture valid');
-      out('✓ Canonical OS capabilities present');
-      out('✓ Claude onboarding adapter present');
-      out('✓ Codex onboarding adapter present');
+      out('✓ Claude onboarding skill present');
+      out('✓ Codex onboarding skill present');
     }
   }
 

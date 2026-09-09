@@ -276,8 +276,8 @@ The included `/3d-brain` capability remains an optional application layer. It vi
 
 1. Install with `npx --yes github:aiverse-filmmakers/AI-Verse-OS install`, or clone the repository manually.
 2. Enter the new `AI-Verse-OS` folder.
-3. Run `ai-verse-os onboard`, or open it in a supported capable AI coding/runtime environment.
-4. In Claude Code run `/onboard`; in Codex run or select `$onboard`.
+3. Open that folder in your supported AI coding/runtime environment.
+4. In Claude Code run `/onboard`; in Codex run or select `$onboard`. If you installed the CLI globally, you can alternatively run `ai-verse-os onboard`.
 5. Answer the seven universal intake questions.
 6. Let AI-Verse OS create operator state and the minimum useful workspace structure.
 7. Use `/workspace` when a substantial new scope of work deserves isolation.

@@ -335,47 +335,7 @@ jobs:
           Path(os.environ['RUNNER_TEMP'], 'four-repo-host.json').write_text(json.dumps(cfg), encoding='utf-8')
           PY
 
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          from aiverse_brain.cadence import Trigger
-          from aiverse_brain.host_selection import select_host
-          from aiverse_brain.models import Scope
-          from aiverse_brain.runtime import BrainRuntime
-
-          pin = json.loads(Path(os.environ['RUNNER_TEMP'], 'skills-pin.json').read_text(encoding='utf-8'))
-          selection = select_host(
-              os.environ['GITHUB_WORKSPACE'],
-              host_adapter_config=str(Path(os.environ['RUNNER_TEMP'], 'four-repo-host.json')),
-          )
-          assert selection.real_host is True
-          assert selection.adapter_id == 'four-repo-acceptance-host'
-
-          class CaptureReasoner:
-              model_id = 'four-repo-capture-reasoner'
-              def __init__(self): self.calls = []
-              def reason(self, request, context):
-                  self.calls.append((request['purpose'], context))
-                  return {'proposals': []}
-
-          reasoner = CaptureReasoner()
-          runtime = BrainRuntime(os.environ['GITHUB_WORKSPACE'])
-          result = runtime.run_tick(
-              Trigger('scheduled_orientation', Scope('operator'), 'four-repo-acceptance-orientation'),
-              host=selection.host,
-              reasoner=reasoner,
-          )
-          assert result.ok
-          assert result.reasoner_calls == 2
-          contexts = {purpose: context for purpose, context in reasoner.calls}
-          gap = contexts['gap_analysis']
-          assert any('acceptance-memory-evidence' in item.get('text', '') for item in gap['history'])
-          opp = contexts['opportunity_discovery']
-          assert any(item.get('provider') == 'aiverse-skills' and item.get('generation_id') == pin['generation_id'] for item in opp['capabilities'])
-          assert any(item.get('id') == 'acceptance-local' for item in opp['connections'])
-          assert 'acceptance-freshness-19' in opp['current_context']['text']
-          print('Brain consumed live OS context + Memory history + Skills capabilities through explicit real host bridge')
-          PY
+          python scripts/test-four-repo-runtime.py runtime-composition
           echo 'Matrix 4 PASS: single direction owner and meaningful Brain host retrieval'
 
       - name: Matrix 5 - OS and Brain permissions intersect at dispatch

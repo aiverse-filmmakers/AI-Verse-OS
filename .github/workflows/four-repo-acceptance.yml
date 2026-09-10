@@ -1,0 +1,525 @@
+name: Four-Repo Acceptance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  all-four-repos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout AI-Verse OS under test
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Clone current Memory Brain and Skills mains
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/aiverse-filmmakers/AI-Verse-Memory.git "$RUNNER_TEMP/AI-Verse-Memory"
+          git clone --depth 1 https://github.com/aiverse-filmmakers/AI-Verse-Brain.git "$RUNNER_TEMP/AI-Verse-Brain"
+          git clone --depth 1 https://github.com/aiverse-filmmakers/AI-Verse-Skills.git "$RUNNER_TEMP/AI-Verse-Skills"
+          {
+            echo "os=$(git rev-parse HEAD)"
+            echo "memory=$(git -C "$RUNNER_TEMP/AI-Verse-Memory" rev-parse HEAD)"
+            echo "brain=$(git -C "$RUNNER_TEMP/AI-Verse-Brain" rev-parse HEAD)"
+            echo "skills=$(git -C "$RUNNER_TEMP/AI-Verse-Skills" rev-parse HEAD)"
+          } | tee "$RUNNER_TEMP/four-repo-heads.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Install Brain package and explicitly register it in the host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e "$RUNNER_TEMP/AI-Verse-Brain"
+          python - <<'PY'
+          from pathlib import Path
+          root = Path.cwd()
+          manifest = root / 'AI-VERSE.yaml'
+          text = manifest.read_text(encoding='utf-8')
+          if '\n  brain:\n' not in text:
+              needle = 'extensions:\n'
+              if needle not in text:
+                  raise SystemExit('OS manifest extensions section missing')
+              block = (
+                  'extensions:\n'
+                  '  brain:\n'
+                  '    supported: true\n'
+                  '    enabled: true\n'
+              )
+              text = text.replace(needle, block, 1)
+              manifest.write_text(text, encoding='utf-8')
+          PY
+          git diff --quiet -- . ':(exclude)AI-VERSE.yaml'
+          test "$(git status --porcelain --untracked-files=no | sed -n '1p')" = ' M AI-VERSE.yaml'
+
+      - name: Matrix 1 - Memory native install isolation and freshness
+        shell: bash
+        run: |
+          set -euo pipefail
+          MEMORY_REPO="$RUNNER_TEMP/AI-Verse-Memory"
+          python "$MEMORY_REPO/scripts/install.py" --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY_REPO"
+          MEMORY_ENGINE="$GITHUB_WORKSPACE/scripts/ai-verse-memory/memory.py"
+          test -f "$MEMORY_ENGINE"
+          test -f .aiverse/extensions/registry.json
+          test -f .claude/skills/ai-verse-memory/SKILL.md
+          test -f .agents/skills/ai-verse-memory/SKILL.md
+
+          mkdir -p operator/profile operator/context workspaces/alpha workspaces/beta
+          cat > operator/profile/goals.md <<'EOF'
+          # Operator Goals
+
+          - Ship the integrated four repo release safely
+          EOF
+          cat > operator/context/CURRENT.md <<'EOF'
+          # Current Context
+
+          The four-repo acceptance milestone is active.
+          EOF
+
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" remember --type state --text 'Ship the integrated four repo release safely; acceptance-memory-evidence'
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" remember --type state --workspace alpha --text 'four-repo-isolation alpha-exclusive-evidence'
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" remember --type state --workspace beta --text 'four-repo-isolation beta-exclusive-evidence'
+
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" recall 'integrated four repo release safely' > "$RUNNER_TEMP/operator-recall.txt"
+          grep -Fq 'acceptance-memory-evidence' "$RUNNER_TEMP/operator-recall.txt"
+
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" recall 'four-repo-isolation' --workspace alpha > "$RUNNER_TEMP/alpha-recall.txt"
+          grep -Fq 'alpha-exclusive-evidence' "$RUNNER_TEMP/alpha-recall.txt"
+          ! grep -Fq 'beta-exclusive-evidence' "$RUNNER_TEMP/alpha-recall.txt"
+
+          cat > operator/context/CURRENT.md <<'EOF'
+          # Current Context
+
+          Fresh canonical context marker: acceptance-freshness-19.
+          EOF
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" recall 'acceptance-freshness-19' > "$RUNNER_TEMP/fresh-recall.txt"
+          grep -Fq 'acceptance-freshness-19' "$RUNNER_TEMP/fresh-recall.txt"
+          python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" doctor
+
+          git diff --quiet -- . ':(exclude)AI-VERSE.yaml'
+          echo 'Matrix 1 PASS: Memory native install, scope isolation, and canonical freshness'
+
+      - name: Matrix 2 - Skills immutable provider and live readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          SKILLS_REPO="$RUNNER_TEMP/AI-Verse-Skills"
+          SKILLS_ROOT="$RUNNER_TEMP/aiverse-skills-root"
+          SKILLS_CACHE="$RUNNER_TEMP/aiverse-skills-cache"
+          python "$SKILLS_REPO/installer/aiverse_skills.py" --root "$SKILLS_ROOT" --cache "$SKILLS_CACHE" install --profile creator
+          python "$SKILLS_REPO/installer/aiverse_skills.py" --root "$SKILLS_ROOT" pin --json > "$RUNNER_TEMP/skills-pin.json"
+          python "$SKILLS_REPO/installer/aiverse_skills.py" --root "$SKILLS_ROOT" readiness --json > "$RUNNER_TEMP/skills-readiness.json"
+          export SKILLS_ROOT
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          pin = json.loads(Path(os.environ['RUNNER_TEMP'], 'skills-pin.json').read_text(encoding='utf-8'))
+          readiness = json.loads(Path(os.environ['RUNNER_TEMP'], 'skills-readiness.json').read_text(encoding='utf-8'))
+          assert pin['generation_id']
+          assert readiness['schema_version'] == 2
+          assert readiness['generation_id'] == pin['generation_id']
+          google = readiness.get('operator_details', {}).get('google-workspace')
+          if google is not None:
+              assert google['ready'] is False
+              assert google['status'] != 'ready'
+          generation = Path(pin['generation_path'])
+          assert (generation / '.aiverse' / 'installed.json').is_file()
+          assert (generation / '.aiverse' / 'capability-index.json').is_file()
+          print('Skills generation:', pin['generation_id'])
+          PY
+          printf '%s' "$SKILLS_ROOT" > "$RUNNER_TEMP/skills-root.txt"
+          echo 'Matrix 2 PASS: immutable Skills generation and evidence-based readiness'
+
+      - name: Matrix 3 - OS discovers and pins the real Skills provider generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SKILLS_ROOT="$(cat "$RUNNER_TEMP/skills-root.txt")"
+          export LOCAL_ROOT="$RUNNER_TEMP/no-local-skills"
+          export SELECTION_OUT="$RUNNER_TEMP/provider-selection.json"
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import assert from 'node:assert/strict';
+          import { discoverCapabilities, selectCapability } from './scripts/capability-resolver.mjs';
+          const options = {
+            osRoot: process.cwd(),
+            scope: 'operator',
+            skillsRoot: process.env.SKILLS_ROOT,
+            localSkillsRoot: process.env.LOCAL_ROOT,
+          };
+          const discovered = discoverCapabilities({ ...options, limit: 200 });
+          const provider = discovered.providers.find((item) => item.provider === 'aiverse-skills');
+          assert(provider, 'Skills provider missing');
+          assert.equal(provider.state, 'healthy');
+          const candidate = discovered.candidates.find((item) => item.provider === 'aiverse-skills');
+          assert(candidate, 'no selectable Skills capability discovered');
+          const selected = selectCapability({ ...options, qualifiedId: candidate.id });
+          assert.equal(selected.status, 'selected');
+          assert.equal(selected.selection.id, candidate.id);
+          assert.equal(selected.selection.generation_id, provider.generation_id);
+          assert.equal(selected.selection.digest.algorithm, 'aiverse-package-sha256-v1');
+          fs.writeFileSync(process.env.SELECTION_OUT, JSON.stringify({ provider, selection: selected.selection }, null, 2));
+          console.log(`OS selected ${candidate.id} from ${provider.generation_id}`);
+          NODE
+          git diff --quiet -- . ':(exclude)AI-VERSE.yaml'
+          echo 'Matrix 3 PASS: OS provider discovery and exact generation selection'
+
+      - name: Matrix 4 - Brain direction handover and real host bridge retrieval
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/direction-owner.mjs status --root "$GITHUB_WORKSPACE" --scope operator | grep -q '"owner": "os"'
+          ai-verse-brain init "$GITHUB_WORKSPACE" --apply
+          ai-verse-brain direction-owner "$GITHUB_WORKSPACE" --scope operator --handover-to-brain --apply --confirm-import > "$RUNNER_TEMP/handover.json"
+          grep -q '"owner": "brain"' "$RUNNER_TEMP/handover.json"
+
+          set +e
+          node scripts/direction-owner.mjs assert-strategic-write --root "$GITHUB_WORKSPACE" --scope operator > /dev/null 2> "$RUNNER_TEMP/os-strategy.err"
+          status=$?
+          set -e
+          test "$status" -eq 3
+          grep -q 'owned by Brain' "$RUNNER_TEMP/os-strategy.err"
+
+          mkdir -p connections runtime
+          cat > connections/registry.yaml <<'EOF'
+          schema_version: "1.0"
+          connections:
+            acceptance-local:
+              status: configured
+          EOF
+
+          cat > "$RUNNER_TEMP/four-repo-capabilities.mjs" <<'NODE'
+          import path from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const osRoot = process.env.AI_VERSE_ACCEPTANCE_OS_ROOT;
+          const skillsRoot = process.env.AI_VERSE_ACCEPTANCE_SKILLS_ROOT;
+          const resolver = await import(pathToFileURL(path.join(osRoot, 'scripts', 'capability-resolver.mjs')).href);
+          const discovered = resolver.discoverCapabilities({
+            osRoot,
+            scope: 'operator',
+            skillsRoot,
+            localSkillsRoot: path.join(process.env.RUNNER_TEMP, 'no-local-skills'),
+            limit: 200,
+          });
+          console.log(JSON.stringify(discovered.candidates));
+          NODE
+
+          cat > "$RUNNER_TEMP/four-repo-host.py" <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+
+          req = json.loads(sys.stdin.read())
+          protocol = req['protocol']
+          request_id = req['request_id']
+          op = req['operation']
+          payload = req.get('payload') or {}
+          root = Path(os.environ['AI_VERSE_ACCEPTANCE_OS_ROOT'])
+          memory = Path(os.environ['AI_VERSE_ACCEPTANCE_MEMORY_ENGINE'])
+
+          def ok(result):
+              print(json.dumps({'protocol': protocol, 'request_id': request_id, 'ok': True, 'result': result}))
+
+          if op == 'describe':
+              ok({
+                  'adapter_id': 'four-repo-acceptance-host',
+                  'protocol_version': '1.0',
+                  'operations': ['read_context', 'retrieve_history', 'list_capabilities', 'list_connections'],
+                  'idempotency_supported': False,
+                  'metadata': {'source': 'all-four-repo-acceptance'},
+              })
+          elif op == 'read_context':
+              scope = payload['scope']
+              if scope == 'operator':
+                  target = root / 'operator' / 'context' / 'CURRENT.md'
+              else:
+                  target = root / 'workspaces' / scope.split(':', 1)[1] / 'context' / 'CURRENT.md'
+              ok({'scope': scope, 'text': target.read_text(encoding='utf-8') if target.exists() else ''})
+          elif op == 'retrieve_history':
+              scope = payload['scope']
+              cmd = [sys.executable, str(memory), '--root', str(root), 'recall', payload['query']]
+              if scope.startswith('workspace:'):
+                  cmd += ['--workspace', scope.split(':', 1)[1]]
+              proc = subprocess.run(cmd, text=True, capture_output=True, check=True)
+              ok([{'source': 'ai-verse-memory', 'text': proc.stdout}] if proc.stdout.strip() else [])
+          elif op == 'list_capabilities':
+              proc = subprocess.run(
+                  ['node', os.environ['AI_VERSE_ACCEPTANCE_CAP_HELPER']],
+                  text=True, capture_output=True, check=True, env=os.environ.copy(),
+              )
+              ok(json.loads(proc.stdout))
+          elif op == 'list_connections':
+              registry = root / 'connections' / 'registry.yaml'
+              ok([{'id': 'acceptance-local', 'status': 'configured', 'source_path': str(registry)}] if registry.exists() else [])
+          else:
+              print(json.dumps({'protocol': protocol, 'request_id': request_id, 'ok': False, 'error': {'code': 'unsupported', 'message': op}}))
+          PY
+
+          export AI_VERSE_ACCEPTANCE_OS_ROOT="$GITHUB_WORKSPACE"
+          export AI_VERSE_ACCEPTANCE_MEMORY_ENGINE="$GITHUB_WORKSPACE/scripts/ai-verse-memory/memory.py"
+          export AI_VERSE_ACCEPTANCE_SKILLS_ROOT="$(cat "$RUNNER_TEMP/skills-root.txt")"
+          export AI_VERSE_ACCEPTANCE_CAP_HELPER="$RUNNER_TEMP/four-repo-capabilities.mjs"
+          python - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          cfg = {
+              'schema_version': '1.0',
+              'name': 'four-repo-acceptance-host',
+              'transport': 'json-subprocess',
+              'command': [sys.executable, str(Path(os.environ['RUNNER_TEMP']) / 'four-repo-host.py')],
+              'timeout_seconds': 30,
+              'env_names': [
+                  'AI_VERSE_ACCEPTANCE_OS_ROOT',
+                  'AI_VERSE_ACCEPTANCE_MEMORY_ENGINE',
+                  'AI_VERSE_ACCEPTANCE_SKILLS_ROOT',
+                  'AI_VERSE_ACCEPTANCE_CAP_HELPER',
+                  'RUNNER_TEMP',
+              ],
+          }
+          Path(os.environ['RUNNER_TEMP'], 'four-repo-host.json').write_text(json.dumps(cfg), encoding='utf-8')
+          PY
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from aiverse_brain.cadence import Trigger
+          from aiverse_brain.host_selection import select_host
+          from aiverse_brain.models import Scope
+          from aiverse_brain.runtime import BrainRuntime
+
+          pin = json.loads(Path(os.environ['RUNNER_TEMP'], 'skills-pin.json').read_text(encoding='utf-8'))
+          selection = select_host(
+              os.environ['GITHUB_WORKSPACE'],
+              host_adapter_config=str(Path(os.environ['RUNNER_TEMP'], 'four-repo-host.json')),
+          )
+          assert selection.real_host is True
+          assert selection.adapter_id == 'four-repo-acceptance-host'
+
+          class CaptureReasoner:
+              model_id = 'four-repo-capture-reasoner'
+              def __init__(self): self.calls = []
+              def reason(self, request, context):
+                  self.calls.append((request['purpose'], context))
+                  return {'proposals': []}
+
+          reasoner = CaptureReasoner()
+          runtime = BrainRuntime(os.environ['GITHUB_WORKSPACE'])
+          result = runtime.run_tick(
+              Trigger('scheduled_orientation', Scope('operator'), 'four-repo-acceptance-orientation'),
+              host=selection.host,
+              reasoner=reasoner,
+          )
+          assert result.ok
+          assert result.reasoner_calls == 2
+          contexts = {purpose: context for purpose, context in reasoner.calls}
+          gap = contexts['gap_analysis']
+          assert any('acceptance-memory-evidence' in item.get('text', '') for item in gap['history'])
+          opp = contexts['opportunity_discovery']
+          assert any(item.get('provider') == 'aiverse-skills' and item.get('generation_id') == pin['generation_id'] for item in opp['capabilities'])
+          assert any(item.get('id') == 'acceptance-local' for item in opp['connections'])
+          assert 'acceptance-freshness-19' in opp['current_context']['text']
+          print('Brain consumed live OS context + Memory history + Skills capabilities through explicit real host bridge')
+          PY
+          echo 'Matrix 4 PASS: single direction owner and meaningful Brain host retrieval'
+
+      - name: Matrix 5 - OS and Brain permissions intersect at dispatch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, subprocess
+          from pathlib import Path
+          from aiverse_brain.action_boundary import ActionExecutor, ActionRequest
+          from aiverse_brain.errors import PermissionDenied
+          from aiverse_brain.models import Scope
+          from aiverse_brain.policy import BrainPolicy
+
+          root = Path.cwd()
+          policy_file = root / 'automations' / 'policies' / 'action-permissions.yaml'
+          policy_file.parent.mkdir(parents=True, exist_ok=True)
+
+          def write_os(external):
+              policy_file.write_text(
+                  'schema_version: "1.0"\napproval:\n'
+                  f'  external_actions: "{external}"\n'
+                  '  destructive_actions: "allow"\n'
+                  '  high_stakes_decisions: "allow"\n',
+                  encoding='utf-8',
+              )
+
+          class Host:
+              def __init__(self): self.actions = 0
+              def authorize_action(self, request):
+                  proc = subprocess.run(
+                      ['node', 'scripts/action-permission.mjs', '--root', str(root)],
+                      input=json.dumps(request), text=True, capture_output=True, check=True,
+                  )
+                  return json.loads(proc.stdout)
+              def request_action(self, request):
+                  self.actions += 1
+                  return {'status': 'succeeded', 'receipt_id': f'four-repo-{self.actions}', 'effect_occurred': True, 'result': {}}
+
+          def request(tag):
+              return ActionRequest(
+                  action_class='send_message', scope=Scope('operator'), operation='acceptance.send',
+                  parameters={'body': tag}, idempotency_key=f'four-repo-permission-{tag}',
+                  in_scope=True, within_budget=True, reversible=True,
+              )
+
+          brain_allow = BrainPolicy(); brain_allow.action_policy['send_message'] = 'allow_within_scope'
+          brain_deny = BrainPolicy(); brain_deny.action_policy['send_message'] = 'deny'
+
+          write_os('deny'); host = Host()
+          try: ActionExecutor(root, brain_allow).execute(request('os-deny'), host, host_idempotency_supported=True)
+          except PermissionDenied: pass
+          else: raise AssertionError('OS deny did not beat Brain allow')
+          assert host.actions == 0
+
+          write_os('allow'); host = Host()
+          try: ActionExecutor(root, brain_deny).execute(request('brain-deny'), host, host_idempotency_supported=True)
+          except PermissionDenied: pass
+          else: raise AssertionError('Brain deny did not beat OS allow')
+          assert host.actions == 0
+
+          write_os('allow'); host = Host()
+          outcome = ActionExecutor(root, brain_allow).execute(request('both-allow'), host, host_idempotency_supported=True)
+          assert outcome.status == 'succeeded' and host.actions == 1
+          print('Restrictive OS x Brain permission intersection: PASS')
+          PY
+          echo 'Matrix 5 PASS: permission intersection'
+
+      - name: Matrix 6 - Skills receipt closes Brain objective only with verified exact generation evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.util, json, os
+          from pathlib import Path
+          from aiverse_brain.action_boundary import ActionRequest
+          from aiverse_brain.authority import AuthorityTier
+          from aiverse_brain.controller import BrainController
+          from aiverse_brain.models import Scope
+          from aiverse_brain.skills_receipt import SkillsExecutionIdentity, apply_receipt_to_objective, translate_action_receipt
+
+          selection = json.loads(Path(os.environ['RUNNER_TEMP'], 'provider-selection.json').read_text(encoding='utf-8'))['selection']
+          skills_file = Path(os.environ['RUNNER_TEMP'], 'AI-Verse-Skills', 'installer', 'execution_receipt_v2.py')
+          spec = importlib.util.spec_from_file_location('four_repo_skills_receipt', skills_file)
+          assert spec and spec.loader
+          skills = importlib.util.module_from_spec(spec); spec.loader.exec_module(skills)
+
+          identity = SkillsExecutionIdentity(selection['id'], selection['generation_id'], selection['digest']['value'])
+          request = ActionRequest(
+              action_class='send_message', scope=Scope('operator'), operation='acceptance.verified-effect',
+              parameters={'body': 'verified'}, idempotency_key='four-repo-receipt',
+              in_scope=True, within_budget=True, reversible=False,
+          )
+          binding = {
+              'request_fingerprint': request.fingerprint(),
+              'scope': request.scope.value,
+              'action_class': request.action_class,
+              'operation': request.operation,
+              'provider_id': 'aiverse-skills',
+              'capability_id': identity.capability_id,
+              'generation_id': identity.generation_id,
+              'package_digest': {'algorithm': 'aiverse-package-sha256-v1', 'value': identity.package_digest},
+          }
+          receipt = {
+              'contract': 'aiverse-execution-receipt-v2',
+              'receipt_id': 'four-repo-receipt-proof',
+              'status': 'success',
+              'summary': 'four repo verified acceptance',
+              'binding': binding,
+              'effect': {
+                  'state': 'occurred', 'source_kind': 'ai_verse_os',
+                  'source_ref': 'os-effect:four-repo', 'independence': 'same_context',
+              },
+              'verification_context': {
+                  'evaluator_id': 'ai-verse-os-four-repo-verifier',
+                  'independence': 'fresh_context',
+                  'builder_context_id': 'skills-builder',
+                  'evaluator_context_id': 'os-four-repo-verifier',
+              },
+              'verification': [{
+                  'criterion_id': 'c1', 'status': 'passed',
+                  'evidence': [{
+                      'ref': 'os-proof:four-repo', 'kind': 'measurement',
+                      'source_kind': 'ai_verse_os', 'source_ref': 'os-verifier:four-repo',
+                      'independence': 'fresh_context', 'scope': 'operator',
+                  }],
+              }],
+              'warnings': [], 'remaining_uncertainty': [], 'trace_id': 'trace-four-repo',
+          }
+          skills.validate_receipt(receipt, expected_binding=binding)
+          translated = translate_action_receipt(receipt, request, identity)
+          assert translated['status'] == 'succeeded'
+          assert translated['effect_occurred'] is True
+          assert translated['execution_binding']['generation_id'] == selection['generation_id']
+
+          controller = BrainController(os.environ['GITHUB_WORKSPACE'])
+          obj = controller.create('objective', 'operator', 'QUEUED', {
+              'outcome': 'Close only on verified four-repo evidence',
+              'criteria': [{'id': 'c1', 'statement': 'four repo effect verified', 'status': 'unverified'}],
+              'progress': 'progressing', 'verification_level': 'V2',
+              'budget': {'max_attempts': 8}, 'stall_threshold': 3,
+          })
+          for target in ('READY', 'RUNNING', 'VERIFYING'):
+              obj = controller.transition('objective', 'operator', obj.id, target, source=AuthorityTier.VALIDATED_STRATEGY, actor='brain')
+          applied = apply_receipt_to_objective(
+              controller, scope='operator', objective_id=obj.id,
+              receipt=receipt, request=request, identity=identity,
+          )
+          assert applied.status == 'PASSED'
+          assert applied.payload['progress'] == 'verified_complete'
+          print('Exact live Skills generation receipt -> Brain verified completion: PASS')
+          PY
+          echo 'Matrix 6 PASS: receipt and verification contract'
+
+      - name: Matrix 7 - OS adapter sync preserves Memory extension adapters
+        shell: bash
+        run: |
+          set -euo pipefail
+          CLAUDE_BEFORE="$(sha256sum .claude/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          CODEX_BEFORE="$(sha256sum .agents/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          node scripts/sync-runtime-adapters.mjs
+          test "$CLAUDE_BEFORE" = "$(sha256sum .claude/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          test "$CODEX_BEFORE" = "$(sha256sum .agents/skills/ai-verse-memory/SKILL.md | awk '{print $1}')"
+          git diff --quiet -- . ':(exclude)AI-VERSE.yaml'
+          echo 'Matrix 7 PASS: OS adapter generation preserves extension-owned adapters'
+
+      - name: Matrix 8 - Final ownership and source-of-truth cleanliness
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .aiverse/extensions/registry.json
+          grep -q '"ai-verse-memory"' .aiverse/extensions/registry.json
+          test -f .aiverse/direction/ownership.json
+          grep -q '"owner": "brain"' .aiverse/direction/ownership.json
+          test -f scripts/ai-verse-memory/memory.py
+          test -f "$RUNNER_TEMP/skills-pin.json"
+
+          # AI-VERSE.yaml was the one intentional host-owned activation edit.
+          # Remove it and require every repository integration to leave tracked OS truth pristine.
+          git checkout -- AI-VERSE.yaml
+          test -z "$(git status --porcelain --untracked-files=no)"
+          git diff --quiet
+
+          echo '--- Four-repo heads exercised ---'
+          cat "$RUNNER_TEMP/four-repo-heads.txt"
+          echo 'Matrix 8 PASS: no competing tracked source of truth or ownership leak'
+          echo 'ALL FOUR-REPO ACCEPTANCE ROWS PASSED'

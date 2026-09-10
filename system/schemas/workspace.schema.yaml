@@ -56,6 +56,16 @@ properties:
   approval:
     type: object
     additionalProperties: true
+    properties:
+      external_actions:
+        type: string
+        enum: [allow, confirm, human-review, deny]
+      destructive_actions:
+        type: string
+        enum: [allow, confirm, human-review, deny]
+      high_stakes_decisions:
+        type: string
+        enum: [allow, confirm, human-review, deny]
   capabilities:
     type: object
     additionalProperties: true

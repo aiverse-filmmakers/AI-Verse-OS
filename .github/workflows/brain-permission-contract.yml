@@ -1,0 +1,216 @@
+name: OS Brain Permission Contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  os-permission-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test OS action permission evaluator
+        run: node scripts/test-action-permission.mjs
+
+  os-brain-permission-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install merged Brain permission contract
+        shell: bash
+        env:
+          BRAIN_COMMIT: ea22ec3de11d868de80b551af34b5510ec3caad4
+        run: |
+          set -euo pipefail
+          BRAIN="$RUNNER_TEMP/AI-Verse-Brain"
+          git clone https://github.com/aiverse-filmmakers/AI-Verse-Brain.git "$BRAIN"
+          git -C "$BRAIN" checkout --detach "$BRAIN_COMMIT"
+          python -m pip install -e "$BRAIN"
+          printf '%s' "$BRAIN" > "$RUNNER_TEMP/brain-root.txt"
+
+      - name: Register and initialize Brain in ephemeral OS host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          root = Path.cwd()
+          manifest = root / 'AI-VERSE.yaml'
+          text = manifest.read_text(encoding='utf-8')
+          needle = 'extensions:\n'
+          if needle not in text:
+              raise SystemExit('extensions section missing')
+          replacement = (
+              'extensions:\n'
+              '  brain:\n'
+              '    supported: true\n'
+              '    enabled: true\n'
+          )
+          manifest.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+          PY
+          python - <<'PY'
+          from aiverse_brain.installation import initialize
+          initialize('.')
+          PY
+
+      - name: Prove denial by either layer and exact approval intersection
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+
+          from aiverse_brain.action_boundary import ActionExecutor, ActionRequest, ApprovalGrant
+          from aiverse_brain.errors import PermissionDenied
+          from aiverse_brain.models import Scope
+          from aiverse_brain.policy import BrainPolicy
+
+          ROOT = Path.cwd()
+          POLICY = ROOT / 'automations' / 'policies' / 'action-permissions.yaml'
+
+          def write_policy(external='allow', destructive='allow', high_stakes='allow'):
+              POLICY.parent.mkdir(parents=True, exist_ok=True)
+              POLICY.write_text(
+                  'schema_version: "1.0"\n'
+                  'approval:\n'
+                  f'  external_actions: "{external}"\n'
+                  f'  destructive_actions: "{destructive}"\n'
+                  f'  high_stakes_decisions: "{high_stakes}"\n',
+                  encoding='utf-8',
+              )
+
+          class OSHost:
+              def __init__(self, revoke_after_first_allow=False):
+                  self.permission_calls = 0
+                  self.action_calls = 0
+                  self.revoke_after_first_allow = revoke_after_first_allow
+
+              def authorize_action(self, request):
+                  self.permission_calls += 1
+                  proc = subprocess.run(
+                      ['node', 'scripts/action-permission.mjs', '--root', str(ROOT)],
+                      input=json.dumps(request),
+                      text=True,
+                      capture_output=True,
+                      check=True,
+                  )
+                  result = json.loads(proc.stdout)
+                  if self.revoke_after_first_allow and self.permission_calls == 1:
+                      assert result['decision'] == 'allow'
+                      write_policy(external='deny')
+                  return result
+
+              def request_action(self, request):
+                  self.action_calls += 1
+                  return {
+                      'status': 'succeeded',
+                      'receipt_id': f'os-brain-contract-{self.action_calls}',
+                      'effect_occurred': True,
+                      'result': {'operation': request['operation']},
+                  }
+
+          def req(tag):
+              return ActionRequest(
+                  action_class='send_message',
+                  scope=Scope('operator'),
+                  operation='send',
+                  parameters={'to': 'contract@example.test', 'body': tag},
+                  idempotency_key=f'permission-contract-{tag}',
+                  in_scope=True,
+                  within_budget=True,
+                  reversible=True,
+                  reason='OS Brain permission acceptance',
+              )
+
+          # OS deny beats Brain allow.
+          write_policy(external='deny')
+          brain_allow = BrainPolicy()
+          brain_allow.action_policy['send_message'] = 'allow_within_scope'
+          host = OSHost()
+          try:
+              ActionExecutor(ROOT, brain_allow).execute(req('os-deny'), host, host_idempotency_supported=True)
+          except PermissionDenied:
+              pass
+          else:
+              raise AssertionError('OS denial did not block Brain-allowed action')
+          assert host.action_calls == 0
+
+          # Brain deny beats OS allow.
+          write_policy(external='allow')
+          brain_deny = BrainPolicy()
+          brain_deny.action_policy['send_message'] = 'deny'
+          host = OSHost()
+          try:
+              ActionExecutor(ROOT, brain_deny).execute(req('brain-deny'), host, host_idempotency_supported=True)
+          except PermissionDenied:
+              pass
+          else:
+              raise AssertionError('Brain denial did not block OS-allowed action')
+          assert host.action_calls == 0
+
+          # Both layers allow -> one dispatch.
+          write_policy(external='allow')
+          host = OSHost()
+          outcome = ActionExecutor(ROOT, brain_allow).execute(req('both-allow'), host, host_idempotency_supported=True)
+          assert outcome.status == 'succeeded'
+          assert host.action_calls == 1
+          assert host.permission_calls == 2
+
+          # OS can add exact approval even when Brain would otherwise allow.
+          write_policy(external='confirm')
+          approval_request = req('os-confirm')
+          host = OSHost()
+          try:
+              ActionExecutor(ROOT, brain_allow).execute(approval_request, host, host_idempotency_supported=True)
+          except PermissionDenied:
+              pass
+          else:
+              raise AssertionError('OS approval requirement did not block unapproved action')
+          assert host.action_calls == 0
+          approval = ApprovalGrant.for_request(approval_request, granted_by='contract-user')
+          outcome = ActionExecutor(ROOT, brain_allow).execute(
+              approval_request,
+              host,
+              approval=approval,
+              host_idempotency_supported=True,
+          )
+          assert outcome.status == 'succeeded'
+          assert host.action_calls == 1
+
+          # Late OS revocation is rechecked at dispatch and causes zero effects.
+          write_policy(external='allow')
+          host = OSHost(revoke_after_first_allow=True)
+          outcome = ActionExecutor(ROOT, brain_allow).execute(req('late-revoke'), host, host_idempotency_supported=True)
+          assert outcome.status == 'failed'
+          assert host.permission_calls == 2
+          assert host.action_calls == 0
+
+          print('Real OS x Brain permission intersection: PASS')
+          PY
+
+      - name: Restore tracked OS and prove no permission state was written upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout -- AI-VERSE.yaml
+          test -z "$(git status --porcelain --untracked-files=no)"

@@ -156,7 +156,9 @@ jobs:
           cat > operator/context/CURRENT.md <<'EOF'
           # Current Context
 
-          Aurora release is preparing for delivery. The next task is dialogue transcription and transcode validation using Whisper-compatible tooling.
+          ## Current priorities
+
+          - Ship the Aurora release after whisper dialogue transcription and transcode validation.
           EOF
 
           python scripts/ai-verse-memory/memory.py --root . remember \
@@ -171,8 +173,9 @@ jobs:
           import os
           from pathlib import Path
 
-          from aiverse_brain import AuthorityTier, BrainRuntime, Scope
+          from aiverse_brain import BrainRuntime, Scope
           from aiverse_brain.cadence import Trigger
+          from aiverse_brain.direction_ownership import DirectionOwnershipService
           from aiverse_brain.tick_output import build_tick_summary
           from aiverse_brain.host_selection import HostSelection
 
@@ -238,17 +241,16 @@ jobs:
                   return {'proposals': []}
 
           runtime = BrainRuntime(str(ROOT))
-          goal = runtime.controller.create(
-              'intent',
-              'operator',
-              'CONFIRMED',
-              {
-                  'subtype': 'goal',
-                  'statement': 'Ship the Aurora release after whisper dialogue transcription and transcode validation',
-              },
-              source=AuthorityTier.EXPLICIT_USER,
-              actor='final-four-repo-acceptance',
-          )
+          ownership = DirectionOwnershipService(runtime.controller)
+          assert ownership.owner('operator') == 'os'
+          handover = ownership.handover('operator', confirm_import=True)
+          assert handover.owner == 'brain'
+          assert handover.state == 'active'
+          assert len(handover.brain_refs) == 1
+          goal_id = handover.brain_refs[0].split('brain:intent:', 1)[1]
+          goal = runtime.controller.store.load('intent', 'operator', goal_id)
+          assert goal.status == 'CONFIRMED'
+          assert 'Aurora release' in goal.payload['statement']
 
           host = FourRepoHost()
           reasoner = CaptureReasoner()
@@ -299,11 +301,12 @@ jobs:
           )
           summary = build_tick_summary(result, selection, runtime)
           assert summary['orientation']['mode'] == 'deterministic'
+          assert summary['orientation']['direction_owner'] == 'brain'
           assert summary['orientation']['state']['goals']['total'] >= 1
           assert any(item.get('id') == goal.id for item in summary['orientation']['state']['goals']['items'])
           assert summary['reasoner_calls'] == 2
 
-          print('OS x Memory x Brain x Skills runtime data flow: PASS')
+          print('OS direction handover x Memory x Brain x Skills runtime data flow: PASS')
           PY
 
       - name: Prove Memory scope isolation survives full composition

@@ -20,6 +20,7 @@ required_files=(
   "system/architecture/knowledge-lifecycle.md"
   "system/architecture/routing.md"
   "system/architecture/domain-adaptation.md"
+  "system/architecture/action-permissions.md"
   "system/schemas/workspace.schema.yaml"
   "workspaces/_template/WORKSPACE.yaml"
   "skills/registry.yaml"
@@ -32,6 +33,8 @@ required_files=(
   "apps/README.md"
   "runtime/README.md"
   "scripts/sync-runtime-adapters.mjs"
+  "scripts/action-permission.mjs"
+  "scripts/test-action-permission.mjs"
 )
 
 for path in "${required_files[@]}"; do
@@ -55,6 +58,14 @@ for key in schema_version id name type status purpose; do
     ok "workspace template contains ${key}"
   else
     err "workspace template missing field: ${key}"
+  fi
+done
+
+for key in external_actions destructive_actions high_stakes_decisions; do
+  if grep -Eq "^[[:space:]]+${key}:" workspaces/_template/WORKSPACE.yaml 2>/dev/null; then
+    ok "workspace template contains approval.${key}"
+  else
+    err "workspace template missing approval field: ${key}"
   fi
 done
 

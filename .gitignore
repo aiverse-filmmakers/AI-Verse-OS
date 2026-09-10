@@ -8,8 +8,9 @@ __pycache__/
 node_modules/
 .claude/settings.local.json
 
-# Local extension installation state. Extensions register here instead of editing tracked OS files.
+# Local extension and durable direction coordination state. These stay outside tracked OS system files.
 .aiverse/extensions/
+.aiverse/direction/
 
 # Legacy private/session outputs
 audits/

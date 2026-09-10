@@ -14,6 +14,7 @@ Read:
 - `AGENTS.md`
 - `AI-VERSE.yaml`
 - `system/architecture/domain-adaptation.md`
+- `system/architecture/direction-ownership.md`
 - `system/schemas/workspace.schema.yaml`
 - `workspaces/_template/WORKSPACE.yaml`
 
@@ -27,7 +28,7 @@ Do not create a workspace for every tiny task, file, or tool.
 
 Before creating one, look for an existing workspace that already owns the scope. Prefer evolving the existing workspace over creating a near-duplicate.
 
-## Step 2 - establish identity and boundaries
+## Step 2 - establish identity, boundaries, and direction owner
 
 Determine from available context:
 
@@ -42,7 +43,16 @@ Determine from available context:
 - authoritative source routes
 - required connections
 
-Reuse known information. Ask only when a missing answer materially affects boundaries, safety, or routing.
+For an existing workspace, resolve `workspace:<id>` ownership before changing its objective, current outcome, strategic success definition, or equivalent direction:
+
+```bash
+node scripts/direction-owner.mjs status --scope workspace:<id>
+node scripts/direction-owner.mjs assert-strategic-write --scope workspace:<id>
+```
+
+A newly created workspace has no handover record and therefore begins OS-owned. If Brain already owns an existing workspace, the strategic-write assertion fails and OS must preserve Brain refs/generated direction views instead of creating a parallel editable objective. Brain unavailability does not change ownership.
+
+Reuse known information. Ask only when a missing answer materially affects boundaries, safety, routing, or OS-owned direction.
 
 `type` is extensible. Examples such as `project`, `case`, `client`, `practice`, `research`, `team`, or `personal` are suggestions, not an enum.
 
@@ -99,18 +109,21 @@ For authoritative material already stored elsewhere:
 
 Never store secrets in the manifest.
 
-## Step 6 - initialize current context
+## Step 6 - initialize or refresh current context
 
 `context/CURRENT.md` should be compact and useful immediately. Include only supported information such as:
 
-- objective/current outcome
+- objective/current outcome **only when OS owns direction**
+- Brain direction view/ref when Brain owns direction
 - current state
 - next useful actions
 - pending decisions
 - constraints/approvals
 - pointers to authoritative sources
 
-Do not populate it with invented domain facts.
+When Brain owns direction, the `Objective` section is a generated/reference view and must not be edited as an independent OS objective. Operational sections remain editable.
+
+Do not populate current context with invented domain facts.
 
 ## Step 7 - promotion discipline
 
@@ -131,6 +144,8 @@ Prefer creating a workspace manifest that routes to the existing authoritative l
 Before finishing, verify:
 
 - the workspace ID is unique
+- direction ownership was resolved before strategic edits
+- Brain-owned workspace direction was not duplicated into an editable OS objective
 - `WORKSPACE.yaml` contains the required schema fields
 - the current-context path exists
 - declared source routes resolve or are marked unverified
@@ -146,7 +161,8 @@ Report briefly:
 ```text
 Workspace: <name> (<id>)
 Type: <free-form type>
-Purpose: <purpose>
+Direction owner: <os / brain>
+Purpose: <purpose or stable scope definition>
 Created/updated: <paths>
 Authoritative sources: <routes or none yet>
 Connections: <verified / unverified / none>

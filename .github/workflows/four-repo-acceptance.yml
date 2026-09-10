@@ -50,8 +50,7 @@ jobs:
           python -m pip install -e "$RUNNER_TEMP/AI-Verse-Brain"
           python - <<'PY'
           from pathlib import Path
-          root = Path.cwd()
-          manifest = root / 'AI-VERSE.yaml'
+          manifest = Path.cwd() / 'AI-VERSE.yaml'
           text = manifest.read_text(encoding='utf-8')
           if '\n  brain:\n' not in text:
               needle = 'extensions:\n'
@@ -63,8 +62,7 @@ jobs:
                   '    supported: true\n'
                   '    enabled: true\n'
               )
-              text = text.replace(needle, block, 1)
-              manifest.write_text(text, encoding='utf-8')
+              manifest.write_text(text.replace(needle, block, 1), encoding='utf-8')
           PY
           git diff --quiet -- . ':(exclude)AI-VERSE.yaml'
           test "$(git status --porcelain --untracked-files=no | sed -n '1p')" = ' M AI-VERSE.yaml'
@@ -81,7 +79,7 @@ jobs:
           test -f .claude/skills/ai-verse-memory/SKILL.md
           test -f .agents/skills/ai-verse-memory/SKILL.md
 
-          mkdir -p operator/profile operator/context workspaces/alpha workspaces/beta
+          mkdir -p operator/profile operator/context
           cat > operator/profile/goals.md <<'EOF'
           # Operator Goals
 
@@ -92,6 +90,48 @@ jobs:
 
           The four-repo acceptance milestone is active.
           EOF
+
+          # The OS workspace capability defines a workspace by a canonical
+          # WORKSPACE.yaml plus context/CURRENT.md. Create two real contract-valid
+          # workspaces before asking Memory to use workspace scope.
+          for workspace in alpha beta; do
+            mkdir -p "workspaces/$workspace/context"
+            cat > "workspaces/$workspace/WORKSPACE.yaml" <<EOF
+          schema_version: "2.0"
+          id: "$workspace"
+          name: "Acceptance ${workspace^}"
+          type: "test"
+          status: "active"
+          domains: []
+          purpose: "Four-repo workspace isolation acceptance."
+          owners: []
+          success_criteria: []
+          current_context: "context/CURRENT.md"
+          canonical_sources: []
+          connections: []
+          privacy:
+            classification: "private"
+            notes: "Ephemeral CI workspace."
+          approval:
+            external_actions: "confirm"
+            destructive_actions: "confirm"
+            high_stakes_decisions: "human-review"
+          capabilities:
+            shared: []
+            local: []
+          automations: []
+          metadata:
+            created: null
+            last_reviewed: null
+          EOF
+            cat > "workspaces/$workspace/context/CURRENT.md" <<EOF
+          # Current Context
+
+          Workspace $workspace exists only for the four-repo isolation acceptance.
+          EOF
+          done
+          test -f workspaces/alpha/WORKSPACE.yaml
+          test -f workspaces/beta/WORKSPACE.yaml
 
           python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" remember --type state --text 'Ship the integrated four repo release safely; acceptance-memory-evidence'
           python "$MEMORY_ENGINE" --root "$GITHUB_WORKSPACE" remember --type state --workspace alpha --text 'four-repo-isolation alpha-exclusive-evidence'

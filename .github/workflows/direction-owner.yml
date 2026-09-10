@@ -1,0 +1,41 @@
+name: Direction Ownership
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  direction-owner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test fail-closed per-scope direction ownership
+        run: node scripts/test-direction-owner.mjs
+      - name: Verify strategic writers carry the ownership gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'assert-strategic-write --scope operator' system/capabilities/onboard/SKILL.md
+          grep -Fq 'assert-strategic-write --scope <operator-or-workspace:id>' system/capabilities/level-up/SKILL.md
+          grep -Fq 'assert-strategic-write --scope workspace:<id>' system/capabilities/workspace/SKILL.md
+          grep -Fq '.aiverse/direction/' .gitignore
+          test -f system/architecture/direction-ownership.md
+      - name: Verify generated runtime peers remain canonical
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp system/capabilities/onboard/SKILL.md .claude/skills/onboard/SKILL.md
+          cmp system/capabilities/onboard/SKILL.md .agents/skills/onboard/SKILL.md
+          cmp system/capabilities/level-up/SKILL.md .claude/skills/level-up/SKILL.md
+          cmp system/capabilities/level-up/SKILL.md .agents/skills/level-up/SKILL.md
+          cmp system/capabilities/workspace/SKILL.md .claude/skills/workspace/SKILL.md
+          cmp system/capabilities/workspace/SKILL.md .agents/skills/workspace/SKILL.md
+          node scripts/sync-runtime-adapters.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"

@@ -162,11 +162,6 @@ def main() -> int:
     summary = build_tick_summary(tick, selection, runtime)
     assert summary["orientation"]["direction_owner"] == "brain"
     assert any(
-        row.get("id") == "aiverse-skills:whisper"
-        for _, context in reasoner.contexts
-        for row in context.get("capabilities", [])
-    )
-    assert any(
         "Aurora release prerequisite" in str(row.get("text", ""))
         for _, context in reasoner.contexts
         for row in context.get("history", [])

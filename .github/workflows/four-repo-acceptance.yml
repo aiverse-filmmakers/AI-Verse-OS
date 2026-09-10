@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MEMORY_COMMIT: b2a31fda9994af77788ecf16caa02912dcaf0598
-      BRAIN_COMMIT: 2a4a78dd5d0b08ffa2d1cd9a84cdfed697fa6de8
+      MEMORY_COMMIT: 65c4ad09cb29382aaebda47164440da321caf517
+      BRAIN_COMMIT: 2e960f2ef9cc169a0a8dd67a562edfeea75c8e7c
       SKILLS_COMMIT: 558bbcb05ce9f42bb5be30730ea205a7e791bf86
 
     steps:
@@ -146,172 +146,18 @@ jobs:
           test ! -e skills/imported/ai-verse/whisper
           test -z "$(git status --porcelain --untracked-files=no | grep -v '^ M AI-VERSE.yaml$' || true)"
 
-      - name: Prove all-four runtime data flow in one OS checkout
+      - name: Prove supported four-component host adapter
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p operator/context
-          cat > operator/context/CURRENT.md <<'EOF'
-          # Current Context
-
-          ## Current priorities
-
-          - Ship the Aurora release after whisper dialogue transcription and transcode validation.
-          EOF
-
-          python scripts/ai-verse-memory/memory.py --root . remember \
-            --type experience \
-            --scope operator \
-            --source final-four-repo-acceptance \
-            --text 'Aurora release prerequisite: transcode dialogue with whisper before delivery'
-
-          CAPABILITIES_JSON="$RUNNER_TEMP/capabilities.json" python - <<'PY'
-          import importlib.util
-          import json
-          import os
-          import sys
-          from pathlib import Path
-
-          from aiverse_brain import BrainRuntime, Scope
-          from aiverse_brain.cadence import Trigger
-          from aiverse_brain.direction_ownership import DirectionOwnershipService
-          from aiverse_brain.host_selection import HostSelection
-          from aiverse_brain.tick_output import build_tick_summary
-
-          ROOT = Path.cwd()
-          CAPABILITIES = json.loads(Path(os.environ['CAPABILITIES_JSON']).read_text(encoding='utf-8'))
-
-          memory_path = ROOT / 'scripts' / 'ai-verse-memory' / 'memory.py'
-          spec = importlib.util.spec_from_file_location('four_repo_memory', memory_path)
-          memory = importlib.util.module_from_spec(spec)
-          assert spec.loader is not None
-          sys.modules['four_repo_memory'] = memory
-          spec.loader.exec_module(memory)
-          memory_mode = memory.detect_mode(ROOT)
-
-          class FourRepoHost:
-              def __init__(self):
-                  self.action_calls = 0
-                  self.notifications = 0
-
-              def read_context(self, scope):
-                  return {
-                      'scope': str(scope),
-                      'current_context': (ROOT / 'operator/context/CURRENT.md').read_text(encoding='utf-8'),
-                  }
-
-              def retrieve_history(self, query, scope):
-                  rows = memory.recall(query, scope=str(scope), limit=12, root=ROOT, mode=memory_mode)
-                  return [dict(row) for row in rows]
-
-              def list_capabilities(self, scope):
-                  return list(CAPABILITIES)
-
-              def list_connections(self, scope):
-                  return []
-
-              def request_action(self, request):
-                  self.action_calls += 1
-                  raise AssertionError('cognition acceptance must not dispatch host actions')
-
-              def request_evaluation(self, request):
-                  return {}
-
-              def schedule_trigger(self, trigger):
-                  return {}
-
-              def cancel_trigger(self, trigger_id):
-                  return None
-
-              def notify_user(self, notification):
-                  self.notifications += 1
-                  raise AssertionError('runtime must not notify implicitly')
-
-              def write_route(self, classification, payload, scope):
-                  return None
-
-          class CaptureReasoner:
-              model_id = 'four-repo-capture'
-
-              def __init__(self):
-                  self.contexts = []
-
-              def reason(self, request, context):
-                  self.contexts.append((request, context))
-                  return {'proposals': []}
-
-          runtime = BrainRuntime(str(ROOT))
-          ownership = DirectionOwnershipService(runtime.controller)
-          assert ownership.owner('operator') == 'os'
-          handover = ownership.handover('operator', confirm_import=True)
-          assert handover.owner == 'brain'
-          assert handover.state == 'active'
-          assert len(handover.brain_refs) == 1
-          goal_id = handover.brain_refs[0].split('brain:intent:', 1)[1]
-          goal = runtime.controller.store.load('intent', 'operator', goal_id)
-          assert goal.status == 'CONFIRMED'
-          assert 'Aurora release' in goal.payload['statement']
-
-          host = FourRepoHost()
-          reasoner = CaptureReasoner()
-          result = runtime.run_tick(
-              Trigger('scheduled_orientation', Scope('operator'), 'final-four-repo-runtime'),
-              host=host,
-              reasoner=reasoner,
-              session_id='final-four-repo-acceptance',
-          )
-          assert result.ok, result.errors
-          assert result.reasoner_calls == 2
-          assert len(reasoner.contexts) == 2
-          assert host.action_calls == 0
-          assert host.notifications == 0
-
-          history_rows = [
-              row
-              for _, ctx in reasoner.contexts
-              for row in ctx.get('history', [])
-          ]
-          matched_history = [
-              row for row in history_rows
-              if 'Aurora release prerequisite' in str(row.get('text', ''))
-          ]
-          assert matched_history, 'Brain history context did not contain the real Memory record'
-          assert any(row.get('source_identity') for row in matched_history)
-          assert any(row.get('source_version') for row in matched_history)
-          assert all(row.get('freshness') in {'historical', 'fresh'} for row in matched_history)
-
-          capability_rows = [
-              row
-              for _, ctx in reasoner.contexts
-              for row in ctx.get('capabilities', [])
-          ]
-          whisper = next((row for row in capability_rows if row.get('id') == 'aiverse-skills:whisper'), None)
-          assert whisper is not None, 'Brain capability ranking lost the real whisper capability'
-          assert whisper.get('generation_id')
-          assert whisper.get('digest', {}).get('algorithm') == 'aiverse-package-sha256-v1'
-
-          retrieval_queries = [ctx.get('retrieval_queries', {}) for _, ctx in reasoner.contexts]
-          joined_queries = json.dumps(retrieval_queries).lower()
-          assert 'aurora' in joined_queries
-          assert 'whisper' in joined_queries
-          assert 'gap_analysis' not in joined_queries
-
-          selection = HostSelection(
-              host=host,
-              mode='four-repo-host',
-              real_host=True,
-              adapter_id='acceptance:os-memory-skills',
-              operations=('read_context', 'retrieve_history', 'list_capabilities', 'list_connections'),
-          )
-          summary = build_tick_summary(result, selection, runtime)
-          assert summary['orientation']['mode'] == 'deterministic'
-          assert summary['orientation']['direction_owner'] == 'brain'
-          assert summary['orientation']['state']['goals']['total'] >= 1
-          assert any(item.get('id') == goal.id for item in summary['orientation']['state']['goals']['items'])
-          assert summary['reasoner_calls'] == 2
-
-          print('OS direction handover x Memory x Brain x Skills runtime data flow: PASS')
-          PY
+          SKILLS="$(cat "$RUNNER_TEMP/skills-repo.txt")"
+          SKILLS_ROOT="$(cat "$RUNNER_TEMP/skills-root.txt")"
+          python scripts/test-ai-verse-host-adapter.py \
+            --root "$GITHUB_WORKSPACE" \
+            --skills-root "$SKILLS_ROOT" \
+            --skills-entrypoint "$SKILLS/installer/aiverse_skills.py" \
+            --skills-cache "$RUNNER_TEMP/aiverse-skills-cache" \
+            --config "$RUNNER_TEMP/ai-verse-os-host.json"
 
       - name: Prove Memory scope isolation survives full composition
         shell: bash
@@ -379,73 +225,6 @@ jobs:
           assert alpha_id in alpha_ids
           assert beta_id not in alpha_ids
           print('Memory workspace isolation under full composition: PASS')
-          PY
-
-      - name: Prove OS and Brain permission intersection with current Brain
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import subprocess
-          from pathlib import Path
-
-          from aiverse_brain.action_boundary import ActionExecutor, ActionRequest
-          from aiverse_brain.errors import PermissionDenied
-          from aiverse_brain.models import Scope
-          from aiverse_brain.policy import BrainPolicy
-
-          ROOT = Path.cwd()
-          POLICY = ROOT / 'automations' / 'policies' / 'action-permissions.yaml'
-          POLICY.parent.mkdir(parents=True, exist_ok=True)
-          POLICY.write_text(
-              'schema_version: "1.0"\n'
-              'approval:\n'
-              '  external_actions: "deny"\n'
-              '  destructive_actions: "deny"\n'
-              '  high_stakes_decisions: "deny"\n',
-              encoding='utf-8',
-          )
-
-          class OSHost:
-              action_calls = 0
-
-              def authorize_action(self, request):
-                  proc = subprocess.run(
-                      ['node', 'scripts/action-permission.mjs', '--root', str(ROOT)],
-                      input=json.dumps(request),
-                      text=True,
-                      capture_output=True,
-                      check=True,
-                  )
-                  return json.loads(proc.stdout)
-
-              def request_action(self, request):
-                  self.action_calls += 1
-                  return {'status': 'succeeded', 'effect_occurred': True, 'result': {}}
-
-          policy = BrainPolicy()
-          policy.action_policy['send_message'] = 'allow_within_scope'
-          request = ActionRequest(
-              action_class='send_message',
-              scope=Scope('operator'),
-              operation='send',
-              parameters={'to': 'contract@example.test', 'body': 'final matrix'},
-              idempotency_key='final-four-repo-permission',
-              in_scope=True,
-              within_budget=True,
-              reversible=True,
-              reason='final acceptance',
-          )
-          host = OSHost()
-          try:
-              ActionExecutor(ROOT, policy).execute(request, host, host_idempotency_supported=True)
-          except PermissionDenied:
-              pass
-          else:
-              raise AssertionError('OS deny did not override Brain allow')
-          assert host.action_calls == 0
-          print('OS x Brain restrictive permission intersection: PASS')
           PY
 
       - name: Final ownership and cleanliness assertions

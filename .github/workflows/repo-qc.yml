@@ -23,6 +23,9 @@ jobs:
       - name: Check architecture and adapter parity
         run: bash scripts/check-architecture.sh
 
+      - name: Test scoped capability discovery and selection
+        run: node scripts/test-capability-resolver.mjs
+
       - name: Test ownership-aware adapter synchronization
         shell: bash
         run: |
@@ -157,4 +160,69 @@ jobs:
 
           git checkout -- .agents/skills/onboard/SKILL.md
           node scripts/sync-runtime-adapters.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+  skills-provider-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned Provider-v1 Skills generation outside OS
+        shell: bash
+        env:
+          SKILLS_COMMIT: 5b31d06e307455557f1e5000df68672a56d73e46
+        run: |
+          set -euo pipefail
+          SKILLS_REPO="$RUNNER_TEMP/AI-Verse-Skills"
+          SKILLS_ROOT="$RUNNER_TEMP/aiverse-skills-root"
+          CACHE_ROOT="$RUNNER_TEMP/aiverse-skills-cache"
+          git clone https://github.com/aiverse-filmmakers/AI-Verse-Skills.git "$SKILLS_REPO"
+          git -C "$SKILLS_REPO" checkout --detach "$SKILLS_COMMIT"
+          python "$SKILLS_REPO/installer/aiverse_skills.py" \
+            --root "$SKILLS_ROOT" \
+            --cache "$CACHE_ROOT" \
+            install --profile creator
+          printf '%s' "$SKILLS_ROOT" > "$RUNNER_TEMP/skills-root.txt"
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Discover and select from the real immutable provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SKILLS_ROOT="$(cat "$RUNNER_TEMP/skills-root.txt")"
+          export LOCAL_ROOT="$RUNNER_TEMP/no-local-skills"
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { discoverCapabilities, selectCapability } from './scripts/capability-resolver.mjs';
+
+          const options = {
+            osRoot: process.cwd(),
+            scope: 'operator',
+            skillsRoot: process.env.SKILLS_ROOT,
+            localSkillsRoot: process.env.LOCAL_ROOT,
+          };
+          const discovered = discoverCapabilities({ ...options, query: 'whisper', limit: 1 });
+          const provider = discovered.providers.find((item) => item.provider === 'aiverse-skills');
+          assert.equal(provider.state, 'healthy');
+          assert.equal(discovered.candidates.length, 1);
+          assert.equal(discovered.candidates[0].id, 'aiverse-skills:whisper');
+          assert.equal(discovered.candidates[0].readiness, 'UNVERIFIED');
+
+          const selected = selectCapability({ ...options, qualifiedId: 'aiverse-skills:whisper' });
+          assert.equal(selected.status, 'selected');
+          assert.equal(selected.selection.id, 'aiverse-skills:whisper');
+          assert.equal(selected.selection.generation_id, provider.generation_id);
+          assert.equal(selected.selection.digest.algorithm, 'aiverse-package-sha256-v1');
+          console.log('Real Skills provider discovery: PASS');
+          NODE
           test -z "$(git status --porcelain --untracked-files=no)"

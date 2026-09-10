@@ -7,7 +7,23 @@ description: Use when the operator wants to remove a recurring constraint, impro
 
 Use the Three Ms to turn one real constraint into one concrete improvement at the correct scope.
 
-Read `references/3ms-framework.md`, `AI-VERSE.yaml`, relevant current context, and the latest relevant audit evidence when available.
+Read `references/3ms-framework.md`, `AI-VERSE.yaml`, `system/architecture/direction-ownership.md`, relevant current context, and the latest relevant audit evidence when available.
+
+## Direction ownership gate
+
+Resolve the target scope first:
+
+```bash
+node scripts/direction-owner.mjs status --scope <operator-or-workspace:id>
+```
+
+If the improvement would change a goal, priority, objective, success definition, or other strategic direction, run:
+
+```bash
+node scripts/direction-owner.mjs assert-strategic-write --scope <operator-or-workspace:id>
+```
+
+If that assertion fails because Brain owns direction, do **not** edit OS strategic files. Read the generated `.aiverse/direction/views/<scope>.md`/Brain refs and improve the operational method serving that direction instead. Brain being offline never transfers ownership back to OS.
 
 ## Step 1 - scope the improvement
 
@@ -24,15 +40,15 @@ Prefer solving it locally before promoting complexity globally.
 
 Look at:
 
-- current operator priorities
-- active workspace objectives
+- canonical current direction or its Brain reference view
+- active operational workspace state
 - repeated manual work
 - recent audit findings
 - repeated context reconstruction
 - fragile partially automated workflows
 - useful work being avoided because it is too slow, expensive, inconsistent, or difficult
 
-Ask only enough to identify one target.
+Ask only enough to identify one target. Do not convert an operational improvement exercise into a silent strategic-direction edit.
 
 ## Phase 2 - Method: redesign the work
 
@@ -69,6 +85,8 @@ High-stakes or external actions may require a lower autonomy level even when tec
 ### Define success
 
 Choose useful measures appropriate to the actual domain, such as time saved, error reduction, quality, throughput, latency, reliability, cost, fewer handoffs, better coverage, or another evidence-based outcome.
+
+If defining success would alter Brain-owned strategic success criteria rather than measure this operational improvement, keep it as a local implementation metric and do not rewrite direction.
 
 ### Record meaningful decisions
 
@@ -133,10 +151,13 @@ Increase autonomy from evidence, not enthusiasm.
 
 Verify the actual failure modes of the improvement. If the target is domain-regulated or high-consequence, increase evidence and human review accordingly.
 
+Also verify that the improvement did not create or modify a second strategic direction store when Brain owns the scope.
+
 ## Completion
 
 ```text
 Scope:
+Direction owner: <os / brain>
 Target:
 Constraint:
 What changed:

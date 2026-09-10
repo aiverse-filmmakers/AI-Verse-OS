@@ -328,20 +328,58 @@ jobs:
           id: beta
           name: Beta
           EOF
-          python scripts/ai-verse-memory/memory.py --root . remember \
-            --type state --workspace alpha --text 'alpha-only-final-matrix-secret'
-          python scripts/ai-verse-memory/memory.py --root . remember \
-            --type state --workspace beta --text 'beta-only-final-matrix-secret'
-          python scripts/ai-verse-memory/memory.py --root . recall \
-            'alpha-only-final-matrix-secret' --workspace beta > "$RUNNER_TEMP/beta-recall.txt"
-          if grep -Fq 'alpha-only-final-matrix-secret' "$RUNNER_TEMP/beta-recall.txt"; then
-            echo 'cross-workspace Memory leak detected' >&2
-            exit 1
-          fi
-          python scripts/ai-verse-memory/memory.py --root . recall \
-            'alpha-only-final-matrix-secret' --workspace alpha > "$RUNNER_TEMP/alpha-recall.txt"
-          grep -Fq 'alpha-only-final-matrix-secret' "$RUNNER_TEMP/alpha-recall.txt"
-          echo 'Memory workspace isolation under full composition: PASS'
+
+          python - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          ROOT = Path.cwd()
+          memory_path = ROOT / 'scripts' / 'ai-verse-memory' / 'memory.py'
+          spec = importlib.util.spec_from_file_location('four_repo_memory_isolation', memory_path)
+          memory = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules['four_repo_memory_isolation'] = memory
+          spec.loader.exec_module(memory)
+          mode = memory.detect_mode(ROOT)
+
+          alpha_id, _, _ = memory.write_atomic(
+              'alpha-only-final-matrix-secret',
+              'state',
+              'workspace:alpha',
+              root=ROOT,
+              mode=mode,
+          )
+          beta_id, _, _ = memory.write_atomic(
+              'beta-only-final-matrix-secret',
+              'state',
+              'workspace:beta',
+              root=ROOT,
+              mode=mode,
+          )
+
+          beta_rows = memory.recall(
+              'alpha-only-final-matrix-secret',
+              workspace='beta',
+              root=ROOT,
+              mode=mode,
+          )
+          beta_ids = {row['id'] for row in beta_rows}
+          beta_scopes = {row['scope'] for row in beta_rows}
+          assert alpha_id not in beta_ids
+          assert 'workspace:alpha' not in beta_scopes
+
+          alpha_rows = memory.recall(
+              'alpha-only-final-matrix-secret',
+              workspace='alpha',
+              root=ROOT,
+              mode=mode,
+          )
+          alpha_ids = {row['id'] for row in alpha_rows}
+          assert alpha_id in alpha_ids
+          assert beta_id not in alpha_ids
+          print('Memory workspace isolation under full composition: PASS')
+          PY
 
       - name: Prove OS and Brain permission intersection with current Brain
         shell: bash

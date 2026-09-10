@@ -15,11 +15,12 @@ Read:
 - `AI-VERSE.yaml`
 - `ai-verse-os-intake.md`
 - `system/architecture/domain-adaptation.md`
+- `system/architecture/direction-ownership.md`
 - `workspaces/_template/WORKSPACE.yaml`
 
 The core files remain generic. Do **not** personalize `AGENTS.md`, `CLAUDE.md`, or `AI-VERSE.yaml` with operator-specific facts.
 
-## Step 0 - preserve existing state
+## Step 0 - preserve existing state and resolve direction ownership
 
 Before writing:
 
@@ -27,17 +28,22 @@ Before writing:
 - inspect legacy `context/`, `decisions/`, `connections.md`, and operator-specific reference files if they contain real data
 - never delete or bulk-move existing user state during onboarding
 - if old and new sources conflict, mark the ambiguity and preserve provenance
+- run `node scripts/direction-owner.mjs status --scope operator`
+- before any operator goal/priority/success-definition write, run `node scripts/direction-owner.mjs assert-strategic-write --scope operator`
 
 Re-running onboarding must be safe.
 
+If the operator scope is Brain-owned, OS onboarding must **not** create, refresh, or silently recover an editable OS strategic store. Read `.aiverse/direction/views/operator.md` when present and treat legacy OS goals/priorities as frozen provenance. Brain being unavailable does not change this rule.
+
 ## Step 1 - inspect the seven-question intake
 
-Use `ai-verse-os-intake.md` as the source-of-truth intake.
+Use `ai-verse-os-intake.md` as the intake for OS-owned fields.
 
-- If all seven answers are usable, scaffold from them.
-- If some are filled, ask only for the missing primary questions unless the user wants a partial setup.
+- If all applicable answers are usable, scaffold from them.
+- If some are filled, ask only for missing applicable questions unless the user wants a partial setup.
 - If none are filled, interview one question at a time.
-- Save each answer to the intake immediately so onboarding can resume after interruption.
+- Save each OS-owned answer to the intake immediately so onboarding can resume after interruption.
+- If direction is Brain-owned, do not persist Q2 strategic content into the OS intake; route strategic answers to Brain instead.
 
 Do not treat placeholders as answers.
 
@@ -55,17 +61,19 @@ Use the exact intent of the intake:
 
 Do not add an eighth primary question. Follow-up clarification is allowed only when a response cannot be routed safely or meaningfully.
 
+When `direction_owner = brain`, Q2 belongs to Brain onboarding and is not written by OS. OS may still use a Brain-generated reference view to understand which operational work is relevant.
+
 ## Step 3 - create operator state
 
 Using only supported facts, create or refresh as relevant:
 
 - `operator/profile/identity.md`
 - `operator/profile/preferences.md`
-- `operator/profile/goals.md`
 - `operator/profile/voice.md` only when real writing samples or explicit voice guidance exist
 - `operator/context/CURRENT.md`
+- `operator/profile/goals.md` **only when** `assert-strategic-write --scope operator` succeeds
 
-Keep `CURRENT.md` compact. It should point to active workspaces rather than absorb all workspace detail.
+When OS owns direction, `CURRENT.md` may contain editable current priorities. When Brain owns direction, current priorities must be a generated/reference pointer to `.aiverse/direction/views/operator.md` or Brain refs; keep editable OS content to current facts, active workspaces, pending decisions, constraints and operational state.
 
 The public template gitignores these files by default. Do not weaken that privacy protection during onboarding.
 
@@ -86,7 +94,7 @@ Naming a tool does not prove access. Never store secrets. Record only safe authe
 
 ## Step 5 - establish workspaces
 
-Use Q4 and current priorities to identify substantial scopes that deserve isolation.
+Use Q4 and current direction references to identify substantial scopes that deserve isolation.
 
 Create a workspace only when the boundary is reasonably clear. A tool, folder, or single task is not automatically a workspace.
 
@@ -97,6 +105,7 @@ For each clearly justified workspace:
 - use free-form `type` and `domains`
 - record source routes and privacy/approval constraints
 - add optional layers only when immediately useful
+- resolve `workspace:<id>` direction ownership before writing its objective/current outcome
 
 Follow the `/workspace` skill's rules. Do not pre-create profession-specific global folders.
 
@@ -106,7 +115,7 @@ If Q4 reveals many possible scopes but priorities do not make the active ones cl
 
 Treat Q7 as an improvement candidate for `/level-up`, not an instruction to automate immediately.
 
-Record the constraint in the narrowest relevant current context. Preserve stated approval, privacy, or high-stakes boundaries.
+Record the constraint in the narrowest relevant current context. Preserve stated approval, privacy, or high-stakes boundaries. Do not reinterpret the improvement candidate as permission to change Brain-owned strategic direction.
 
 Do not create a new skill or automation during onboarding unless the user explicitly requests implementation and the workflow is sufficiently understood.
 
@@ -114,7 +123,11 @@ Do not create a new skill or automation during onboarding unless the user explic
 
 Before finishing verify:
 
-- all seven primary questions are answered or clearly unknown
+- direction ownership was resolved before any strategic write
+- if OS owns direction, Q2/goal writes went only to OS canonical direction
+- if Brain owns direction, OS contains only Brain refs/generated strategic views plus frozen provenance; no editable parallel OS direction was created
+- Brain unavailability was never treated as an ownership transfer
+- all applicable primary questions are answered or clearly unknown
 - operator facts are stored outside system-owned files
 - current context is compact and routes to active workspaces
 - workspaces use the universal manifest rather than profession-specific root structure
@@ -129,6 +142,7 @@ Keep it compact:
 
 ```text
 Onboarding complete.
+Direction owner: <os / brain>
 Operator context: <created/updated paths>
 Active workspaces: <list or none yet>
 Connections: <verified/configured/planned summary>

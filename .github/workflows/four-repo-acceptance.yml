@@ -95,9 +95,10 @@ jobs:
           manifest.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
           PY
           python - <<'PY'
-          from aiverse_brain.installation import initialize
-          report = initialize('.')
-          assert report.applied
+          from aiverse_brain.installation import initialize, read_installation_marker
+          initialize('.')
+          marker = read_installation_marker('.')
+          assert marker is not None
           print('Brain native initialization: PASS')
           PY
 

@@ -58,6 +58,8 @@ Keeping those meanings distinct is more important than having many folders.
 
 OS-built-in capability methodology lives under `system/capabilities/`. Runtime trees such as `.claude/skills/` and `.agents/skills/` are generated peers, not competing editable sources. See `adapter-synchronization.md`.
 
+External execution authority is also layered rather than duplicated. AI-Verse OS supplies a restrictive host permission floor from canonical operator/workspace policy, while an intelligence layer such as Brain keeps its own policy and exact approval validation. Denial by either layer blocks execution. See `action-permissions.md`.
+
 ## Domain neutrality
 
 The architecture does not mean domain ignorance. It means domain knowledge is learned at the right scope rather than assumed globally.
@@ -77,6 +79,7 @@ See `domain-adaptation.md`.
 7. User-owned state must survive system upgrades.
 8. Generated adapters must never silently overwrite unknown or locally modified files.
 9. New top-level structure must earn its existence through cross-domain architectural need.
+10. Host permission may restrict execution but must never manufacture approval or override a stricter intelligence-layer policy.
 
 ## Related documents
 
@@ -86,6 +89,7 @@ See `domain-adaptation.md`.
 - `domain-adaptation.md`
 - `ownership.md`
 - `adapter-synchronization.md`
+- `action-permissions.md`
 - `../schemas/workspace.schema.yaml`
 - `../../AI-VERSE.yaml`
 

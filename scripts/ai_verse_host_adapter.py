@@ -222,7 +222,7 @@ class OSFourComponentHost:
             {
                 "operation": "discover",
                 "scope": scope,
-                "limit": 1000,
+                "limit": 200,
             }
         )
         candidates = result.get("candidates")

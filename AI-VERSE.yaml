@@ -17,6 +17,7 @@ principles:
 
 paths:
   runtime_contract: AGENTS.md
+  current_context_resolver: scripts/current-context.mjs
   runtime_adapters:
     claude: CLAUDE.md
     codex_skills: .agents/skills/
@@ -64,6 +65,7 @@ source_of_truth:
   architecture_intent: system/architecture/
   shared_skill_methodology: .claude/skills/
   capability_registry: skills/registry.yaml
+  resolved_current_context: scripts/current-context.mjs
   operator_facts: operator/profile/
   operator_current_context: operator/context/CURRENT.md
   operator_memory: operator/memory/
@@ -80,7 +82,8 @@ routing:
   order:
     - identify_intent
     - identify_scope
-    - load_current_context
+    - resolve_direction_owner
+    - load_resolved_current_context
     - choose_capability
     - retrieve_minimum_required_knowledge
     - resolve_connections

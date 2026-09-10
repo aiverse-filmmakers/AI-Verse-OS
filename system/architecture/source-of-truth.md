@@ -16,13 +16,17 @@ Runtime adapters such as `CLAUDE.md` point back to it. Do not maintain parallel 
 
 ### Current state
 
-Use the narrowest applicable current-context source:
+Resolve active current context through `scripts/current-context.mjs` for the requested scope.
 
-1. active workspace `context/CURRENT.md`
-2. operator `context/CURRENT.md`
+While `direction_owner = os`, the scope's raw OS current-context file remains canonical. Once `direction_owner = brain`, raw OS strategic sections are frozen provenance and the resolver must exclude them from active current context. Brain intent/refs are the strategic authority; allowed operational OS sections may still contribute current facts, next actions, pending decisions, constraints, pointers, connection state and execution state.
+
+Within that ownership-aware projection, use the narrowest applicable current-state source:
+
+1. active workspace resolved context
+2. operator resolved context
 3. deeper memory/knowledge only when needed
 
-Current context may summarize deeper sources, but summaries should point to authoritative evidence when important.
+Current context may summarize deeper sources, but summaries should point to authoritative evidence when important. A missing Brain view or runtime must not make frozen OS goals, priorities or objectives current again.
 
 ### Workspace identity
 
@@ -60,11 +64,12 @@ They may accelerate discovery, but the underlying source must remain recoverable
 When sources conflict:
 
 1. identify scope
-2. identify each source's authority and timestamp
-3. prefer the narrower current canonical source
-4. preserve meaningful provenance
-5. do not silently merge incompatible claims
-6. if ambiguity remains consequential, surface it or ask for resolution
+2. resolve strategic direction ownership
+3. identify each source's authority and timestamp
+4. prefer the narrower current canonical source
+5. preserve meaningful provenance
+6. do not silently merge incompatible claims
+7. if ambiguity remains consequential, surface it or ask for resolution
 
 ## Anti-duplication rule
 

@@ -11,13 +11,15 @@ For substantial work inside AI-Verse OS:
 1. Read `AI-VERSE.yaml`.
 2. Read this file.
 3. If `.aiverse/extensions/registry.json` exists, read it and load only task-relevant extension instructions from entries that are explicitly supported, installed, and enabled. Registration is not proof of health, permission, approval, or execution readiness.
-4. Load `operator/context/CURRENT.md` when it exists and the task depends on operator context.
-5. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml` and `context/CURRENT.md` before deeper retrieval.
+4. When operator current context matters, resolve it with `node scripts/current-context.mjs read --scope operator`; do not bypass that resolver with a raw `operator/context/CURRENT.md` read.
+5. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml`, then resolve current context with `node scripts/current-context.mjs read --scope workspace:<id>` before deeper retrieval.
 6. Select the smallest relevant skill or deterministic script.
 7. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
 8. Execute at the lowest autonomy level that reliably works.
 9. Validate before handing output to another step or taking an external action.
 10. Write back only information that deserves to become durable state.
+
+When a scope is Brain-owned, raw OS goals, priorities, objectives, and other strategic sections are frozen provenance only. They must not be merged, summarized, or routed back into active current direction. The ownership-aware current-context resolver exposes only allowed OS operational state plus Brain direction refs; Brain unavailability never causes fallback to frozen OS strategy.
 
 Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.
 
@@ -137,10 +139,10 @@ When sources disagree, use the narrowest applicable canonical source and preserv
 2. `AI-VERSE.yaml` wins for architecture and routing paths.
 3. `system/architecture/` explains architecture intent.
 4. A workspace's `WORKSPACE.yaml` wins for workspace identity and declared boundaries.
-5. Current scoped context wins over older memory for current-state questions.
+5. Ownership-aware current scoped context from `scripts/current-context.mjs` wins over raw current files and older memory for current-state questions.
 6. Decisions explain why settled choices changed.
 7. Curated knowledge wins over raw inbox material.
-8. Archives never silently override active truth.
+8. Archives and frozen pre-handover strategy never silently override active truth.
 9. Search indexes, embeddings, caches, generated catalogs, and summaries are derived views, never canonical truth by themselves.
 
 See `system/architecture/source-of-truth.md`.

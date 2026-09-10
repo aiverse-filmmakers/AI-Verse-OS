@@ -8,7 +8,8 @@ AI-Verse OS should route from the user's intent to the smallest relevant context
 request
   -> identify intent
   -> identify scope
-  -> load current context
+  -> resolve direction owner
+  -> load ownership-aware current context
   -> choose capability
   -> retrieve minimum required knowledge
   -> resolve required connections
@@ -33,13 +34,15 @@ If one workspace is clearly active, do not load unrelated workspaces.
 For workspace work, prefer:
 
 1. `WORKSPACE.yaml`
-2. workspace `context/CURRENT.md`
+2. `node scripts/current-context.mjs read --scope workspace:<id>`
 3. applicable workspace policies/decisions
 4. relevant skill
 5. only the necessary workspace knowledge/memory/assets
 6. live connections when current external state is needed
 
-For operator-wide work, start from operator current context and profile, then retrieve deeper memory/knowledge only as needed.
+For operator-wide work, start with `node scripts/current-context.mjs read --scope operator` and operator profile, then retrieve deeper memory/knowledge only as needed.
+
+Never bypass the resolver with a raw current-context read when building active direction. While OS owns the scope, the resolver returns the canonical OS context. After Brain handover, it excludes frozen OS strategy and exposes only operational OS context plus canonical Brain direction refs. Missing Brain runtime/view data does not reactivate old OS priorities or objectives.
 
 ## Capability selection
 
@@ -58,6 +61,7 @@ Prefer the smallest tool that reliably solves the task:
 - Do not treat semantic similarity as proof of authority.
 - Do not re-ask for information already available in canonical context.
 - Do not load sensitive workspace information into unrelated scopes.
+- Do not retrieve frozen pre-handover strategy as active direction after Brain owns the scope.
 
 ## Writeback
 

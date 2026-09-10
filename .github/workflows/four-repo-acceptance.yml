@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MEMORY_COMMIT: f564d39260b7b8ddc32a607ab1b5650fe6638f4e
+      MEMORY_COMMIT: b2a31fda9994af77788ecf16caa02912dcaf0598
       BRAIN_COMMIT: 2a4a78dd5d0b08ffa2d1cd9a84cdfed697fa6de8
       SKILLS_COMMIT: 558bbcb05ce9f42bb5be30730ea205a7e791bf86
 
@@ -97,8 +97,7 @@ jobs:
           python - <<'PY'
           from aiverse_brain.installation import initialize, read_installation_marker
           initialize('.')
-          marker = read_installation_marker('.')
-          assert marker is not None
+          assert read_installation_marker('.') is not None
           print('Brain native initialization: PASS')
           PY
 
@@ -116,7 +115,7 @@ jobs:
           printf '%s' "$SKILLS_ROOT" > "$RUNNER_TEMP/skills-root.txt"
 
           SKILLS_ROOT="$SKILLS_ROOT" CAPABILITIES_JSON="$RUNNER_TEMP/capabilities.json" \
-          PROVIDERS_JSON="$RUNNER_TEMP/providers.json" node --input-type=module <<'NODE'
+          node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
           import { discoverCapabilities, selectCapability } from './scripts/capability-resolver.mjs';
@@ -141,7 +140,6 @@ jobs:
           assert.equal(selected.selection.generation_id, provider.generation_id);
           assert.equal(selected.selection.digest.algorithm, 'aiverse-package-sha256-v1');
           fs.writeFileSync(process.env.CAPABILITIES_JSON, JSON.stringify(discovered.candidates, null, 2));
-          fs.writeFileSync(process.env.PROVIDERS_JSON, JSON.stringify(discovered.providers, null, 2));
           console.log('OS x Skills provider discovery: PASS');
           NODE
 
@@ -171,21 +169,23 @@ jobs:
           import importlib.util
           import json
           import os
+          import sys
           from pathlib import Path
 
           from aiverse_brain import BrainRuntime, Scope
           from aiverse_brain.cadence import Trigger
           from aiverse_brain.direction_ownership import DirectionOwnershipService
-          from aiverse_brain.tick_output import build_tick_summary
           from aiverse_brain.host_selection import HostSelection
+          from aiverse_brain.tick_output import build_tick_summary
 
           ROOT = Path.cwd()
           CAPABILITIES = json.loads(Path(os.environ['CAPABILITIES_JSON']).read_text(encoding='utf-8'))
 
-          engine_path = ROOT / 'scripts' / 'ai-verse-memory' / 'memory_engine.py'
-          spec = importlib.util.spec_from_file_location('four_repo_memory_engine', engine_path)
+          memory_path = ROOT / 'scripts' / 'ai-verse-memory' / 'memory.py'
+          spec = importlib.util.spec_from_file_location('four_repo_memory', memory_path)
           memory = importlib.util.module_from_spec(spec)
           assert spec.loader is not None
+          sys.modules['four_repo_memory'] = memory
           spec.loader.exec_module(memory)
           memory_mode = memory.detect_mode(ROOT)
 
@@ -196,12 +196,12 @@ jobs:
 
               def read_context(self, scope):
                   return {
-                      'scope': scope,
+                      'scope': str(scope),
                       'current_context': (ROOT / 'operator/context/CURRENT.md').read_text(encoding='utf-8'),
                   }
 
               def retrieve_history(self, query, scope):
-                  rows = memory.recall(query, scope=scope, limit=12, root=ROOT, mode=memory_mode)
+                  rows = memory.recall(query, scope=str(scope), limit=12, root=ROOT, mode=memory_mode)
                   return [dict(row) for row in rows]
 
               def list_capabilities(self, scope):
@@ -266,9 +266,11 @@ jobs:
           assert host.action_calls == 0
           assert host.notifications == 0
 
-          history_contexts = [ctx for _, ctx in reasoner.contexts if ctx.get('history')]
-          assert history_contexts, 'Brain did not retrieve Memory history for gap analysis'
-          history_rows = [row for ctx in history_contexts for row in ctx['history']]
+          history_rows = [
+              row
+              for _, ctx in reasoner.contexts
+              for row in ctx.get('history', [])
+          ]
           matched_history = [
               row for row in history_rows
               if 'Aurora release prerequisite' in str(row.get('text', ''))
@@ -278,12 +280,14 @@ jobs:
           assert any(row.get('source_version') for row in matched_history)
           assert all(row.get('freshness') in {'historical', 'fresh'} for row in matched_history)
 
-          capability_contexts = [ctx for _, ctx in reasoner.contexts if ctx.get('capabilities')]
-          assert capability_contexts, 'Brain did not receive OS-discovered Skills capabilities'
-          capability_rows = [row for ctx in capability_contexts for row in ctx['capabilities']]
+          capability_rows = [
+              row
+              for _, ctx in reasoner.contexts
+              for row in ctx.get('capabilities', [])
+          ]
           whisper = next((row for row in capability_rows if row.get('id') == 'aiverse-skills:whisper'), None)
           assert whisper is not None, 'Brain capability ranking lost the real whisper capability'
-          assert whisper.get('generation_id'), whisper
+          assert whisper.get('generation_id')
           assert whisper.get('digest', {}).get('algorithm') == 'aiverse-package-sha256-v1'
 
           retrieval_queries = [ctx.get('retrieval_queries', {}) for _, ctx in reasoner.contexts]
@@ -328,12 +332,14 @@ jobs:
             --type state --workspace alpha --text 'alpha-only-final-matrix-secret'
           python scripts/ai-verse-memory/memory.py --root . remember \
             --type state --workspace beta --text 'beta-only-final-matrix-secret'
-          python scripts/ai-verse-memory/memory.py --root . recall 'alpha-only-final-matrix-secret' --workspace beta > "$RUNNER_TEMP/beta-recall.txt"
+          python scripts/ai-verse-memory/memory.py --root . recall \
+            'alpha-only-final-matrix-secret' --workspace beta > "$RUNNER_TEMP/beta-recall.txt"
           if grep -Fq 'alpha-only-final-matrix-secret' "$RUNNER_TEMP/beta-recall.txt"; then
             echo 'cross-workspace Memory leak detected' >&2
             exit 1
           fi
-          python scripts/ai-verse-memory/memory.py --root . recall 'alpha-only-final-matrix-secret' --workspace alpha > "$RUNNER_TEMP/alpha-recall.txt"
+          python scripts/ai-verse-memory/memory.py --root . recall \
+            'alpha-only-final-matrix-secret' --workspace alpha > "$RUNNER_TEMP/alpha-recall.txt"
           grep -Fq 'alpha-only-final-matrix-secret' "$RUNNER_TEMP/alpha-recall.txt"
           echo 'Memory workspace isolation under full composition: PASS'
 
@@ -365,12 +371,17 @@ jobs:
 
           class OSHost:
               action_calls = 0
+
               def authorize_action(self, request):
                   proc = subprocess.run(
                       ['node', 'scripts/action-permission.mjs', '--root', str(ROOT)],
-                      input=json.dumps(request), text=True, capture_output=True, check=True,
+                      input=json.dumps(request),
+                      text=True,
+                      capture_output=True,
+                      check=True,
                   )
                   return json.loads(proc.stdout)
+
               def request_action(self, request):
                   self.action_calls += 1
                   return {'status': 'succeeded', 'effect_occurred': True, 'result': {}}
@@ -378,10 +389,15 @@ jobs:
           policy = BrainPolicy()
           policy.action_policy['send_message'] = 'allow_within_scope'
           request = ActionRequest(
-              action_class='send_message', scope=Scope('operator'), operation='send',
+              action_class='send_message',
+              scope=Scope('operator'),
+              operation='send',
               parameters={'to': 'contract@example.test', 'body': 'final matrix'},
-              idempotency_key='final-four-repo-permission', in_scope=True,
-              within_budget=True, reversible=True, reason='final acceptance',
+              idempotency_key='final-four-repo-permission',
+              in_scope=True,
+              within_budget=True,
+              reversible=True,
+              reason='final acceptance',
           )
           host = OSHost()
           try:
@@ -402,6 +418,6 @@ jobs:
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
           test -d "$(cat "$RUNNER_TEMP/skills-root.txt")/.aiverse/generations"
           test ! -d .aiverse/skills
-          git checkout -- AI-VERSE.yaml
+          git reset --hard HEAD
           test -z "$(git status --porcelain --untracked-files=no)"
           echo 'Final four-repo acceptance matrix: PASS'

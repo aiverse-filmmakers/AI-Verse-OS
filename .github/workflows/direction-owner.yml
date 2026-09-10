@@ -18,13 +18,18 @@ jobs:
           node-version: '22'
       - name: Test fail-closed per-scope direction ownership
         run: node scripts/test-direction-owner.mjs
-      - name: Verify strategic writers carry the ownership gate
+      - name: Test ownership-aware active current context
+        run: node scripts/test-current-context.mjs
+      - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
           set -euo pipefail
           grep -Fq 'assert-strategic-write --scope operator' system/capabilities/onboard/SKILL.md
           grep -Fq 'assert-strategic-write --scope <operator-or-workspace:id>' system/capabilities/level-up/SKILL.md
           grep -Fq 'assert-strategic-write --scope workspace:<id>' system/capabilities/workspace/SKILL.md
+          grep -Fq 'current-context.mjs read --scope operator' AGENTS.md
+          grep -Fq 'current-context.mjs read --scope workspace:<id>' AGENTS.md
+          grep -Fq 'current_context_resolver: scripts/current-context.mjs' AI-VERSE.yaml
           grep -Fq '.aiverse/direction/' .gitignore
           test -f system/architecture/direction-ownership.md
       - name: Verify generated runtime peers remain canonical

@@ -283,10 +283,14 @@ function existingResult(paths, key, request) {
   const existingReceipt = safeReadJson(receiptPath, paths.receipts, 'existing write command receipt');
   if (!existingCommand && !existingReceipt) return null;
   if (!existingCommand || !existingReceipt) fail('write-command runtime contains an incomplete idempotency record', 4);
+  const storedRequest = existingCommand.request && typeof existingCommand.request === 'object'
+    ? existingCommand.request
+    : null;
   if (
-    existingCommand.request_fingerprint !== request.request_fingerprint
-    || existingCommand.scope !== request.scope
-    || existingCommand.idempotency_key !== request.idempotency_key
+    !storedRequest
+    || storedRequest.request_fingerprint !== request.request_fingerprint
+    || storedRequest.scope !== request.scope
+    || storedRequest.idempotency_key !== request.idempotency_key
   ) {
     fail('idempotency key is already bound to a different write command', 5);
   }

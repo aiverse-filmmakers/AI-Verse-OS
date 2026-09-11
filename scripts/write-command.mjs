@@ -143,7 +143,7 @@ export function validateWriteCommandRequest(raw) {
     idempotency_key: raw.idempotency_key,
     requested_by: raw.requested_by,
     reason: raw.reason,
-    created_at: new Date(createdAt).toISOString(),
+    created_at: raw.created_at,
     provenance: validateProvenance(raw.provenance),
   };
   const expected = computeWriteCommandFingerprint(normalized);

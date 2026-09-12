@@ -37,7 +37,7 @@ jobs:
       - name: Install merged Brain permission contract
         shell: bash
         env:
-          BRAIN_COMMIT: ea22ec3de11d868de80b551af34b5510ec3caad4
+          BRAIN_COMMIT: bef8261ad35d126d29aeff5d496f46904125b7b6
         run: |
           set -euo pipefail
           BRAIN="$RUNNER_TEMP/AI-Verse-Brain"
@@ -46,30 +46,14 @@ jobs:
           python -m pip install -e "$BRAIN"
           printf '%s' "$BRAIN" > "$RUNNER_TEMP/brain-root.txt"
 
-      - name: Register and initialize Brain in ephemeral OS host
+      - name: Attach and initialize Brain in ephemeral OS host
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-          root = Path.cwd()
-          manifest = root / 'AI-VERSE.yaml'
-          text = manifest.read_text(encoding='utf-8')
-          needle = 'extensions:\n'
-          if needle not in text:
-              raise SystemExit('extensions section missing')
-          replacement = (
-              'extensions:\n'
-              '  brain:\n'
-              '    supported: true\n'
-              '    enabled: true\n'
-          )
-          manifest.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
-          PY
-          python - <<'PY'
-          from aiverse_brain.installation import initialize
-          initialize('.')
-          PY
+          ai-verse-brain attach "$GITHUB_WORKSPACE" --apply
+          ai-verse-brain init "$GITHUB_WORKSPACE" --apply
+          grep -Fq 'ai-verse-brain' .aiverse/extensions/registry.json
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Prove denial by either layer and exact approval intersection
         shell: bash
@@ -208,9 +192,8 @@ jobs:
           print('Real OS x Brain permission intersection: PASS')
           PY
 
-      - name: Restore tracked OS and prove no permission state was written upstream
+      - name: Prove permission test left tracked OS state clean
         shell: bash
         run: |
           set -euo pipefail
-          git checkout -- AI-VERSE.yaml
           test -z "$(git status --porcelain --untracked-files=no)"

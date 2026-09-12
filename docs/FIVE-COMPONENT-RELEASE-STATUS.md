@@ -118,7 +118,7 @@ PR:
 ```text
 AI-Verse-Data #13 — Fix post-release audit findings
 branch: fix/post-release-audit
-head: 46894cb5a92202950e59c18516869b207240a0df
+head: f791bba06d832c33c26ee36c9528e52b66c1ac8a
 ```
 
 The branch is linear from `main` and is the only active Data hardening line.
@@ -126,13 +126,13 @@ The branch is linear from `main` and is the only active Data hardening line.
 Completed repair/hardening set:
 
 - Apps cannot tunnel delete authority through transaction/bulk;
-- Apps/Bots receipt provenance is limited to granted space/entity scope;
+- Apps/Bots receipt provenance is limited to granted space/entity scope, and hidden-vs-nonexistent receipts return the same bounded denial so receipt existence is not leaked;
 - Apps/Bots event pagination requires explicit authorized `spaceId + entity`, preventing hidden event activity leaking through shared pagination metadata;
 - malformed App/Bot authority inputs map to stable adapter errors;
 - secure Data client preserves the base client's trusted non-enumerable `scope`;
 - Apps/Bots/Memory/Dashboard/Connections/Automation wrappers preserve live `closed` state;
 - Memory evidence resolves real paginated events and never fabricates canonical-looking events;
-- Memory supplied receipt/idempotency evidence is bound to the exact requested workspace/space/entity/record;
+- Memory supplied evidence is bound to the exact requested workspace/space/entity/record; all simultaneously supplied event/receipt/idempotency identifiers must agree, and the >200-event regression now truly forces a second provenance page;
 - Dashboard cross-space references use schema `spaceId`;
 - `records.list.cursor` is rejected instead of silently ignored;
 - Connections/Automation malformed/error cases are hardened;
@@ -179,9 +179,9 @@ It is designed to prove:
 Latest PR-head workflow runs:
 
 ```text
-Release Smoke                     34716181595
-CI                                34716181607
-Five-Component Release Acceptance 34716181590
+Release Smoke                     34716477876
+CI                                34716477906
+Five-Component Release Acceptance 34716477914
 ```
 
 Observed result:

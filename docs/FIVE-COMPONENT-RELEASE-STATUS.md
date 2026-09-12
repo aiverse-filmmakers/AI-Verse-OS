@@ -1,248 +1,235 @@
 # Five-Component Release Readiness Status
 
 **Date:** 2026-09-12  
-**Status:** Release hardening implemented for OS, Brain, Memory and Skills; Data verification is the only remaining technical gate.
+**Status:** OS, Brain, Memory and Skills release hardening is merged and green. Data PR #13 contains the completed repair set, but its private-repository GitHub Actions jobs are still failing before any runner step starts. The five-component beta must not be called green until Data actually executes and passes its checks.
 
-## Canonical architecture
-
-See:
-
-- `docs/FIVE-COMPONENT-RELEASE-PRD.md`
-- `docs/SHIP-READINESS-AUDIT-2026-09-12.md`
-
-The beta contract separates package/runtime availability from attachment to an OS root. Optional components do not gain authority from installation order and do not mutate tracked OS files.
-
-## Verified merged components
-
-### AI-Verse OS
-
-Main revision:
-
-```text
-603bc6575b689334b7896939fd5f89559845125f
-```
-
-Post-merge push checks all passed:
-
-- Direction Ownership — `34709177936`
-- OS Write Command Boundary — `34709177967`
-- OS Brain Permission Contract — `34709178119`
-- Repository QC — `34709178037`
-- Four Repo Acceptance — `34709177959`
-- CLI smoke test — `34709177927`
-
-Release-hardening behavior includes the dynamic optional-component host, real bounded Connections metadata, read-only Data routing, component doctor/reconcile planning and the symmetric direction-ownership contract.
-
-### AI-Verse Brain
-
-Main revision:
-
-```text
-bef8261ad35d126d29aeff5d496f46904125b7b6
-```
-
-Post-merge push checks all passed:
-
-- Skills Receipt Contract — `34709181223`
-- OS Direction Ownership Contract — `34709181216`
-- CI — `34709181210`
-
-Brain now attaches through `.aiverse/extensions/registry.json`, can be enabled/disabled/detached without tracked OS edits, blocks detach while Brain owns strategic direction, and supports explicit provenance-preserving Brain -> OS direction handback before removal.
-
-### AI-Verse Memory
-
-Main revision:
-
-```text
-f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
-```
-
-Post-merge Test workflow passed:
-
-```text
-34709185500
-```
-
-Memory now shares the local extension-registry locking contract, supports safe enable/disable/detach, preserves canonical Memory, and supports explicit migration from a standalone Memory project into an OS installed later in a clean root.
-
-### AI-Verse Skills
-
-Main revision:
-
-```text
-3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
-```
-
-Post-merge Validate workflow passed:
-
-```text
-34709189075
-```
-
-Provider-v1 shipping docs are current, the OS host needs only the installed immutable provider rather than a Skills source checkout, and Windows has a PowerShell launcher.
-
-## Additional release-hardening completed after the initial status snapshot
-
-- OS/Brain workspace scopes now use the exact canonical `WORKSPACE.yaml` id contract `^[a-z0-9][a-z0-9-]*# Five-Component Release Readiness Status
-
-**Date:** 2026-09-12  
-**Status:** Release hardening implemented for OS, Brain, Memory and Skills; Data verification is the only remaining technical gate.
-
-## Canonical architecture
+## Canonical release architecture
 
 See:
 
 - `docs/FIVE-COMPONENT-RELEASE-PRD.md`
 - `docs/SHIP-READINESS-AUDIT-2026-09-12.md`
 
-The beta contract separates package/runtime availability from attachment to an OS root. Optional components do not gain authority from installation order and do not mutate tracked OS files.
+The beta contract separates **package/runtime availability** from **attachment to one AI-Verse OS root**.
 
-## Verified merged components
+Core rules:
+
+- optional components may be installed before or after OS;
+- attaching to OS is explicit/idempotent and owned by the component;
+- OS uses the local untracked `.aiverse/extensions/registry.json` as the native extension registration contract;
+- registration never grants authority;
+- optional-component absence is non-fatal;
+- tracked OS files are not mutated by extension attachment;
+- OS doctor/reconcile is read-only/plan-only for component-owned lifecycle mutations;
+- install/update/disable/enable/detach/uninstall preserve canonical user state unless a separate destructive action is explicitly requested.
+
+## Verified public components
 
 ### AI-Verse OS
 
-Main revision:
+Latest runtime-bearing release-hardening commit:
 
 ```text
 603bc6575b689334b7896939fd5f89559845125f
 ```
 
-Post-merge push checks all passed:
+All OS workflows passed after that runtime change. A later documentation-only commit does not alter runtime behavior.
 
-- Direction Ownership — `34709177936`
-- OS Write Command Boundary — `34709177967`
-- OS Brain Permission Contract — `34709178119`
-- Repository QC — `34709178037`
-- Four Repo Acceptance — `34709177959`
-- CLI smoke test — `34709177927`
+Release-hardening includes:
 
-Release-hardening behavior includes the dynamic optional-component host, real bounded Connections metadata, read-only Data routing, component doctor/reconcile planning and the symmetric direction-ownership contract.
+- dynamic optional-component discovery;
+- Brain host integration without a Skills source-checkout dependency;
+- read-only Data routing through the OS permission boundary;
+- component doctor/reconcile planning;
+- symmetric OS <-> Brain direction ownership handover;
+- canonical workspace scope validation matching `WORKSPACE.yaml` (`^[a-z0-9][a-z0-9-]*$`);
+- shared extension-registry lock diagnosis without auto-stealing/deleting the lock.
 
 ### AI-Verse Brain
 
-Main revision:
+Main release revision:
 
 ```text
 bef8261ad35d126d29aeff5d496f46904125b7b6
 ```
 
-Post-merge push checks all passed:
+Post-merge workflows are green:
 
-- Skills Receipt Contract — `34709181223`
-- OS Direction Ownership Contract — `34709181216`
-- CI — `34709181210`
+- CI — `34710865210`
+- Skills Receipt Contract — `34710865215`
+- OS Direction Ownership Contract — `34710865217`
 
-Brain now attaches through `.aiverse/extensions/registry.json`, can be enabled/disabled/detached without tracked OS edits, blocks detach while Brain owns strategic direction, and supports explicit provenance-preserving Brain -> OS direction handback before removal.
+Brain now:
+
+- attaches through the local extension registry instead of tracked `AI-VERSE.yaml` edits;
+- supports attach/disable/detach lifecycle;
+- refuses detach while Brain owns strategic direction;
+- supports explicit provenance-preserving Brain -> OS direction handback;
+- enforces the same canonical workspace-id contract as OS/Data.
 
 ### AI-Verse Memory
 
-Main revision:
+Main release revision:
 
 ```text
 f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
 ```
 
-Post-merge Test workflow passed:
+Post-merge Test workflow:
 
 ```text
-34709185500
+34709185500 — success
 ```
 
-Memory now shares the local extension-registry locking contract, supports safe enable/disable/detach, preserves canonical Memory, and supports explicit migration from a standalone Memory project into an OS installed later in a clean root.
+Memory now:
+
+- uses the local extension registry;
+- shares the registry locking discipline;
+- supports safe enable/disable/detach;
+- preserves canonical Memory;
+- supports explicit standalone-Memory -> later-OS migration;
+- no longer requires tracked OS registry/AGENTS edits.
 
 ### AI-Verse Skills
 
-Main revision:
+Main release revision:
 
 ```text
 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
 ```
 
-Post-merge Validate workflow passed:
+Post-merge Validate workflow:
 
 ```text
-34709189075
+34709189075 — success
 ```
 
-Provider-v1 shipping docs are current, the OS host needs only the installed immutable provider rather than a Skills source checkout, and Windows has a PowerShell launcher.
+Skills now:
 
-; dotted/underscored scope ids fail before component divergence can occur.
-- OS component doctor/reconcile now diagnoses a present/unsafe shared extension-registry lock and never steals or deletes it automatically.
-- Data secure-client preserves the base client's non-enumerable trusted `scope` descriptor instead of losing it through object spread.
-- Apps, Bots, Memory, Dashboard, Connections, and Automation secure wrappers preserve live `closed` state rather than snapshotting a getter during object spread.
-- Data Memory evidence now binds supplied receipts/idempotency evidence to the exact requested workspace/space/entity/record.
-- Apps/Bots provenance event listing requires an explicitly authorized `spaceId + entity`, preventing hidden event activity from leaking through shared pagination metadata.
-- Data now has an explicit `enable` lifecycle command. Install/update continue preserving `enabled:false`; only explicit enable reactivates Data.
-- The five-component gate now tests Data disable -> update remains disabled -> explicit enable -> the unchanged OS host regains `query_data` with preserved records.
+- exposes the provider-v1 installed runtime expected by OS;
+- is discoverable from the external immutable provider root;
+- no longer requires its source checkout for normal OS host execution;
+- has current shipping/provider documentation and Windows launcher support.
 
-## Data release candidate
+## Data canonical release candidate
 
-Canonical PR:
+PR:
 
 ```text
 AI-Verse-Data #13 — Fix post-release audit findings
 branch: fix/post-release-audit
+head: 46894cb5a92202950e59c18516869b207240a0df
 ```
 
-The branch contains the post-release security/correctness repairs plus:
+The branch is linear from `main` and is the only active Data hardening line.
 
-- supported AI-Verse OS Data engine/session bridge;
-- uninstall rollback;
-- strict Apps/Bots provenance boundaries;
-- real Memory event evidence lookup;
-- Dashboard cross-space reference repair;
-- explicit list cursor rejection;
-- stable malformed-authority errors;
-- pinned five-component release acceptance matrix;
-- single-job Data release smoke workflow.
+Completed repair/hardening set:
 
-The five-component gate is pinned to exact verified public revisions and tests representative install orders, late optional-component discovery, Memory recall, Skills resolution, Connections metadata, Data reads, explicit Data disable/re-enable, direction handback, detach/reinstall and canonical-state preservation.
+- Apps cannot tunnel delete authority through transaction/bulk;
+- Apps/Bots receipt provenance is limited to granted space/entity scope;
+- Apps/Bots event pagination requires explicit authorized `spaceId + entity`, preventing hidden event activity leaking through shared pagination metadata;
+- malformed App/Bot authority inputs map to stable adapter errors;
+- secure Data client preserves the base client's trusted non-enumerable `scope`;
+- Apps/Bots/Memory/Dashboard/Connections/Automation wrappers preserve live `closed` state;
+- Memory evidence resolves real paginated events and never fabricates canonical-looking events;
+- Memory supplied receipt/idempotency evidence is bound to the exact requested workspace/space/entity/record;
+- Dashboard cross-space references use schema `spaceId`;
+- `records.list.cursor` is rejected instead of silently ignored;
+- Connections/Automation malformed/error cases are hardened;
+- native uninstall is rollback-safe;
+- real `ai-verse-data-host/1.0` engine/session support replaces registration-only materialization;
+- Data has explicit `enable`; install/update preserve `enabled:false`, while enable/disable change only Data availability;
+- package-before-OS vs native attachment semantics are documented explicitly;
+- release/install lifecycle docs are aligned with the real implementation.
 
-## Current Data CI blocker
+## Five-component acceptance gate
 
-Fresh GitHub Actions jobs in the private Data repository are currently terminating before a runner starts:
+Data PR #13 contains:
+
+- `.github/workflows/five-component-acceptance.yml`
+- `.github/workflows/release-smoke.yml`
+
+The gate pins exact public runtime revisions:
 
 ```text
+OS      603bc6575b689334b7896939fd5f89559845125f
+Brain   bef8261ad35d126d29aeff5d496f46904125b7b6
+Memory  f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
+Skills  3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
+```
+
+It is designed to prove:
+
+- representative optional-component install orders;
+- host config created before optional components exist;
+- late Memory/Skills/Data/Connections discovery without regenerating host config;
+- Memory recall;
+- immutable Skills resolution;
+- read-only structured Data query routing;
+- Data disable -> update remains disabled -> explicit enable -> same host regains Data with preserved records;
+- OS -> Brain strategic handover;
+- detach blocked while Brain owns direction;
+- Brain -> OS export/handback;
+- Memory/Data/Brain detach/uninstall and reattach/reinstall with canonical state preserved;
+- final component doctors;
+- no tracked OS mutation.
+
+## Current Data Actions blocker
+
+Latest PR-head workflow runs:
+
+```text
+Release Smoke                     34716181595
+CI                                34716181607
+Five-Component Release Acceptance 34716181590
+```
+
+Observed result:
+
+```text
+10 / 10 jobs -> failure before step 1
 steps: null
 no checkout
 no setup
-no logs
+no build/test logs
 ```
 
-This affects:
+This includes Linux, macOS and Windows jobs and a deliberately minimal one-job Ubuntu smoke workflow.
 
-- normal six-job Data CI;
-- the three-order Five-Component Release Acceptance;
-- a deliberately minimal one-job Ubuntu Release Smoke.
+Historical Data main run `34695862605` also shows the same infrastructure pattern beginning mid-matrix:
 
-Because no workflow step executes, these failures are not code/test failure evidence.
+- 5 jobs executed every install/build/test/package/CLI step successfully;
+- Ubuntu Node 22 terminated before any step with `steps: null`.
 
-A previously successful Data baseline remains:
+Therefore the current red checks are not evidence of a deterministic Data code/test failure. They are also not a substitute for passing tests.
 
-```text
-main: 2497b54e5fbdf0fec4621d218302b3df30dbbc03
-CI: 34695862605
-```
+## Merge/release gate
 
-The current Data repair must **not** be merged until an actual runner executes `npm run check` and the release gate.
+**Do not merge Data PR #13 and do not announce/tag the five-component beta until:**
 
-## Final release gate
+1. GitHub actually starts the Data jobs;
+2. current Data `npm run check` passes;
+3. Data package/CLI release smoke passes;
+4. Five-Component Release Acceptance executes and passes;
+5. Data #13 is merged;
+6. Data post-merge `main` CI executes and passes;
+7. exact five release revisions/tags are frozen;
+8. member install documentation points at immutable release refs rather than moving `main`.
 
-Do not announce/tag the five-component beta until:
+## Product/legal/admin decisions intentionally not guessed
 
-1. Data PR #13 receives a real executed green `npm run check`;
-2. the Five-Component Release Acceptance actually executes and passes;
-3. Data #13 is merged;
-4. Data post-merge main CI passes;
-5. exact five release revisions are frozen;
-6. member install documentation is pinned to immutable tags/refs.
+These are not code defects and must remain explicit owner decisions:
 
-## Owner decisions intentionally not guessed by implementation
+- Data is private and currently `UNLICENSED`; choose its member distribution/access/license policy before public redistribution.
+- AI-Verse-Skills needs an explicit first-party/top-level distribution/license decision in addition to per-package third-party notices.
+- Required checks / branch protection need repository administration access and should be enabled for release branches.
+- GitHub Actions billing/quota/payment eligibility for the private Data repository must be checked in account/repository billing settings; the connector cannot read that account state.
 
-These are product/legal/repository-administration choices, not code defects:
+## Current verdict
 
-- Data is currently private and `UNLICENSED`; decide the member distribution/access/license policy before public redistribution.
-- AI-Verse-Skills has no top-level first-party license; decide its first-party license before public redistribution.
-- Main-branch protection/required-check policy requires repository administration access and should be enabled for release branches.
-
-No implementation should silently choose these policies on behalf of the owner.
+- **OS:** release-hardening code ready; green.
+- **Brain:** release-hardening code ready; green.
+- **Memory:** release-hardening code ready; green.
+- **Skills:** release-hardening code ready; green.
+- **Data:** repair implementation complete and statically reviewed; **execution verification blocked externally**.
+- **Five-component beta:** architecture/code hardening is effectively complete, but final release remains blocked by the Data runner gate.

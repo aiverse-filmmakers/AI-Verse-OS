@@ -375,7 +375,7 @@ class AIverseOSHost:
             (line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")),
             "",
         )
-        schema = re.fullmatch(r"schema_version:\\s*['\\\"]?([12])(?:\\.\\d+)?['\\\"]?\\s*", first)
+        schema = re.fullmatch(r"schema_version:\s*['\"]?([12])(?:\.\d+)?['\"]?\s*", first)
         if not schema:
             raise AdapterError("connections registry schema is unsupported")
         schema_major = int(schema.group(1))
@@ -418,8 +418,8 @@ class AIverseOSHost:
             if current is None:
                 continue
 
-            property_indent = 2 if schema_major == 2 else 4
-            nested_indent = property_indent + 2
+            property_indent = 4
+            nested_indent = 6
             if indent == property_indent and ":" in stripped:
                 key, value = stripped.split(":", 1)
                 key = key.strip()

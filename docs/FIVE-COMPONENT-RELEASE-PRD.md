@@ -1,10 +1,12 @@
 # PRD + Architecture — Five-Component Release Hardening
 
 **Product:** AI-Verse OS first member beta  
-**Date:** 2026-09-12  
-**Status:** Canonical implementation plan  
+**Date:** 2026-09-13  
+**Status:** Implemented and frozen for the first-member beta  
 **Components in gate:** AI-Verse OS, Brain, Memory, Data, Skills  
 **Source audit:** `docs/SHIP-READINESS-AUDIT-2026-09-12.md`
+
+**Implementation outcome:** R1-R7 are complete for the controlled first-member beta. The immutable release refs, verification evidence, and member install procedure are recorded in `docs/FIVE-COMPONENT-RELEASE-STATUS.md` and `docs/FIVE-COMPONENT-BETA-INSTALL.md`. Full Git commit SHAs are used as the allowed equivalent immutable release refs, so the beta does not depend on a mutable release branch. Existing license metadata remains authoritative and this freeze creates no new redistribution rights.
 
 ## 1. Release objective
 

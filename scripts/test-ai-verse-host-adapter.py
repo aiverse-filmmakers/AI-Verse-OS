@@ -25,7 +25,14 @@ from aiverse_brain.tick_output import build_tick_summary
 
 
 def run(command):
-    return subprocess.run(command, text=True, capture_output=True, check=True)
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"command failed ({result.returncode}): {command!r}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    return result
 
 
 def load_adapter(path: Path):
@@ -72,8 +79,6 @@ def main() -> int:
         str(root),
         "--skills-root",
         str(skills_root),
-        "--skills-entrypoint",
-        str(skills_entrypoint),
         "--local-skills-root",
         str(root.parent / "no-local-skills"),
         "--write-config",
@@ -82,7 +87,7 @@ def main() -> int:
 
     selection = select_host(str(root), host_adapter_config=str(config))
     assert selection.real_host is True
-    assert selection.adapter_id == "ai-verse-os:four-component-host"
+    assert selection.adapter_id == "ai-verse-os:host"
     assert {
         "read_context",
         "retrieve_history",
@@ -134,6 +139,29 @@ def main() -> int:
 
     history = list(host.retrieve_history("Aurora release prerequisite whisper", "operator"))
     assert any("Aurora release prerequisite" in str(row.get("text", "")) for row in history)
+
+    connection_registry = root / "connections" / "registry.yaml"
+    connection_registry.parent.mkdir(parents=True, exist_ok=True)
+    connection_registry.write_text(
+        'schema_version: "2.0"\n'
+        'connections:\n'
+        '  - id: acceptance-local\n'
+        '    name: Acceptance Local\n'
+        '    mechanism: local\n'
+        '    status: configured\n'
+        '    scope:\n'
+        '      operator: true\n'
+        '      workspaces: []\n',
+        encoding="utf-8",
+    )
+    connections = list(host.list_connections("operator"))
+    assert connections == [{
+        "id": "acceptance-local",
+        "name": "Acceptance Local",
+        "mechanism": "local",
+        "status": "configured",
+        "authoritative_for": [],
+    }]
 
     capabilities = list(host.list_capabilities("operator"))
     whisper = next(row for row in capabilities if row.get("id") == "aiverse-skills:whisper")
@@ -303,7 +331,7 @@ def main() -> int:
     assert race_result["execution_binding"]["generation_id"] == first_pin["generation_id"]
     assert race_result["result"]["receipt"]["binding"]["generation_id"] == first_pin["generation_id"]
 
-    print("Supported four-component OS host adapter acceptance: PASS")
+    print("Supported dynamic OS host adapter acceptance: PASS")
     return 0
 
 

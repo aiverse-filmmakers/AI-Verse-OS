@@ -26,6 +26,9 @@ jobs:
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 
+      - name: Test component doctor and reconciliation planning
+        run: node scripts/test-components.mjs
+
       - name: Test ownership-aware adapter synchronization
         shell: bash
         run: |

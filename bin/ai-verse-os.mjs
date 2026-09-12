@@ -117,6 +117,8 @@ function usage() {
   out('  ai-verse-os update [--dir folder]');
   out('  ai-verse-os doctor [--dir folder]');
   out('  ai-verse-os onboard [--dir folder]');
+  out('  ai-verse-os components doctor [--dir folder]');
+  out('  ai-verse-os components reconcile [--dir folder]');
   out('  ai-verse-os version');
   out('');
   out('First run without a global install:');
@@ -266,6 +268,18 @@ function update(options) {
   out('✓ AI-Verse OS is up to date.');
 }
 
+function components(options) {
+  const root = resolveRoot(options);
+  if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
+  const subcommand = options.positional[0] || 'doctor';
+  if (!['doctor', 'reconcile'].includes(subcommand)) {
+    fail('components expects doctor or reconcile');
+  }
+  const script = path.join(root, 'scripts', 'components.mjs');
+  if (!fs.existsSync(script)) fail(`Component manager is missing: ${script}`);
+  run(process.execPath, [script, subcommand, '--root', root]);
+}
+
 function onboard(options) {
   const root = resolveRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
@@ -325,6 +339,9 @@ switch (command) {
     break;
   case 'onboard':
     onboard(options);
+    break;
+  case 'components':
+    components(options);
     break;
   case 'version':
     out(CLI_VERSION);

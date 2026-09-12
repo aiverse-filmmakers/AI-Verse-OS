@@ -1,7 +1,7 @@
 # AI-Verse Shipping Readiness Audit
 
 **Date:** 2026-09-12  
-**Status:** In progress  
+**Status:** Audit complete, release hardening required  
 **Scope:** AI-Verse OS, Brain, Memory, Data, Skills  
 **Goal:** Decide whether the finished components are ready for member shipping and make installation/reinstallation/order as future-proof as practical.
 
@@ -198,3 +198,162 @@ Brain should likely converge onto this model rather than requiring a tracked `AI
 - All five current `main` branches are unprotected; required green CI is not enforced before direct pushes.
 - OS still has stale open PR #8 even though a four-repo acceptance implementation is already on main.
 - Data has two divergent draft hardening PRs (#12 and #13) for overlapping audit work. They should be reconciled to one canonical repair line before merge/release.
+
+
+## Final audit verdict
+
+### Overall
+
+**Do not ship the five-component system unchanged today.**
+
+The architecture is not in a "restart/rebuild" state. The engines are mostly strong. The remaining work is a bounded release-hardening layer around installation, attachment, component discovery, lifecycle and release packaging.
+
+A realistic target is a member beta after the blockers below are cleared. This should be treated as release work, not another architecture phase.
+
+### MUST FIX BEFORE SHIPPING
+
+1. **Consolidate and verify Data repairs.**
+   - Choose one canonical hardening branch.
+   - Bring the previous audit fixes onto it.
+   - Run the full Data build/test/package suite successfully.
+   - Merge only the verified repair.
+   - Close the superseded Data hardening PR.
+
+2. **Replace Brain's tracked-manifest registration requirement.**
+   - A stock OS must accept Brain without a member editing `AI-VERSE.yaml`.
+   - Brain installation state should live in the local extension/attachment mechanism, while OS-owned files only declare host support.
+   - The real member path must not dirty tracked OS files or block `ai-verse-os update`.
+
+3. **Make the maintained Brain host adapter optional-component aware.**
+   - It must work with OS alone.
+   - Memory absent -> history is unavailable/empty, not host startup failure.
+   - Skills absent -> OS/local capabilities still work; distributed provider is simply absent.
+   - Data absent -> structured Data capability is absent.
+   - Components installed later should become visible without regenerating Brain configuration.
+   - Remove the requirement to keep the AI-Verse-Skills source repository/installer path merely to use an already installed Skills generation.
+
+4. **Finish the supported OS host surface.**
+   - `list_connections` currently advertises support but returns an unconditional empty list.
+   - Add a bounded Data-read route to the Brain host contract if the release is described as OS + Brain + Memory + Skills + Data integration.
+   - Keep Data writes behind the existing OS permission boundary.
+
+5. **Add Brain lifecycle exit safety.**
+   - Add deliberate Brain -> OS direction handback, or block detach/uninstall while any scope remains Brain-owned.
+   - Never silently fall back to frozen OS strategy.
+
+6. **Fix Memory's native lifecycle surface.**
+   - Update README and doctor to the current local extension-registry model.
+   - Add safe detach/uninstall behavior that removes Memory-owned runtime integration but preserves canonical memories.
+   - Use the shared registry mutation/locking contract so Memory and Data cannot race.
+
+7. **Create one real five-component acceptance gate.**
+   - OS + Brain + Memory + Skills + Data.
+   - Use current/release revisions.
+   - Use the exact public/member installers.
+   - Do not patch tracked `AI-VERSE.yaml` as hidden preparation.
+   - Install in multiple meaningful orders.
+   - Verify reinstall, disable/detach, OS update cleanliness, scope isolation, permissions and canonical-state preservation.
+   - Include Data query through the supported host path if that integration is claimed.
+
+8. **Fix release distribution.**
+   - Create immutable release tags/refs. None currently exist.
+   - Fix Brain's documented install command, which references the nonexistent `v0.1.0-beta.1` tag.
+   - Stop presenting moving `main` as the member release artifact.
+   - Resolve Data's private/UNLICENSED distribution before giving members its documented GitHub install command.
+   - Add a first-party license to AI-Verse-Skills.
+   - Give Skills a Windows-native install command/launcher if Windows remains supported.
+
+### SHOULD FIX SOON
+
+- Add an OS-level `components doctor` / `reconcile` surface that validates the local registry, engine/instruction paths, compatibility and installed-but-unattached components.
+- Separate global/package installation from attachment to one OS root.
+- Consider a small machine-level AI-Verse component registry under `~/.aiverse/` so components installed before an OS can be discovered and attached later without guessing paths.
+- Clean stale Skills project/shipping docs.
+- Remove or clarify the old named Memory extension state in `AI-VERSE.yaml` so the local registry is not confused with a second installation source of truth.
+- Close stale OS PR #8.
+- Protect all release branches and require CI.
+- Give the maintained OS host adapter a stable non-"four-component" identity once it supports optional components dynamically.
+
+### SAFE TO DEFER
+
+- Automatic execution support for every Skills operator.
+- A fully autonomous scheduler owned by Brain.
+- Automatic Data -> Memory mirroring; this should remain selective rather than one-memory-per-record.
+- Semantic/vector Memory tiers.
+- npm/PyPI publication if immutable GitHub release artifacts are used for the first beta.
+- Broad UI/dashboard work.
+- Additional optional components not part of this five-component release.
+
+## Recommended order-independent installation contract
+
+The audit recommends two levels of state:
+
+```text
+MACHINE / PACKAGE LEVEL
+component available
+component version
+component executable/runtime location
+
+OS ROOT LEVEL
+component supported by this OS
+component attached
+component enabled
+component healthy
+component initialized for scope/workspace
+component authorized
+```
+
+Rules:
+
+1. Package installation never requires sibling components.
+2. Package installation before OS is valid.
+3. Attachment to an OS is repeatable and idempotent.
+4. OS installation does not silently migrate standalone user state.
+5. `reconcile` can discover compatible installed components and attach them.
+6. Standalone state migration is a separate explicit operation.
+7. Missing optional components are reported as absent, not broken.
+8. Incompatible present components are reported as incompatible and fail only the dependent capability.
+9. Disable/detach removes availability, not canonical user state.
+10. Uninstall defaults to preserving canonical user state.
+11. Reinstall can reattach to preserved state.
+12. OS updates preserve local attachment state and do not require tracked-file edits.
+
+### Desired runtime composition
+
+```text
+AI-Verse OS host
+  |
+  +-- Brain package present? -> enable cognition
+  +-- Memory attached/healthy? -> add history recall
+  +-- Skills provider healthy? -> add external capabilities
+  +-- Data attached/healthy? -> add structured-data reads
+  +-- Connections configured? -> expose scoped connection metadata
+```
+
+Each optional component should add capability to the same host rather than requiring a new fixed host configuration.
+
+## Per-repository readiness
+
+| Repository | Core quality | Ship state |
+|---|---|---|
+| AI-Verse OS | Strong, current CI green | Near-ready; needs component/reconciliation and Brain registration cleanup |
+| AI-Verse Brain | Strong deterministic core, CI green | Not member-ready in native OS until registration + lifecycle/host optionality are fixed |
+| AI-Verse Memory | Strong storage/isolation, CI green | Near-ready; docs/doctor/lifecycle lag current installer |
+| AI-Verse Skills | Strong immutable lifecycle; latest runtime E2E green | Near-ready; release/docs/license/Windows packaging cleanup |
+| AI-Verse Data | Strong engine architecture | Not ready from `main`; repair branch must be consolidated, verified and merged |
+
+## Release evidence snapshot
+
+- OS current main: all current workflows observed green.
+- Brain current main: CI, direction ownership contract and Skills receipt contract green.
+- Memory current main: full Test workflow green.
+- Skills current runtime code: full E2E install succeeded at `558bbcb...`; current main differs from that runtime revision only by documentation changes. Current validation is green.
+- Data current main: original CI green, but known post-release audit issues remain; repair PRs are not yet verified/merged.
+- All five main branches are currently unprotected.
+- No release tags currently exist in any of the five repositories.
+
+## Practical shipping decision
+
+The system should **stop adding major foundational features now**.
+
+Finish the release-hardening blockers above, freeze the architecture for the first beta, tag the exact five revisions, run the five-component acceptance matrix, and start using it with real members. Any feature not required by that gate should move to post-beta work.

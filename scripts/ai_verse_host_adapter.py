@@ -375,7 +375,7 @@ class AIverseOSHost:
             (line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")),
             "",
         )
-        schema = re.fullmatch(r'schema_version:\\s*["\\']?([12])(?:\\.\\d+)?["\\']?\\s*', first)
+        schema = re.fullmatch(r"schema_version:\\s*['\\\"]?([12])(?:\\.\\d+)?['\\\"]?\\s*", first)
         if not schema:
             raise AdapterError("connections registry schema is unsupported")
         schema_major = int(schema.group(1))

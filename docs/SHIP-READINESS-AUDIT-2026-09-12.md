@@ -142,3 +142,59 @@ Brain should likely converge onto this model rather than requiring a tracked `AI
    - SHOULD FIX SOON
    - SAFE TO DEFER
    - SHIP-READY AFTER FIXES
+
+## Additional findings from lifecycle/release audit
+
+### Install-order mechanics
+
+- True "component initialized first, OS installed later into the same root" is not supported today. `ai-verse-os install` refuses any non-empty target directory.
+- Brain initialized standalone creates `.ai-verse-brain/`; if that directory later appears inside a native OS root, Brain treats it as a parallel-store blocker. There is no supported standalone-Brain -> native-Brain migration/attach path.
+- Memory installed without OS immediately creates standalone state. Memory does have a legacy migration command once a native OS exists, but there is no end-to-end OS-later reconciliation flow.
+- Skills is the strongest order-independent component because it is external and passively discoverable.
+- Data package availability can precede OS, but native Data attachment requires a compatible OS root; package installation and OS attachment therefore need to remain separate concepts.
+
+### Brain lifecycle safety
+
+- There is no supported Brain detach/uninstall lifecycle.
+- Strategic direction handover is currently one-way: OS -> Brain exists, but Brain -> OS handback does not.
+- If Brain owns a scope and the Brain package/runtime is later removed, the OS intentionally refuses to fall back to frozen strategy. This is safe fail-closed behavior but leaves strategic writes unavailable until a future ownership-transfer mechanism exists.
+- A shippable Brain lifecycle therefore needs either a deliberate `handover-to-os`/detach path or an uninstall blocker that refuses removal while any scope is Brain-owned.
+
+### Brain registration / OS update conflict
+
+- The current CI workaround inserts `extensions.brain` into tracked `AI-VERSE.yaml`.
+- A real user doing the same would make `ai-verse-os update` refuse to run because the updater blocks on tracked system-file changes.
+- Brain installation readiness must therefore not depend on member edits to tracked `AI-VERSE.yaml`.
+
+### Shared extension registry
+
+- Sequential Memory <-> Data installation preserves sibling entries.
+- Data implements an explicit registry lock/lost-update check; Memory currently performs atomic replacement but does not use the same shared registry lock. Concurrent installers can therefore race.
+- A future-proof ecosystem should expose one OS-owned registry mutation helper/contract rather than letting every extension invent its own concurrency semantics.
+- OS `doctor` currently validates core OS files but does not perform a system-wide extension registry/engine health check or reconcile installed-but-unattached components.
+
+### Runtime composition
+
+- Data's repository implements a read-only `createBrainDataAdapter`, but Brain's live `HostAdapter` / JSON bridge has no structured-data retrieval operation.
+- The maintained OS Brain host adapter provides context, Memory history, Skills capabilities, connections, permissions and a narrow capability execution path, but does not expose Data answers to Brain.
+- Therefore Data and Brain safely coexist, but current supported five-component runtime composition does not yet let Brain query Data through its normal host context path.
+- Data -> Memory is also contract-ready on the Data side but not a full consumer integration where Memory automatically participates in Data evidence. This is safer than duplication, but it should not be described as complete bidirectional integration.
+
+### Release reproducibility
+
+- None of OS, Brain, Memory, Data or Skills currently has a Git tag.
+- Brain documentation advertises `v0.1.0-beta.1`, but that tag does not exist, so the documented release install command is broken.
+- OS, Memory, Skills and Data development install paths mostly follow moving `main`; a member release should pin immutable tags/SHAs.
+- Current four-repo acceptance pins runtime revisions that are effectively current for Brain and Skills except for later documentation-only commits, so the runtime proof is still useful, but it is not a substitute for release tags.
+
+### Distribution and platform UX
+
+- Data is currently a private repository and `UNLICENSED`; the documented GitHub install route is not a general member distribution route unless members receive repository/package access.
+- AI-Verse-Skills has no top-level LICENSE file. Third-party notices exist, but the first-party distribution/installer itself has no clear repository license.
+- Skills README tells users to run `./aiverse-skills`, a POSIX shell launcher. The Python installer is portable, but that advertised command is not a native Windows PowerShell/CMD experience. A Windows wrapper or a package/entrypoint should be added if Windows is a supported member platform.
+
+### Repository governance / housekeeping
+
+- All five current `main` branches are unprotected; required green CI is not enforced before direct pushes.
+- OS still has stale open PR #8 even though a four-repo acceptance implementation is already on main.
+- Data has two divergent draft hardening PRs (#12 and #13) for overlapping audit work. They should be reconciled to one canonical repair line before merge/release.

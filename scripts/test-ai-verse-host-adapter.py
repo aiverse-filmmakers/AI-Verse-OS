@@ -25,7 +25,14 @@ from aiverse_brain.tick_output import build_tick_summary
 
 
 def run(command):
-    return subprocess.run(command, text=True, capture_output=True, check=True)
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"command failed ({result.returncode}): {command!r}\n"
+            f"stdout:\n{result.stdout}\n"
+            f"stderr:\n{result.stderr}"
+        )
+    return result
 
 
 def load_adapter(path: Path):

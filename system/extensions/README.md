@@ -51,6 +51,8 @@ Unknown top-level fields and unknown extension entries must be preserved by exte
 
 An extension installer must never append its own permanent standing block to tracked `AGENTS.md` once this hook exists.
 
+The optional `engine` field is an extension-owned executable/module reference, not automatic authority. OS-owned host code may load a registered engine only after validating the registry entry and path, and must still apply current workspace, permission, approval, and component-specific policy before effects. For AI-Verse Data, the maintained boundary is `scripts/data-host.mjs`; the host never opens Data's SQLite files directly.
+
 ## Legacy migration
 
 Older AI-Verse Memory installers modified tracked `AGENTS.md` and `skills/registry.yaml` directly. A compatible Memory installer may migrate only the exact legacy block/stanza it previously owned:

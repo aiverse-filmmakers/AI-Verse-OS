@@ -1,0 +1,37 @@
+name: Data Host Boundary
+
+on:
+  pull_request:
+    paths:
+      - "scripts/data-host.mjs"
+      - "scripts/test-data-host.mjs"
+      - "scripts/action-permission.mjs"
+      - "system/architecture/data-host-integration.md"
+      - "system/extensions/README.md"
+      - "AGENTS.md"
+      - ".github/workflows/data-host-boundary.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/data-host.mjs"
+      - "scripts/test-data-host.mjs"
+      - "scripts/action-permission.mjs"
+      - "system/architecture/data-host-integration.md"
+      - "system/extensions/README.md"
+      - "AGENTS.md"
+      - ".github/workflows/data-host-boundary.yml"
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test scripts/test-data-host.mjs

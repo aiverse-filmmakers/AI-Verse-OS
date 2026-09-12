@@ -53,6 +53,7 @@ Optional extensions must not edit tracked OS files during normal install, update
 - Unknown extension entries are preserved by other extensions and by OS updates.
 - Runtime adapter synchronization may replace only files recorded as OS-owned whose current digest still matches the last generated digest. Unknown files and locally modified files must be preserved and reported as conflicts.
 - A registration never grants workspace access, connection permission, action approval, or Brain authority.
+- When `ai-verse-data` is installed and enabled, structured Data operations use `node scripts/data-host.mjs --root <os-root>` through the registered extension engine. Do not open `workspaces/*/data/ai-verse-data.sqlite` directly from runtime or model code. Workspace initialization remains explicit and destructive Data operations must satisfy the OS action-permission boundary.
 - See `system/extensions/README.md` for the local registry contract and migration rules.
 
 ## Four Cs

@@ -71,6 +71,30 @@ try {
   assert.equal(attached.components.find(item => item.id === 'ai-verse-memory')?.state, 'attached-enabled');
   assert.equal(attached.components.find(item => item.id === 'ai-verse-brain')?.state, 'available-unattached');
 
+  const lock = path.join(root, '.aiverse', 'extensions', 'registry.json.lock');
+  fs.writeFileSync(lock, JSON.stringify({ extension_id: 'ai-verse-data' }) + '\n', 'utf8');
+
+  const lockedDoctor = spawnSync(process.execPath, [script, 'doctor', '--root', root, '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  assert.equal(lockedDoctor.status, 2);
+  const locked = JSON.parse(lockedDoctor.stdout);
+  assert.equal(locked.ok, false);
+  assert.equal(locked.registry_lock.state, 'present');
+  assert.equal(locked.registry_lock.owner, 'ai-verse-data');
+  assert.ok(locked.registry_lock.diagnostics.some(item => item.includes('never steals')));
+
+  const lockedReconcile = spawnSync(process.execPath, [script, 'reconcile', '--root', root, '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  assert.equal(lockedReconcile.status, 2);
+  const lockedPlan = JSON.parse(lockedReconcile.stdout);
+  assert.ok(lockedPlan.actions.some(item => item.component === 'extension-registry'));
+  assert.equal(fs.existsSync(lock), true, 'doctor/reconcile must never delete the shared lock');
+  fs.rmSync(lock);
+
   process.stdout.write('Component doctor/reconcile acceptance: PASS\n');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

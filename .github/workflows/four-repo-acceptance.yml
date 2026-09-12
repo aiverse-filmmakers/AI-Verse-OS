@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MEMORY_COMMIT: 65c4ad09cb29382aaebda47164440da321caf517
-      BRAIN_COMMIT: 2e960f2ef9cc169a0a8dd67a562edfeea75c8e7c
-      SKILLS_COMMIT: 558bbcb05ce9f42bb5be30730ea205a7e791bf86
+      MEMORY_COMMIT: f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
+      BRAIN_COMMIT: bef8261ad35d126d29aeff5d496f46904125b7b6
+      SKILLS_COMMIT: 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
 
     steps:
       - name: Checkout AI-Verse OS under test
@@ -72,34 +72,28 @@ jobs:
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
           test -z "$(git status --porcelain --untracked-files=no)"
 
-      - name: Register and initialize Brain under the OS contract
+      - name: Attach and initialize Brain through the local extension contract
         shell: bash
         run: |
           set -euo pipefail
           BRAIN="$(cat "$RUNNER_TEMP/brain-repo.txt")"
           python -m pip install -e "$BRAIN"
+          ai-verse-brain attach "$GITHUB_WORKSPACE" --apply
+          ai-verse-brain init "$GITHUB_WORKSPACE" --apply
           python - <<'PY'
-          from pathlib import Path
+          from aiverse_brain.extension_registry import brain_attachment
+          from aiverse_brain.installation import read_installation_marker
 
-          manifest = Path('AI-VERSE.yaml')
-          text = manifest.read_text(encoding='utf-8')
-          needle = 'extensions:\n'
-          if needle not in text:
-              raise SystemExit('extensions section missing')
-          replacement = (
-              'extensions:\n'
-              '  brain:\n'
-              '    supported: true\n'
-              '    enabled: true\n'
-          )
-          manifest.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
-          PY
-          python - <<'PY'
-          from aiverse_brain.installation import initialize, read_installation_marker
-          initialize('.')
+          entry = brain_attachment('.')
+          assert entry is not None
+          assert entry.get('supported') is True
+          assert entry.get('installed') is True
+          assert entry.get('enabled') is True
           assert read_installation_marker('.') is not None
-          print('Brain native initialization: PASS')
+          print('Brain native attachment + initialization: PASS')
           PY
+          grep -Fq 'ai-verse-brain' .aiverse/extensions/registry.json
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Install Skills externally and prove OS provider discovery
         shell: bash
@@ -144,7 +138,7 @@ jobs:
           NODE
 
           test ! -e skills/imported/ai-verse/whisper
-          test -z "$(git status --porcelain --untracked-files=no | grep -v '^ M AI-VERSE.yaml$' || true)"
+          test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Prove supported four-component host adapter
         shell: bash
@@ -165,14 +159,20 @@ jobs:
           set -euo pipefail
           mkdir -p workspaces/alpha/context workspaces/beta/context
           cat > workspaces/alpha/WORKSPACE.yaml <<'EOF'
-          schema_version: "1.0"
-          id: alpha
-          name: Alpha
+          schema_version: "2.0"
+          id: "alpha"
+          name: "Alpha"
+          type: "custom"
+          status: "active"
+          purpose: "Four-repo acceptance workspace Alpha."
           EOF
           cat > workspaces/beta/WORKSPACE.yaml <<'EOF'
-          schema_version: "1.0"
-          id: beta
-          name: Beta
+          schema_version: "2.0"
+          id: "beta"
+          name: "Beta"
+          type: "custom"
+          status: "active"
+          purpose: "Four-repo acceptance workspace Beta."
           EOF
 
           python - <<'PY'
@@ -233,8 +233,8 @@ jobs:
           set -euo pipefail
           test -f .aiverse/extensions/registry.json
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
+          grep -Fq 'ai-verse-brain' .aiverse/extensions/registry.json
           test -d "$(cat "$RUNNER_TEMP/skills-root.txt")/.aiverse/generations"
           test ! -d .aiverse/skills
-          git reset --hard HEAD
           test -z "$(git status --porcelain --untracked-files=no)"
           echo 'Final four-repo acceptance matrix: PASS'

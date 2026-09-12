@@ -786,7 +786,10 @@ def main() -> int:
         else:
             raise AdapterError(f"operation is not implemented by this adapter: {operation}")
     except Exception as exc:
-        _respond(request, error=str(exc))
+        message = str(exc)
+        process_label = operation if isinstance(operation, str) else "unknown"
+        print(f"ai-verse-os-host-adapter {process_label}: {message}", file=sys.stderr)
+        _respond(request, error=message)
         return 1
 
     _respond(request, result=result)

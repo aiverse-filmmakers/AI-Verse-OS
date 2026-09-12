@@ -10,17 +10,27 @@ It is intentionally not designed around one profession. A doctor, developer, fil
 
 AI-Verse OS now ships with a small cross-platform CLI.
 
-### Test directly from GitHub
+### First member beta: frozen five-component release
+
+The first-member beta is frozen to exact immutable revisions of OS, Brain, Memory, Skills, and Data.
+
+Use the reproducible install guide:
+
+- [Five-Component First Member Beta Install](docs/FIVE-COMPONENT-BETA-INSTALL.md)
+
+Do not substitute moving `main` branches when reproducing the tested beta.
+
+### Development channel from moving `main`
+
+For OS-only development against the newest `main`:
 
 ```bash
 npx --yes github:aiverse-filmmakers/AI-Verse-OS install
 ```
 
-That downloads the latest AI-Verse OS into `./AI-Verse-OS`, validates the core architecture, and confirms the Claude and Codex onboarding skills are present.
+That downloads the latest development OS into `./AI-Verse-OS`, validates the core architecture, and confirms the Claude and Codex onboarding skills are present.
 
-### Install the `ai-verse-os` command
-
-Until the CLI package is published to the npm registry, install the command directly from GitHub once:
+To install the moving-development `ai-verse-os` command:
 
 ```bash
 npm install -g github:aiverse-filmmakers/AI-Verse-OS
@@ -42,7 +52,7 @@ Once the npm package is published, the first-run experience can become simply:
 npx ai-verse-os install
 ```
 
-The CLI requires Node.js 18+ and Git. Node.js 22+ is recommended if you want the full 3D Brain.
+The OS CLI requires Node.js 18+ and Git. Node.js 22+ is the baseline for the complete five-component beta.
 
 ## Core design principle
 
@@ -274,7 +284,7 @@ The included `/3d-brain` capability remains an optional application layer. It vi
 
 ## Quick start
 
-1. Install with `npx --yes github:aiverse-filmmakers/AI-Verse-OS install`, or clone the repository manually.
+1. For the frozen first-member beta, follow `docs/FIVE-COMPONENT-BETA-INSTALL.md`. For OS-only development, use the moving-`main` install command above.
 2. Enter the new `AI-Verse-OS` folder.
 3. Open that folder in your supported AI coding/runtime environment.
 4. In Claude Code run `/onboard`; in Codex run or select `$onboard`. If you installed the CLI globally, you can alternatively run `ai-verse-os onboard`.

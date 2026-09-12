@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const REGISTRY_REL = '.aiverse/extensions/registry.json';
+const REGISTRY_LOCK_REL = '.aiverse/extensions/registry.json.lock';
 const KNOWN = ['ai-verse-brain', 'ai-verse-memory', 'ai-verse-data'];
 
 function fail(message, code = 2) {
@@ -63,6 +64,47 @@ function readRegistry(root) {
     throw new Error('local extension registry schema is invalid or unsupported');
   }
   return { state: 'present', file, data };
+}
+
+function registryLockState(root) {
+  const file = path.join(root, REGISTRY_LOCK_REL);
+  if (!fs.existsSync(file)) return { state: 'absent', file, diagnostics: [] };
+  const stat = fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    return {
+      state: 'unsafe',
+      file,
+      diagnostics: ['extension registry lock must be a regular non-symlink file'],
+    };
+  }
+  if (stat.size > 64 * 1024) {
+    return {
+      state: 'unsafe',
+      file,
+      diagnostics: ['extension registry lock is unexpectedly large'],
+    };
+  }
+  let owner = null;
+  try {
+    const raw = fs.readFileSync(file, 'utf8').trim();
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        owner = typeof parsed.extension_id === 'string' ? parsed.extension_id : null;
+      }
+    }
+  } catch {
+    // A lock is still authoritative even if its informational payload is malformed.
+  }
+  return {
+    state: 'present',
+    file,
+    owner,
+    diagnostics: [
+      'extension registry is locked; component attachment mutations will fail closed until the owning installer finishes or an operator verifies an abandoned lock',
+      'the OS doctor never steals or deletes registry locks automatically',
+    ],
+  };
 }
 
 function safeAttachedFile(root, relative) {
@@ -139,6 +181,7 @@ function skillsState() {
 
 function inspect(root) {
   const registry = readRegistry(root);
+  const registryLock = registryLockState(root);
   const components = [];
   for (const id of KNOWN) {
     const attached = attachedComponent(root, registry, id);
@@ -154,12 +197,32 @@ function inspect(root) {
     }
   }
   components.push(skillsState());
-  const ok = components.every(item => item.state !== 'incompatible');
-  return { ok, root, registry: registry.state, components };
+  const ok =
+    components.every(item => item.state !== 'incompatible') &&
+    registryLock.state === 'absent';
+  return {
+    ok,
+    root,
+    registry: registry.state,
+    registry_lock: {
+      state: registryLock.state,
+      ...(registryLock.owner ? { owner: registryLock.owner } : {}),
+      diagnostics: registryLock.diagnostics,
+    },
+    components,
+  };
 }
 
 function reconcilePlan(report) {
   const actions = [];
+  if (report.registry_lock?.state !== 'absent') {
+    actions.push({
+      component: 'extension-registry',
+      command: 'wait for the owning installer to finish; if no installer is running, inspect .aiverse/extensions/registry.json.lock before removing it manually',
+      automatic: false,
+      reason: 'The shared extension registry lock is never stolen automatically.',
+    });
+  }
   for (const item of report.components) {
     if (item.state !== 'available-unattached') continue;
     if (item.id === 'ai-verse-brain') {
@@ -191,6 +254,13 @@ function reconcilePlan(report) {
 function printHuman(report, reconciliation = false) {
   process.stdout.write(`AI-Verse components ${reconciliation ? 'reconcile' : 'doctor'}\n`);
   process.stdout.write(`Root: ${report.root}\n`);
+  if (report.registry_lock?.state !== 'absent') {
+    const owner = report.registry_lock?.owner ? ` (owner: ${report.registry_lock.owner})` : '';
+    process.stdout.write(`! extension-registry-lock: ${report.registry_lock.state}${owner}\n`);
+    for (const diagnostic of report.registry_lock?.diagnostics || []) {
+      process.stdout.write(`    ${diagnostic}\n`);
+    }
+  }
   for (const item of report.components) {
     process.stdout.write(`${item.state === 'incompatible' ? '!' : '-'} ${item.id}: ${item.state}\n`);
     for (const diagnostic of item.diagnostics || []) process.stdout.write(`    ${diagnostic}\n`);

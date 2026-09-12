@@ -303,6 +303,14 @@ def main() -> int:
         root.parent / "no-local-skills",
         after_pin=switch_generation,
     )
+    for invalid_scope in ("workspace:film_team", "workspace:film.team"):
+        try:
+            direct_host.list_capabilities(invalid_scope)
+        except adapter_module.AdapterError:
+            pass
+        else:
+            raise AssertionError(f"noncanonical workspace scope was accepted: {invalid_scope}")
+
     first_capabilities = direct_host.list_capabilities("operator")
     pinned_whisper = next(row for row in first_capabilities if row.get("id") == "aiverse-skills:whisper")
     assert pinned_whisper["generation_id"] == first_pin["generation_id"]

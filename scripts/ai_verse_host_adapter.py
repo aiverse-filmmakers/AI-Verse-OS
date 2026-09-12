@@ -32,7 +32,7 @@ BASE_OPERATIONS = [
     "request_action",
 ]
 DATA_OPERATION = "query_data"
-_SCOPE = re.compile(r"^(operator|workspace:[a-z0-9][a-z0-9._-]{0,127})$")
+_SCOPE = re.compile(r"^(operator|workspace:[a-z0-9][a-z0-9-]{0,127})$")
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _MAX_SKILL_BYTES = 256 * 1024
 _MAX_REGISTRY_BYTES = 1024 * 1024

@@ -78,6 +78,10 @@ try {
   assert.equal(data.owner, 'os');
   run(['assert-strategic-write', '--root', temp, '--scope', 'workspace:film']);
 
+  // Workspace scopes follow the canonical WORKSPACE.yaml id schema.
+  run(['status', '--root', temp, '--scope', 'workspace:film_team'], 4);
+  run(['status', '--root', temp, '--scope', 'workspace:film.team'], 4);
+
   // Malformed ownership state must fail closed rather than default to OS.
   fs.writeFileSync(marker, JSON.stringify({ schema_version: 1, scopes: { operator: { owner: 'maybe' } } }));
   run(['status', '--root', temp, '--scope', 'operator'], 4);

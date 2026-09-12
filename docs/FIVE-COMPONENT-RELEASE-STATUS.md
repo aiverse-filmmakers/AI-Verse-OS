@@ -27,13 +27,13 @@ Core rules:
 
 ### AI-Verse OS
 
-Latest runtime-bearing release-hardening commit:
+Final release-acceptance commit:
 
 ```text
-603bc6575b689334b7896939fd5f89559845125f
+89fb9043ec58c05931d477ef3e154df428a06c22
 ```
 
-All OS workflows passed after that runtime change. A later documentation-only commit does not alter runtime behavior.
+All five OS workflows passed post-merge on this commit, including the refreshed current Memory/Brain/Skills composition. The earlier runtime hardening is included in this revision.
 
 Release-hardening includes:
 
@@ -43,7 +43,8 @@ Release-hardening includes:
 - component doctor/reconcile planning;
 - symmetric OS <-> Brain direction ownership handover;
 - canonical workspace scope validation matching `WORKSPACE.yaml` (`^[a-z0-9][a-z0-9-]*$`);
-- shared extension-registry lock diagnosis without auto-stealing/deleting the lock.
+- shared extension-registry lock diagnosis without auto-stealing/deleting the lock;
+- built-in Four Repo Acceptance and OS↔Brain permission workflows use current public component revisions and the real Brain local-registry attach/init path, with no tracked `AI-VERSE.yaml` workaround.
 
 ### AI-Verse Brain
 
@@ -118,7 +119,7 @@ PR:
 ```text
 AI-Verse-Data #13 — Fix post-release audit findings
 branch: fix/post-release-audit
-head: f791bba06d832c33c26ee36c9528e52b66c1ac8a
+head: ebf1ff48adb1bd3696f4e2c28bddb540a98395af
 ```
 
 The branch is linear from `main` and is the only active Data hardening line.
@@ -152,7 +153,7 @@ Data PR #13 contains:
 The gate pins exact public runtime revisions:
 
 ```text
-OS      603bc6575b689334b7896939fd5f89559845125f
+OS      89fb9043ec58c05931d477ef3e154df428a06c22
 Brain   bef8261ad35d126d29aeff5d496f46904125b7b6
 Memory  f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
 Skills  3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
@@ -179,9 +180,9 @@ It is designed to prove:
 Latest PR-head workflow runs:
 
 ```text
-Release Smoke                     34716477876
-CI                                34716477906
-Five-Component Release Acceptance 34716477914
+Release Smoke                     34716822441
+CI                                34716822571
+Five-Component Release Acceptance 34716822443
 ```
 
 Observed result:

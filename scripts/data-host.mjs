@@ -34,7 +34,6 @@ const WRITE_OPERATIONS = new Set([
   'data.space.create',
   'data.schema.create',
   'data.schema.update',
-  'data.schema.migration.execute',
   'data.record.create',
   'data.record.update',
   'data.bulk.execute',
@@ -199,6 +198,16 @@ function validateRequest(raw) {
   return { ...raw, workspaceId: match[1] };
 }
 
+function containsDeleteMutation(data) {
+  if (!data || typeof data !== 'object') return false;
+  if (data.operation === 'data.schema.migration.execute') return true;
+  if (data.operation !== 'data.transaction.execute' && data.operation !== 'data.bulk.execute') return false;
+  const operations = data.payload?.operations;
+  return Array.isArray(operations) && operations.some(
+    (item) => item && typeof item === 'object' && item.operation === 'data.record.delete',
+  );
+}
+
 function actionFor(request) {
   if (request.operation === 'describe' || request.operation === 'discover') {
     return { actionClass: 'read_local', reversible: true, operation: `data-host.${request.operation}`, parameters: {} };
@@ -207,13 +216,16 @@ function actionFor(request) {
     return { actionClass: 'modify_canonical_state', reversible: true, operation: 'data.workspace.init', parameters: { workspace_id: request.workspaceId } };
   }
   const operation = request.data.operation;
+  if (containsDeleteMutation(request.data)) {
+    return { actionClass: 'delete_data', reversible: false, operation, parameters: request.data.payload };
+  }
   if (READ_OPERATIONS.has(operation)) {
     return { actionClass: 'read_local', reversible: true, operation, parameters: request.data.payload };
   }
   if (WRITE_OPERATIONS.has(operation)) {
     return { actionClass: 'modify_canonical_state', reversible: false, operation, parameters: request.data.payload };
   }
-  if (DELETE_OPERATIONS.has(operation)) {
+  if (DELETE_OPERATIONS.has(operation) || operation === 'data.schema.migration.execute') {
     return { actionClass: 'delete_data', reversible: false, operation, parameters: request.data.payload };
   }
   fail(`Data operation is unsupported by the OS host: ${operation}`);

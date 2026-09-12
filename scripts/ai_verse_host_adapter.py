@@ -371,9 +371,14 @@ class AIverseOSHost:
         if file.is_symlink() or not file.is_file():
             raise AdapterError("connections registry must be a regular non-symlink file")
         text = file.read_text(encoding="utf-8", errors="strict")
-        first = next((line for line in text.splitlines() if line.strip()), "")
-        if not re.fullmatch(r'schema_version:\s*["\']?2(?:\.\d+)?["\']?\s*', first):
+        first = next(
+            (line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")),
+            "",
+        )
+        schema = re.fullmatch(r'schema_version:\\s*["\\']?([12])(?:\\.\\d+)?["\\']?\\s*', first)
+        if not schema:
             raise AdapterError("connections registry schema is unsupported")
+        schema_major = int(schema.group(1))
 
         rows: list[Dict[str, Any]] = []
         current: Optional[Dict[str, Any]] = None
@@ -391,7 +396,8 @@ class AIverseOSHost:
                 continue
             if not in_connections:
                 continue
-            if indent == 2 and stripped.startswith("- "):
+
+            if schema_major == 2 and indent == 2 and stripped.startswith("- "):
                 if current is not None:
                     rows.append(current)
                 current = {"scope": {}}
@@ -401,9 +407,20 @@ class AIverseOSHost:
                     key, value = item.split(":", 1)
                     current[key.strip()] = _yaml_scalar(value)
                 continue
+
+            if schema_major == 1 and indent == 2 and stripped.endswith(":"):
+                if current is not None:
+                    rows.append(current)
+                current = {"id": stripped[:-1].strip(), "scope": {}}
+                nested = None
+                continue
+
             if current is None:
                 continue
-            if indent == 2 and ":" in stripped:
+
+            property_indent = 2 if schema_major == 2 else 4
+            nested_indent = property_indent + 2
+            if indent == property_indent and ":" in stripped:
                 key, value = stripped.split(":", 1)
                 key = key.strip()
                 parsed = _yaml_scalar(value)
@@ -415,7 +432,7 @@ class AIverseOSHost:
                     nested = None
                     current[key] = parsed
                 continue
-            if indent >= 4 and nested == "scope" and ":" in stripped:
+            if indent >= nested_indent and nested == "scope" and ":" in stripped:
                 key, value = stripped.split(":", 1)
                 current.setdefault("scope", {})[key.strip()] = _yaml_scalar(value)
 

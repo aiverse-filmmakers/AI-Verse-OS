@@ -80,7 +80,30 @@ Once `direction_owner = brain`:
 - The resolver uses an allowlist for OS operational sections. Operator `Current priorities`, workspace `Objective`, unknown headings and arbitrary preamble are omitted after handover; operational/current-state fields such as current facts, active workspaces, next useful actions, pending decisions, source pointers, connection state and execution state may remain visible.
 - Missing or invalid generated direction views are reported as unavailable/invalid and never cause fallback to frozen OS strategy.
 
-A Brain outage does **not** transfer ownership. The ownership marker is independent of Brain process availability, so OS strategic writes remain blocked and active-context reads remain filtered until an explicit future ownership-transfer protocol changes the marker.
+A Brain outage does **not** transfer ownership. The ownership marker is independent of Brain process availability, so OS strategic writes remain blocked and active-context reads remain filtered until an explicit ownership transfer changes the marker.
+
+## Explicit handback to OS
+
+Brain-owned direction may return to OS only through an explicit export-and-handback:
+
+```bash
+ai-verse-brain direction-owner . --scope operator --handover-to-os
+ai-verse-brain direction-owner . --scope operator --handover-to-os --apply --confirm-export
+```
+
+The handback contract is:
+
+1. collect confirmed/active Brain strategic intents for the scope;
+2. write a full provenance snapshot under `.aiverse/direction/exports/`;
+3. replace only the standard OS strategic section — operator `Current priorities` or workspace `Objective` — while preserving operational/current-state sections;
+4. verify the ownership record is still active and Brain-owned;
+5. atomically persist `direction_owner = os` with the export/source hashes and retained Brain refs.
+
+The OS strategic section is written **before** the owner flips. If a process stops after the export/write but before step 5, Brain remains the owner and the current-context resolver continues filtering the staged OS strategic section. Rerunning the handback is safe. Once the marker becomes `os`, `assert-strategic-write` permits OS strategic writes immediately.
+
+Brain objects are not deleted during handback. They remain provenance/history but are no longer the active strategic owner after the marker flips.
+
+Brain disable/detach must remain blocked while any scope is Brain-owned. A user must hand back every Brain-owned scope before removing Brain availability.
 
 ## Migration rule
 

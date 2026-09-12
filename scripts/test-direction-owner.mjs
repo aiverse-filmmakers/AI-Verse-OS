@@ -50,6 +50,28 @@ try {
   fs.rmSync(fakeBrain, { recursive: true, force: true });
   run(['assert-strategic-write', '--root', temp, '--scope', 'operator'], 3);
 
+  // An explicit Brain-to-OS handback record restores OS strategic write authority.
+  fs.writeFileSync(marker, JSON.stringify({
+    schema_version: 1,
+    scopes: {
+      operator: {
+        owner: 'os',
+        state: 'active',
+        handover_id: 'handover-test',
+        handback_id: 'handback-test',
+        export_confirmed: true,
+        brain_refs: ['brain:intent:test'],
+        brain_export_path: '.aiverse/direction/exports/operator-handback-test.md',
+        os_source_path: 'operator/context/CURRENT.md',
+      },
+    },
+  }, null, 2));
+  result = run(['status', '--root', temp, '--scope', 'operator']);
+  data = JSON.parse(result.stdout);
+  assert.equal(data.owner, 'os');
+  assert.equal(data.record.handback_id, 'handback-test');
+  run(['assert-strategic-write', '--root', temp, '--scope', 'operator']);
+
   // Ownership is per scope; a workspace without handover remains OS-owned.
   result = run(['status', '--root', temp, '--scope', 'workspace:film']);
   data = JSON.parse(result.stdout);

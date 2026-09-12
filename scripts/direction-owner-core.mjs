@@ -5,7 +5,7 @@ export const DIRECTION_SCHEMA_VERSION = 1;
 export const VALID_DIRECTION_OWNERS = new Set(['os', 'brain']);
 
 export function validateDirectionScope(scope) {
-  if (!/^(operator|workspace:[a-z0-9][a-z0-9._-]{0,127})$/.test(scope)) {
+  if (!/^(operator|workspace:[a-z0-9][a-z0-9-]{0,127})$/.test(scope)) {
     throw new Error(`invalid scope: ${scope}`);
   }
   return scope;

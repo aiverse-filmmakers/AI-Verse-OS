@@ -1,112 +1,231 @@
 # AI-Verse OS
 
-**AI-Verse OS** is a domain-neutral AI operating system that gives capable AI runtimes persistent context, isolated workspaces, reusable capabilities, connected systems, durable knowledge, and safe automation structure.
-
-It is intentionally not designed around one profession. A doctor, developer, filmmaker, researcher, consultant, student, operator, founder, team, or someone with a completely different type of work should be able to start from the same core. The OS learns the domain from evidence and evolves structure inside the relevant workspace instead of hardcoding industries into the foundation.
+**AI-Verse OS** is the host constitution for AI-Verse. It owns workspace scope, host structure, current operating context, routing, permission floors, and component composition. It does not take canonical Brain, Memory, Data, Skills, Connections, or automation state away from their owning components.
 
 **AI-Verse Community:** https://www.skool.com/bogdans-ai-verse-4398
 
 ## Install
 
-AI-Verse OS now ships with a small cross-platform CLI.
+Requirements:
 
-### First member beta: frozen five-component release
+- Git
+- Node.js 22+ for the complete five-component beta
+- Python when optional Python components are used
+- macOS, Linux, or Windows
 
-The first-member beta is frozen to exact immutable revisions of OS, Brain, Memory, Skills, and Data.
-
-Use the reproducible install guide:
-
-- [Five-Component First Member Beta Install](docs/FIVE-COMPONENT-BETA-INSTALL.md)
-
-Do not substitute moving `main` branches when reproducing the tested beta.
-
-### Development channel from moving `main`
-
-For OS-only development against the newest `main`:
+Install the current OS development/public-beta candidate:
 
 ```bash
 npx --yes github:aiverse-filmmakers/AI-Verse-OS install
 ```
 
-That downloads the latest development OS into `./AI-Verse-OS`, validates the core architecture, and confirms the Claude and Codex onboarding skills are present.
-
-To install the moving-development `ai-verse-os` command:
+Or install the command globally:
 
 ```bash
 npm install -g github:aiverse-filmmakers/AI-Verse-OS
-```
-
-Then the normal commands are:
-
-```bash
 ai-verse-os install
-ai-verse-os doctor
-ai-verse-os onboard
-ai-verse-os update
-ai-verse-os version
 ```
 
-Once the npm package is published, the first-run experience can become simply:
+Installation only makes the OS runtime available. It does **not** attach sibling components, initialize their canonical stores, transfer Brain authority, authorize external accounts, or grant broader permissions.
+
+The previously frozen five-component first-member beta remains reproducible from exact immutable refs:
+
+- [Five-Component First Member Beta Install](docs/FIVE-COMPONENT-BETA-INSTALL.md)
+- [Five-Component Release Status](docs/FIVE-COMPONENT-RELEASE-STATUS.md)
+
+Do not substitute moving `main` branches when reproducing that frozen gate.
+
+## Setup
+
+After installation:
 
 ```bash
-npx ai-verse-os install
+ai-verse-os setup --dir ./AI-Verse-OS
 ```
 
-The OS CLI requires Node.js 18+ and Git. Node.js 22+ is the baseline for the complete five-component beta.
+The default `detected` profile configures the OS and reconciles only components actually detected around that OS root. Optional absent components do not make a standalone OS unhealthy.
 
-## Core design principle
+To require the complete core composition:
 
-> **One OS. One source of truth. Many isolated workspaces. Reusable capabilities. Connected systems. Automated cadence. Apps on top.**
+```bash
+ai-verse-os setup --dir ./AI-Verse-OS --profile core
+```
 
-The conceptual capability stack is:
+`core` means:
 
 ```text
-Context
-  -> Data / Knowledge
-  -> Connections
-  -> Workspaces
-  -> Skills
-  -> Agents
-  -> Apps / Automations
+OS + Brain + Memory + Skills + Data
 ```
 
-Those are capability layers, not seven duplicated folder trees.
+Setup is explicit and idempotent. It records local setup state under `.aiverse/os/`, which is ignored by Git so normal updates do not dirty tracked OS files.
 
-## Architecture v2: Unified Workspace Architecture
+OS setup may execute only a narrowly allowlisted owner command when the owner contract is known and safe. It never fabricates sibling lifecycle metadata. When a component requires its own migration or setup command, OS reports the exact owner action instead of stealing ownership.
 
-AI-Verse OS v2 organizes the filesystem around four things that matter more than profession names:
+Useful component lifecycle commands:
 
-1. **Ownership:** what belongs to the OS versus the user.
-2. **Scope:** operator-wide, shared, or isolated workspace state.
-3. **Lifecycle:** inbox, context, memory, knowledge, decisions, capabilities, archive.
-4. **Authority:** which source wins when information conflicts.
+```bash
+ai-verse-os components status --json
+ai-verse-os components doctor --json
+ai-verse-os components reconcile --json
+ai-verse-os components reconcile --apply --json
+ai-verse-os components descriptor brain --json
+```
 
-The machine-readable map is `AI-VERSE.yaml`. The full design is in `system/architecture/`.
+## Verify
 
-## Universal workspace model
+Fast status:
 
-A workspace is the universal isolation primitive. It can represent any meaningful scope of work:
+```bash
+ai-verse-os status --dir ./AI-Verse-OS
+```
 
-- a project
-- a role
-- a client or case
-- a research area
-- a practice
-- a product
-- a team
-- a course or study
-- a personal area
-- any custom type the operator needs
+Deeper read-only verification:
 
-AI-Verse OS does not force those categories. `WORKSPACE.yaml` supports free-form `type` and `domains` so the system can adapt to work that was never anticipated by the template.
+```bash
+ai-verse-os doctor --dir ./AI-Verse-OS
+```
 
-Workspace-specific knowledge stays local first. Only proven reusable knowledge and capabilities should be promoted into shared layers.
+Require the complete core profile:
+
+```bash
+ai-verse-os status --dir ./AI-Verse-OS --profile core
+ai-verse-os doctor --dir ./AI-Verse-OS --profile core
+```
+
+All public lifecycle surfaces support machine-readable output:
+
+```bash
+ai-verse-os status --json
+ai-verse-os doctor --json
+ai-verse-os setup --json
+ai-verse-os update --json
+ai-verse-os descriptor --json
+ai-verse-os components status --json
+ai-verse-os components doctor --json
+ai-verse-os components descriptor brain --json
+```
+
+Public lifecycle states are:
+
+```text
+absent
+installed
+setup-required
+disabled
+unhealthy
+migration-required
+ready
+```
+
+The OS doctor states the depth it actually checked. It covers structural, setup, attachment/discovery, runtime, dependency, and composed-system readiness. It does not claim owner-specific operational checks that it did not execute.
+
+Lifecycle exit behavior is stable:
+
+- `0`: command succeeded and the requested readiness target is satisfied
+- `2`: valid command, but the requested component/profile is not ready
+- `1`: invalid invocation or an unexpected lifecycle failure
+
+Descriptors are introspection surfaces and return successfully even when the described component is absent or not ready.
+
+## Use
+
+After `setup` and a green `doctor`:
+
+```bash
+ai-verse-os onboard
+```
+
+Then use the OS through a supported capable AI runtime.
+
+Core OS capabilities include:
+
+- `/onboard`
+- `/workspace`
+- `/grill-me`
+- `/link`
+- `/audit`
+- `/level-up`
+- `/3d-brain`
+
+### Owner-routed write boundary
+
+Extensions and coordination layers do not receive a generic primitive that edits canonical OS files.
+
+The compatibility transport command remains:
+
+```bash
+node scripts/write-command.mjs enqueue --root <OS_ROOT> < request.json
+```
+
+It queues a bounded request and reports that no canonical effect occurred.
+
+Public-beta OS also supports:
+
+```bash
+node scripts/write-command.mjs submit --root <OS_ROOT> < request.json
+node scripts/write-command.mjs dispatch --root <OS_ROOT> < request.json
+```
+
+At the current OS boundary, the only canonical handler is the OS-owned `candidate.route` operation. It re-checks current permission at the final effect edge and places the candidate into the appropriate operator/workspace inbox as **unclassified material**.
+
+It does not automatically promote the candidate into Knowledge, Decisions, Memory, Data, Skills, Brain, Connections, or Automations. Those owners retain their own canonical write rules.
+
+## Update / disable / uninstall
+
+Update tracked OS runtime files without touching ignored user-owned state:
+
+```bash
+ai-verse-os update --dir ./AI-Verse-OS
+```
+
+If tracked OS files need to be restored deliberately:
+
+```bash
+ai-verse-os reinstall --force --dir ./AI-Verse-OS
+```
+
+Reinstall restores tracked runtime files from `origin/main` while preserving ignored canonical user state, component attachment state, and `.aiverse/os/setup.json`.
+
+AI-Verse OS itself has no meaningful enabled/disabled toggle in the public beta. Optional components expose enable/disable through their own lifecycle where meaningful.
+
+The CLI does not recursively delete an OS root because that root may contain canonical user-owned state. Removing the OS directory is therefore an explicit operator/distribution action after preserving the user-owned paths you intend to keep. Destructive purge is not part of normal uninstall semantics.
+
+## What setup grants / does not grant
+
+OS setup grants only enough local host configuration to verify and compose the selected profile.
+
+It does **not** grant:
+
+- Brain strategic direction ownership
+- permission to write canonical Memory
+- permission to create or mutate Data records
+- permission to execute arbitrary Skills
+- external account authorization
+- connection credentials
+- broader action permissions
+- destructive migration authority
+- cross-workspace visibility
+- hosted/team identity or RBAC
+
+Registration, readiness, authorization, approval, and authority are separate concepts.
+
+## Architecture
+
+AI-Verse OS v2 uses the Unified Workspace Architecture.
+
+The machine-readable map is `AI-VERSE.yaml`. Detailed architecture lives in `system/architecture/`.
+
+The core rules are:
+
+1. one canonical owner for each responsibility;
+2. operator and workspace scope remain explicit;
+3. user-owned state is preserved across normal OS lifecycle operations;
+4. optional components add capability without becoming hidden duplicate truth;
+5. derived indexes, dashboards, caches, and reports are not canonical merely because they are convenient.
 
 ## System versus user ownership
 
-### System-owned
-
-Safe for AI-Verse OS updates to evolve deliberately:
+System-owned tracked OS material includes:
 
 ```text
 AGENTS.md
@@ -119,9 +238,7 @@ skills/registry.yaml
 scripts/
 ```
 
-### User-owned
-
-Never overwrite casually during updates:
+User-owned state includes:
 
 ```text
 operator/
@@ -129,179 +246,79 @@ knowledge/
 workspaces/
 connections/registry.yaml
 agents/registry.yaml
-automations/
+automations/jobs/
+automations/triggers/
+automations/policies/
 apps/
 ```
 
-### Derived / disposable
+Local lifecycle/attachment state under `.aiverse/` is intentionally outside tracked upstream system files.
 
-```text
-runtime/
-```
-
-If deleting `runtime/` destroys irreplaceable knowledge, something is in the wrong layer.
-
-## Repository layout
-
-```text
-AI-Verse-OS/
-├── README.md
-├── AGENTS.md                     # canonical runtime contract
-├── CLAUDE.md                     # Claude adapter
-├── AI-VERSE.yaml                 # machine-readable architecture
-├── EXPANSIONS.md
-├── SKILL-AUTHORING.md
-├── ai-verse-os-intake.md
-│
-├── system/
-│   ├── architecture/
-│   ├── schemas/
-│   ├── templates/
-│   └── health/
-│
-├── operator/                     # user-owned operator state
-│   ├── profile/
-│   ├── context/
-│   ├── memory/
-│   ├── inbox/
-│   └── decisions/
-│
-├── knowledge/                    # reusable cross-workspace knowledge
-├── workspaces/                   # isolated scopes of work
-│   └── _template/
-├── connections/                  # live source registry and integration notes
-├── skills/                       # runtime-neutral capability registry
-├── agents/                       # orchestration registry
-├── automations/                  # jobs, triggers, policies
-├── apps/                         # persistent interfaces
-├── runtime/                      # disposable indexes/cache/logs/reports
-├── archives/
-│
-├── references/                   # v1/system framework compatibility
-│   ├── 3ms-framework.md
-│   └── 4cs-framework.md
-├── .claude/skills/               # current Claude skill packages
-├── .agents/skills/               # Codex-compatible copies
-└── scripts/
-```
-
-User-owned state is gitignored by default in this public template. The tracked example files and `_template` workspace show the contract without encouraging people to publish personal or sensitive data.
-
-## Knowledge lifecycle
-
-AI-Verse OS distinguishes information by what it means:
-
-```text
-incoming material
-      ↓
-    inbox
-      ↓
-   classify
-      ↓
- ┌───────────────┬────────────┬────────────┬────────────┐
- context       memory       knowledge     decision
- now           history      reusable      settled choice
-                                │
-                                ↓
-                         skill / automation
-                                │
-                                ↓
-                              archive
-```
-
-Raw material never becomes canonical truth simply because it arrived.
-
-## Domain adaptation
-
-The core does not pre-create profession folders. Instead, when real work reveals a domain, AI-Verse OS learns:
-
-- terminology and entities
-- authoritative sources
-- quality standards
-- constraints and approvals
-- common workflows
-- useful outputs
-- domain-specific failure modes
-
-That structure begins inside a workspace. Reusable knowledge can later be promoted to root `knowledge/`, and portable workflows can become shared skills.
-
-See `system/architecture/domain-adaptation.md`.
+`runtime/` is derived/disposable. If deleting runtime destroys irreplaceable truth, that truth is in the wrong layer.
 
 ## Source of truth
 
-AI-Verse OS uses explicit authority rules instead of hoping the newest-looking file is correct.
-
 At a high level:
 
-- `AGENTS.md` -> runtime behavior
-- `AI-VERSE.yaml` -> architecture and routing
-- operator/workspace current context -> current state
-- decisions -> why settled choices changed
-- curated knowledge -> durable reusable truth
-- archives -> history only
-- vector/search indexes -> derived views only
+- `AGENTS.md` owns runtime behavior
+- `AI-VERSE.yaml` owns architecture and routing declarations
+- owner/workspace current context owns current OS state while OS owns that scope
+- Brain-owned direction wins only after explicit handover
+- Memory owns historical memory
+- Data owns structured operational records
+- Skills owns reusable distributed capability packages
+- indexes/caches/dashboards are projections, not independent truth
 
 See `system/architecture/source-of-truth.md`.
 
-## Four Cs
+## Component composition
 
-| Layer | Purpose |
-|---|---|
-| **Context** | Knows the relevant operator and workspace state |
-| **Connections** | Reaches required systems and sources |
-| **Capabilities** | Performs repeatable work through skills, agents, scripts, and workflows |
-| **Cadence** | Runs mature work from schedules or events with appropriate controls |
+The local extension attachment registry is:
 
-Full breakdown: `references/4cs-framework.md`.
+```text
+.aiverse/extensions/registry.json
+```
 
-## Three Ms
+OS reads that registry, validates safe repository-relative runtime paths, and applies the host permission floor. Registration alone grants no authority.
 
-| M | Purpose |
-|---|---|
-| **Mindset** | Look for where AI can create leverage |
-| **Method** | Find the constraint, remove unnecessary work, map the process, choose autonomy, define the outcome |
-| **Machine** | Build the smallest reliable blocks, validate them, supervise rollout, keep controls |
+Skills is intentionally discoverable from its external immutable provider root and does not need a fake local OS attachment entry.
 
-Full breakdown: `references/3ms-framework.md`.
+See `system/extensions/README.md`.
 
-## Included foundation capabilities
+## Universal workspace model
 
-| Capability | Purpose |
-|---|---|
-| `/onboard` | Build universal operator context and initial workspace routes from a seven-question intake |
-| `/workspace` | Create or evolve an isolated workspace without assuming a profession |
-| `/grill-me` | Capture deeper knowledge while separating confirmed facts from exploration |
-| `/link` | Make a source findable without duplicating it |
-| `/audit` | Verify architecture, Four Cs, routing, freshness, isolation, and evidence |
-| `/level-up` | Use the Three Ms to ship one high-value improvement |
-| `/3d-brain` | Build the interactive 3D knowledge explorer from selected sources |
+A workspace is the universal isolation primitive. It can represent a project, client, research area, product, role, course, team, personal area, or another custom scope.
 
-## 3D Brain
-
-The included `/3d-brain` capability remains an optional application layer. It visualizes selected knowledge sources without becoming the source of truth itself.
-
-[![Watch the 3D Brain grow from one idea into a connected knowledge globe](docs/media/3d-brain-preview.gif)](https://github.com/aiverse-filmmakers/AI-Verse-OS/raw/refs/heads/main/docs/media/3d-brain-demo.mp4)
-
-## Quick start
-
-1. For the frozen first-member beta, follow `docs/FIVE-COMPONENT-BETA-INSTALL.md`. For OS-only development, use the moving-`main` install command above.
-2. Enter the new `AI-Verse-OS` folder.
-3. Open that folder in your supported AI coding/runtime environment.
-4. In Claude Code run `/onboard`; in Codex run or select `$onboard`. If you installed the CLI globally, you can alternatively run `ai-verse-os onboard`.
-5. Answer the seven universal intake questions.
-6. Let AI-Verse OS create operator state and the minimum useful workspace structure.
-7. Use `/workspace` when a substantial new scope of work deserves isolation.
-8. Use `/link` for important sources and `/grill-me` for knowledge still in your head.
-9. Run `/audit` after setup or major changes.
-10. Run `/level-up` when a repeated constraint should become a better process, skill, script, connection, or automation.
+The core does not hardcode industries or professions. Domain structure is learned inside the relevant workspace and only promoted to shared knowledge/capabilities when reuse is proven.
 
 ## Privacy by default
 
-This repository is a public template. User-owned state is ignored by Git by default. Never store secrets in the repository. People who deliberately keep AI-Verse OS in a private repository can choose a different version-control policy for their own state.
+The public repository is a template. User-owned state is Git-ignored by default. Never store secrets in the repository.
+
+Connection registries contain routes and metadata, not raw credentials.
 
 ## Legacy installations
 
-Architecture v1 used root `context/`, `references/`, `decisions/`, and `connections.md`. Those paths remain supported for deliberate migration and system-framework compatibility. Existing user data must be preserved. New canonical user state should use the v2 paths in `AI-VERSE.yaml`.
+Architecture v1 used root `context/`, `references/`, `decisions/`, and `connections.md`. Existing state must be preserved and migrated deliberately.
+
+A legacy or standalone component that needs canonical-state migration is reported as `migration-required`. OS setup does not silently create a competing store or transfer authority.
+
+## Public-beta scope
+
+This repository's public-beta target is the OS host/lifecycle contract described above.
+
+The following are separate owners or later system tracks, not missing OS implementation:
+
+- AI-Verse Gateway
+- AI-Verse Automations runtime
+- Dashboard
+- Apps
+- Connections product/provider coverage
+- hosted multi-user identity/RBAC
+- marketplace/package ecosystem expansion
+- enterprise policy/control planes
+
+The one-product installer/profile UX belongs to `aiverse-filmmakers/ai-verse-distribution`, which consumes the OS/component machine-readable lifecycle contract rather than moving sibling ownership into OS.
 
 ## License
 

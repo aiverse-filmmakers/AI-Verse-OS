@@ -70,14 +70,14 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          ai-verse-os status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/pre-status.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/pre-status.json"
           status=$?
           set -e
           test "$status" -eq 2
           node -e "const x=require(process.argv[1]); if(x.state!=='setup-required'||x.ready!==false) process.exit(1)" "$RUNNER_TEMP/pre-status.json"
 
           set +e
-          ai-verse-os setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/pre-setup.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/pre-setup.json"
           setup=$?
           set -e
           test "$setup" -eq 2
@@ -152,9 +152,9 @@ jobs:
           AI_VERSE_SKILLS_ROOT: ${{ runner.temp }}/aiverse-skills-root
         run: |
           set -euo pipefail
-          ai-verse-os setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/setup.json"
-          ai-verse-os status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/status.json"
-          ai-verse-os doctor --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/doctor.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/setup.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/status.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" doctor --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/doctor.json"
           node - <<'NODE'
           const fs = require('fs');
           for (const name of ['setup','status','doctor']) {
@@ -232,7 +232,7 @@ jobs:
           node "$DATA" disable --root "$GITHUB_WORKSPACE"
 
           set +e
-          ai-verse-os status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/disabled.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/disabled.json"
           status=$?
           set -e
           test "$status" -eq 2
@@ -246,7 +246,7 @@ jobs:
           NODE
 
           node "$DATA" enable --root "$GITHUB_WORKSPACE"
-          ai-verse-os status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/re-enabled.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" status --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/re-enabled.json"
           node -e "const x=require(process.argv[1]); if(x.state!=='ready'||x.ready!==true) process.exit(1)" "$RUNNER_TEMP/re-enabled.json"
           test -f workspaces/alpha/data/ai-verse-data.sqlite
 
@@ -289,8 +289,8 @@ jobs:
           python "$RUNNER_TEMP/AI-Verse-Memory/scripts/install.py"             --target "$GITHUB_WORKSPACE" --source-dir "$RUNNER_TEMP/AI-Verse-Memory"
           node "$RUNNER_TEMP/AI-Verse-Data/dist/src/cli.js" install --root "$GITHUB_WORKSPACE"
 
-          ai-verse-os setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/final-setup.json"
-          ai-verse-os doctor --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/final-doctor.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" setup --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/final-setup.json"
+          node "$GITHUB_WORKSPACE/bin/ai-verse-os.mjs" doctor --dir "$GITHUB_WORKSPACE" --profile core --json > "$RUNNER_TEMP/final-doctor.json"
           node -e "const x=require(process.argv[1]); if(x.state!=='ready'||x.ready!==true) process.exit(1)" "$RUNNER_TEMP/final-doctor.json"
 
           python - <<'PY'

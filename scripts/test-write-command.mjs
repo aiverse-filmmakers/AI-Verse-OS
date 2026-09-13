@@ -8,7 +8,9 @@ import path from 'node:path';
 import {
   WRITE_COMMAND_PROVIDER,
   computeWriteCommandFingerprint,
+  dispatchWriteCommand,
   enqueueWriteCommand,
+  submitWriteCommand,
 } from './write-command.mjs';
 
 function fixture(status = 'active') {
@@ -190,6 +192,109 @@ if (process.platform !== 'win32') {
       /scope is invalid/i,
     );
     assert.equal(fs.existsSync(path.join(root, 'runtime', 'write-commands')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+
+{
+  const root = fixture();
+  try {
+    const req = request();
+    const result = submitWriteCommand({ osRoot: root, request: req });
+    assert.equal(result.status, 'completed');
+    assert.equal(result.effect_occurred, true);
+    assert.equal(result.canonical_effect_occurred, true);
+    assert.equal(result.result.canonical_owner, 'ai-verse-os');
+    assert.equal(result.result.canonical_layer, 'inbox');
+    assert.equal(result.result.classification_state, 'unclassified');
+    assert.equal(result.result.promotion_occurred, false);
+    assert.equal(result.effect_permission.action_class, 'modify_canonical_state');
+
+    const candidate = path.join(root, result.result.path);
+    assert.equal(fs.existsSync(candidate), true);
+    const routed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+    assert.equal(routed.status, 'unclassified');
+    assert.equal(routed.canonical_owner, 'ai-verse-os');
+    assert.equal(routed.candidate.summary, req.parameters.summary);
+    assert.equal(routed.promotion_occurred, false);
+    assert.equal(fs.existsSync(path.join(root, 'knowledge')), false);
+    assert.equal(fs.existsSync(path.join(root, 'decisions')), false);
+
+    const replay = submitWriteCommand({ osRoot: root, request: req });
+    assert.equal(replay.status, 'completed');
+    assert.equal(replay.replayed, true);
+    assert.equal(fs.readdirSync(path.dirname(candidate)).filter(name => name.startsWith('write-candidate-')).length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = fixture();
+  try {
+    const req = request();
+    const queued = enqueueWriteCommand({ osRoot: root, request: req });
+    assert.equal(queued.status, 'queued');
+
+    const manifest = path.join(root, 'workspaces', 'alpha', 'WORKSPACE.yaml');
+    fs.writeFileSync(manifest, [
+      'schema_version: "2.0"',
+      'id: alpha',
+      'status: paused',
+      'approval:',
+      '  external_actions: "allow"',
+      '  destructive_actions: "confirm"',
+      '  high_stakes_decisions: "human-review"',
+      '',
+    ].join('\n'));
+
+    assert.throws(
+      () => dispatchWriteCommand({ osRoot: root, request: req }),
+      /workspace is paused/i,
+    );
+    assert.equal(fs.existsSync(path.join(root, 'workspaces', 'alpha', 'inbox')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = fixture();
+  try {
+    const unsupported = request({
+      operation: 'memory.remember',
+      idempotency_key: 'unsupported-owner-route-1',
+    });
+    unsupported.request_fingerprint = computeWriteCommandFingerprint(unsupported);
+    enqueueWriteCommand({ osRoot: root, request: unsupported });
+    assert.throws(
+      () => dispatchWriteCommand({ osRoot: root, request: unsupported }),
+      /no canonical OS-owned handler is registered/i,
+    );
+    const receipts = path.join(root, 'runtime', 'write-commands', 'receipts');
+    const receipt = JSON.parse(fs.readFileSync(path.join(receipts, fs.readdirSync(receipts)[0]), 'utf8'));
+    assert.equal(receipt.status, 'queued');
+    assert.equal(receipt.canonical_effect_occurred, false);
+    assert.equal(fs.existsSync(path.join(root, 'workspaces', 'alpha', 'inbox')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = fixture();
+  try {
+    const operatorRequest = request({
+      request_id: 'req-operator-route-1',
+      scope: 'operator',
+      idempotency_key: 'operator-route-1',
+    });
+    operatorRequest.request_fingerprint = computeWriteCommandFingerprint(operatorRequest);
+    const result = submitWriteCommand({ osRoot: root, request: operatorRequest });
+    assert.equal(result.result.path.startsWith('operator/inbox/'), true);
+    assert.equal(fs.existsSync(path.join(root, result.result.path)), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

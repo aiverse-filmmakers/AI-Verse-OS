@@ -60,7 +60,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm install -g "$GITHUB_WORKSPACE"
           python -m pip install -e "$RUNNER_TEMP/AI-Verse-Brain"
           npm --prefix "$RUNNER_TEMP/AI-Verse-Data" install --ignore-scripts
           npm --prefix "$RUNNER_TEMP/AI-Verse-Data" run build

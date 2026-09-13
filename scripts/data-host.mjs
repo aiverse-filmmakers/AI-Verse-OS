@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { evaluateActionPermission } from './action-permission.mjs';
 
 export const OS_DATA_HOST_PROTOCOL = 'ai-verse-os-data-host/1.0';
@@ -358,7 +358,8 @@ async function main() {
   process.stdout.write(`${JSON.stringify({ protocol: OS_DATA_HOST_PROTOCOL, request_id: request.request_id, ok: true, result })}\n`);
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const invoked = process.argv[1]
+  && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (invoked) {
   main().catch((error) => {
     process.stderr.write(`data-host: ${error.message}\n`);

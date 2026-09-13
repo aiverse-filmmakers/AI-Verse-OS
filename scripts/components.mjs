@@ -666,7 +666,7 @@ async function main() {
   if (args.command !== 'descriptor' && output.ready !== true) process.exitCode = 2;
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+const invoked = process.argv[1] && fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(fileURLToPath(import.meta.url));
 if (invoked) {
   main().catch(error => {
     process.stderr.write(`components: ${error.message}\n`);

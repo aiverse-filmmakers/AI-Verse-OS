@@ -1,16 +1,16 @@
 # OS Write Command Boundary
 
-AI-Verse OS owns canonical operator/workspace state. Extensions and intelligence layers must request writes through an owner-controlled command boundary rather than directly editing canonical files.
+AI-Verse OS owns canonical operator/workspace host state. Extensions and intelligence layers request OS-owned writes through this boundary rather than editing canonical files directly.
 
-## Phase 3.7 contract
-
-The OS command is:
+## Public-beta commands
 
 ```text
 node scripts/write-command.mjs enqueue --root <ai-verse-os-root>
+node scripts/write-command.mjs dispatch --root <ai-verse-os-root>
+node scripts/write-command.mjs submit --root <ai-verse-os-root>
 ```
 
-It accepts one immutable JSON request on stdin and returns one JSON receipt on stdout.
+Each command accepts one immutable JSON request on stdin and returns one JSON receipt on stdout.
 
 The request contains:
 
@@ -26,9 +26,9 @@ The request contains:
 - bounded `provenance`
 - SHA-256 `request_fingerprint` over the exact immutable request
 
-## What Phase 3.7 does
+## Enqueue remains transport-only
 
-Phase 3.7 validates the host, exact scope, bounded request shape, fingerprint and OS action-permission floor, then places the command into OS-owned disposable runtime state under:
+`enqueue` preserves the Phase 3.7 compatibility contract. It validates the host, request, scope, fingerprint and current OS permission floor, then writes only disposable runtime state under:
 
 ```text
 runtime/write-commands/
@@ -36,55 +36,79 @@ runtime/write-commands/
   receipts/
 ```
 
-The receipt explicitly reports:
+Its receipt reports that no canonical effect occurred.
 
-```json
-{
-  "status": "queued",
-  "effect_occurred": false,
-  "canonical_effect_occurred": false,
-  "result": {
-    "queue_state": "pending_handler",
-    "canonical_handler_dispatched": false
-  }
-}
+An enqueue receipt is never permission to perform a later canonical mutation.
+
+## Dispatch and submit
+
+`dispatch` consumes an already queued command. `submit` performs enqueue followed by dispatch.
+
+Before a canonical effect, dispatch re-checks the current action permission at the final edge. A workspace that became paused, a changed policy, or another current denial blocks the effect even if enqueue previously succeeded.
+
+The final-edge action is classified as `modify_canonical_state`, not as a disposable runtime write.
+
+## Current canonical handler
+
+Public-beta OS registers exactly one canonical handler:
+
+```text
+candidate.route
 ```
 
-This is transport and ownership enforcement only.
+It may write only to the OS-owned unclassified inbox for the request scope:
 
-## What Phase 3.7 does not do
+```text
+operator/inbox/
+workspaces/<id>/inbox/
+```
 
-The dispatcher does not directly mutate:
+The routed record remains explicitly:
 
-- operator profile
-- current context
-- knowledge
-- decisions
+```text
+canonical_owner: ai-verse-os
+canonical_layer: inbox
+status: unclassified
+promotion_occurred: false
+```
+
+Receipt is not validation.
+
+The handler does not promote material into:
+
+- operator/workspace current context
+- Knowledge
+- Decisions
+- Brain goals or strategy
 - Memory
+- Data
 - Skills
+- Connections
 - Automations
-- connection state
-- Brain-owned state
 
-Knowledge/decision candidate routing and canonical promotion are later integration work. A future handler must re-check the exact current owner/policy/approval state immediately before any canonical mutation.
+Those owners retain their own canonical mutation, provenance, authorization, migration and idempotency rules.
+
+Unknown operations fail closed before canonical mutation.
 
 ## Idempotency
 
 The pair `scope + idempotency_key` is bound to one exact request fingerprint.
 
-- identical replay returns the same command/receipt
+- identical enqueue replay returns the same command/receipt
 - semantic drift with the same idempotency key fails
-- concurrent duplicate enqueue cannot silently create two commands
+- duplicate dispatch of a completed request returns the completed receipt
+- the canonical inbox filename is deterministic from the request binding
+- an existing canonical idempotency record with a different fingerprint fails closed
 
-Runtime state is deliberately disposable. Future canonical handlers must therefore also enforce their own durable idempotency at the actual owner write boundary.
+The runtime queue remains disposable. Canonical inbox completion therefore has its own durable idempotency check at the actual owner boundary.
 
 ## Permission
 
-The enqueue operation is classified as `write_local_reversible` because Phase 3.7 produces only disposable OS runtime state.
+Enqueue is `write_local_reversible` because it writes only disposable runtime state.
 
-The OS action-permission evaluator is still invoked at enqueue time so invalid, paused or out-of-scope workspace requests fail closed.
+Dispatch re-evaluates permission as `modify_canonical_state` immediately before the OS-owned inbox effect.
 
-A future canonical handler must separately evaluate the appropriate canonical-state action immediately before the effect. An enqueue receipt is never permission to perform the later canonical mutation.
+Permission response fingerprints and scopes must match the exact immutable command.
 
 ## Security
 
@@ -96,7 +120,9 @@ The boundary rejects:
 - invalid operation/IDs
 - oversized or deeply nested parameters
 - invalid or forged fingerprints
-- unsafe runtime symlinks
+- unsafe runtime or inbox symlinks
 - malformed/incomplete idempotency records
+- unsupported canonical operations
+- final-edge permission denial
 
-The request parameters are symbolic structured data, not arbitrary filesystem paths supplied to an OS write primitive.
+The request parameters are bounded symbolic structured data, not arbitrary filesystem paths supplied to a generic OS write primitive.

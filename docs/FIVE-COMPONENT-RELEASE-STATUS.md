@@ -180,3 +180,16 @@ These are not engineering blockers for the frozen first-member beta:
 **The five-component first-member beta is technically release-ready and frozen.**
 
 The architecture hardening, lifecycle convergence, migration path, integration matrix, Data repair, pre-merge verification, post-merge verification, and immutable member install refs are complete. New architecture work should begin in a new roadmap rather than modifying this frozen beta contract.
+
+
+## Later OS public-beta lifecycle closure
+
+The immutable first-member beta above remains frozen exactly as recorded.
+
+AI-Verse OS later closed its additional public-beta lifecycle/readiness target without replacing the frozen OS artifact. The exact implementation/evidence is recorded in:
+
+- `docs/PUBLIC-BETA-OS-STATUS.md`
+
+That later OS line adds public setup/status/doctor/descriptor/reconcile and machine-readable Distribution-facing lifecycle behavior, then re-runs the current OS against the same frozen Brain, Memory, Skills and Data revisions in all three representative install orders.
+
+The historical first-member OS SHA `89fb9043ec58c05931d477ef3e154df428a06c22` remains the immutable artifact for reproducing the original freeze.

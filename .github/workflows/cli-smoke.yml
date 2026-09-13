@@ -5,12 +5,18 @@ on:
     branches: [main]
     paths:
       - 'bin/**'
+      - 'scripts/components.mjs'
+      - 'scripts/test-cli-lifecycle.mjs'
       - 'package.json'
+      - '.gitignore'
       - '.github/workflows/cli-smoke.yml'
   pull_request:
     paths:
       - 'bin/**'
+      - 'scripts/components.mjs'
+      - 'scripts/test-cli-lifecycle.mjs'
       - 'package.json'
+      - '.gitignore'
       - '.github/workflows/cli-smoke.yml'
   workflow_dispatch:
 
@@ -32,34 +38,59 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Test first-run npx bootstrap
+      - name: Make local repository cloneable as main
         shell: bash
+        run: git update-ref refs/heads/main HEAD
+
+      - name: Test lifecycle state machine
+        run: node scripts/test-cli-lifecycle.mjs
+
+      - name: Test first-run install then explicit setup
+        shell: bash
+        env:
+          AI_VERSE_OS_REPO_URL: ${{ github.workspace }}
         run: |
           set -euo pipefail
           TARGET="$RUNNER_TEMP/AI-Verse-OS-npx-test"
           rm -rf "$TARGET"
-          npx --yes github:aiverse-filmmakers/AI-Verse-OS install --dir "$TARGET"
-          test -f "$TARGET/AI-VERSE.yaml"
-          test -f "$TARGET/.claude/skills/onboard/SKILL.md"
-          test -f "$TARGET/.agents/skills/onboard/SKILL.md"
+          npx --yes . install --dir "$TARGET" --json > "$RUNNER_TEMP/install.json"
+          node -e "const x=require(process.argv[1]); if(x.state!=='installed'||x.setup_required!==true) process.exit(1)" "$RUNNER_TEMP/install.json"
+          set +e
+          npx --yes . status --dir "$TARGET" --json > "$RUNNER_TEMP/pre-status.json"
+          status=$?
+          set -e
+          test "$status" -eq 2
+          npx --yes . setup --dir "$TARGET" --json > "$RUNNER_TEMP/setup.json"
+          npx --yes . doctor --dir "$TARGET" --json > "$RUNNER_TEMP/doctor.json"
+          node -e "const x=require(process.argv[1]); if(x.ready!==true||x.state!=='ready') process.exit(1)" "$RUNNER_TEMP/doctor.json"
 
-      - name: Install CLI globally
-        run: npm install -g .
-
-      - name: Check CLI
+      - name: Install CLI globally and verify machine-readable lifecycle
         run: |
+          npm install -g .
           ai-verse-os version
-          ai-verse-os doctor --dir .
+          ai-verse-os descriptor --dir . --json
+          ai-verse-os components descriptor brain --dir . --json
 
-      - name: Test fresh install
+      - name: Test update and clean reinstall preserve ignored state
         shell: bash
+        env:
+          AI_VERSE_OS_REPO_URL: ${{ github.workspace }}
         run: |
           set -euo pipefail
           TARGET="$RUNNER_TEMP/AI-Verse-OS-test"
           rm -rf "$TARGET"
-          ai-verse-os install --dir "$TARGET"
-          test -f "$TARGET/AI-VERSE.yaml"
-          test -f "$TARGET/.claude/skills/onboard/SKILL.md"
-          test -f "$TARGET/.agents/skills/onboard/SKILL.md"
-          ai-verse-os doctor --dir "$TARGET"
-          ai-verse-os update --dir "$TARGET"
+          ai-verse-os install --dir "$TARGET" --json
+          ai-verse-os setup --dir "$TARGET" --json
+          mkdir -p "$TARGET/operator/profile"
+          printf '%s\n' 'member state must survive' > "$TARGET/operator/profile/member.md"
+          SETUP_AT="$(node -e "console.log(require(process.argv[1]).setup_at)" "$TARGET/.aiverse/os/setup.json")"
+
+          ai-verse-os update --dir "$TARGET" --json
+          grep -Fq 'member state must survive' "$TARGET/operator/profile/member.md"
+          test "$(node -e "console.log(require(process.argv[1]).setup_at)" "$TARGET/.aiverse/os/setup.json")" = "$SETUP_AT"
+
+          printf '%s\n' 'tracked damage' >> "$TARGET/README.md"
+          ai-verse-os reinstall --force --dir "$TARGET" --json
+          grep -Fq 'member state must survive' "$TARGET/operator/profile/member.md"
+          test "$(node -e "console.log(require(process.argv[1]).setup_at)" "$TARGET/.aiverse/os/setup.json")" = "$SETUP_AT"
+          test -z "$(git -C "$TARGET" status --porcelain --untracked-files=no)"

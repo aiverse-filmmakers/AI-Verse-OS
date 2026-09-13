@@ -69,3 +69,40 @@ After a recognized migration from a previously clean OS checkout, tracked OS fil
 ## Ownership
 
 AI-Verse OS owns this contract and the stable runtime hook. Each extension owns only its local registry entry and its own installed files. OS updates must not delete the local registry, and extension updates must not edit unrelated registrations.
+
+
+## Public-beta lifecycle projection
+
+AI-Verse OS projects component state through:
+
+```text
+ai-verse-os/component-lifecycle-v1
+```
+
+Public lifecycle states are:
+
+```text
+absent
+installed
+setup-required
+disabled
+unhealthy
+migration-required
+ready
+```
+
+The OS surfaces:
+
+```bash
+ai-verse-os components status --json
+ai-verse-os components doctor --json
+ai-verse-os components reconcile --json
+ai-verse-os components reconcile --apply --json
+ai-verse-os components descriptor <component> --json
+```
+
+The descriptor exposes the information needed by Distribution, including component identity/version, compatibility, package source, setup requirements, supported lifecycle, current state, health/readiness, migration requirement, requested scopes/capabilities, separate authority transfer, and canonical-state preservation semantics.
+
+Reconciliation is owner-preserving. OS may invoke only an explicitly allowlisted public command of the owning component when that command is available and the action does not transfer authority. Otherwise OS reports the owner action and stops.
+
+OS never invents a sibling installer contract, removes a sibling lock, silently migrates a sibling canonical store, or treats integrity/registration as permission.

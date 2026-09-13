@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 export const COMPONENT_LIFECYCLE_SCHEMA = '1.0';
 export const COMPONENT_LIFECYCLE_PROVIDER = 'ai-verse-os/component-lifecycle-v1';
@@ -665,7 +666,7 @@ async function main() {
   if (args.command !== 'descriptor' && output.ready !== true) process.exitCode = 2;
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (invoked) {
   main().catch(error => {
     process.stderr.write(`components: ${error.message}\n`);

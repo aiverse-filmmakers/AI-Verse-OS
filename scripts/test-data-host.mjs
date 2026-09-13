@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import {
   DATA_ENGINE_PROTOCOL,
@@ -117,6 +119,30 @@ function calls(f) {
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 }
+
+test('Data host CLI entrypoint reads stdin and emits JSON on every platform', () => {
+  const f = fixture();
+  try {
+    const script = fileURLToPath(new URL('./data-host.mjs', import.meta.url));
+    const child = spawnSync(
+      process.execPath,
+      [script, '--root', f.root],
+      {
+        input: JSON.stringify(request({ request_id: 'req-cli-entrypoint' })) + '\n',
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    );
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const payload = JSON.parse(child.stdout.trim());
+    assert.equal(payload.protocol, OS_DATA_HOST_PROTOCOL);
+    assert.equal(payload.request_id, 'req-cli-entrypoint');
+    assert.equal(payload.ok, true);
+    assert.equal(payload.result.status, 'succeeded');
+  } finally {
+    f.cleanup();
+  }
+});
 
 test('Data host loads only the enabled registered engine and binds workspace reads', async () => {
   const f = fixture();

@@ -26,8 +26,11 @@ jobs:
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 
-      - name: Test component doctor and reconciliation planning
+      - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
+
+      - name: Test public-beta OS lifecycle state machine
+        run: node scripts/test-cli-lifecycle.mjs
 
       - name: Test ownership-aware adapter synchronization
         shell: bash
@@ -61,6 +64,12 @@ jobs:
           grep -Fq 'npx --yes github:aiverse-filmmakers/AI-Verse-OS install' README.md
           grep -Fq 'npm install -g github:aiverse-filmmakers/AI-Verse-OS' README.md
           grep -Fq 'ai-verse-os update' README.md
+          grep -Fq '## Install' README.md
+          grep -Fq '## Setup' README.md
+          grep -Fq '## Verify' README.md
+          grep -Fq '## Use' README.md
+          grep -Fq '## Update / disable / uninstall' README.md
+          grep -Fq '## What setup grants / does not grant' README.md
 
       - name: Verify local extension registry contract
         shell: bash
@@ -68,6 +77,7 @@ jobs:
           set -euo pipefail
           grep -Fq '.aiverse/extensions/registry.json' AGENTS.md
           grep -Fq '.aiverse/extensions/' .gitignore
+          grep -Fq '.aiverse/os/' .gitignore
           test -f system/extensions/README.md
           mkdir -p .aiverse/extensions
           cat > .aiverse/extensions/registry.json <<'JSON'

@@ -26,6 +26,9 @@ jobs:
       - name: Test UTF-8 host adapter subprocess boundaries
         run: python3 scripts/test-host-adapter-utf8.py
 
+      - name: Test progressive Memory host bridge contract
+        run: python3 scripts/test-progressive-history-bridge.py
+
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 

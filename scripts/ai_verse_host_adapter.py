@@ -32,6 +32,14 @@ BASE_OPERATIONS = [
     "authorize_action",
     "request_action",
 ]
+PROGRESSIVE_HISTORY_OPERATION = "retrieve_history_progressive"
+PROGRESSIVE_RECALL_VERSION = "memory.progressive-recall.v1"
+_PROGRESSIVE_DEPTHS = {"catalog", "summary", "detail", "source"}
+_PROGRESSIVE_MAX_QUERY_CHARS = 4096
+_PROGRESSIVE_MIN_BYTES = 4096
+_PROGRESSIVE_MAX_BYTES = 65536
+_PROGRESSIVE_MAX_ITEMS = 20
+_PROGRESSIVE_EVIDENCE_MAX_BYTES = 65536
 DATA_OPERATION = "query_data"
 _SCOPE = re.compile(r"^(operator|workspace:[a-z0-9][a-z0-9-]{0,127})$")
 _HEX64 = re.compile(r"^[a-f0-9]{64}$")
@@ -276,8 +284,27 @@ class AIverseOSHost:
     def _data_available(self) -> bool:
         return self._component_state("ai-verse-data", engine_required=True) == "available"
 
+    def _memory_progressive_state(self) -> str:
+        try:
+            entry = self._extension_entry("ai-verse-memory")
+            if entry is None:
+                return "absent"
+            engine = self._safe_repo_file(entry.get("engine"), "ai-verse-memory engine")
+            memory = _load_module(engine, "_aiverse_os_host_memory_progressive_probe")
+            if (
+                getattr(memory, "PROGRESSIVE_RECALL_VERSION", None) != PROGRESSIVE_RECALL_VERSION
+                or not callable(getattr(memory, "progressive_recall", None))
+            ):
+                return "incompatible"
+            return "available"
+        except Exception:
+            return "degraded"
+
     def describe(self) -> Dict[str, Any]:
         operations = list(BASE_OPERATIONS)
+        memory_progressive = self._memory_progressive_state()
+        if memory_progressive == "available":
+            operations.append(PROGRESSIVE_HISTORY_OPERATION)
         if self._data_available():
             operations.append(DATA_OPERATION)
         skills_state = "available" if (self.skills_root / ".aiverse" / "active.json").is_file() else "absent"
@@ -290,6 +317,7 @@ class AIverseOSHost:
                 "host": "ai-verse-os",
                 "legacy_adapter_id": LEGACY_ADAPTER_ID,
                 "memory": self._component_state("ai-verse-memory", engine_required=True),
+                "memory_progressive_recall": memory_progressive,
                 "skills": skills_state,
                 "data": self._component_state("ai-verse-data", engine_required=True),
                 "canonical_state_owned": False,
@@ -347,6 +375,159 @@ class AIverseOSHost:
             mode=mode,
         )
         return [dict(row) for row in rows]
+
+    def _validate_progressive_evidence_scope(
+        self,
+        bound_scope: str,
+        evidence_ref: Mapping[str, Any],
+    ) -> None:
+        evidence_scope = self._validate_scope(evidence_ref.get("scope"))
+        if bound_scope == "operator":
+            allowed = {"operator"}
+        else:
+            allowed = {bound_scope, "operator"}
+        if evidence_scope not in allowed:
+            raise AdapterError(
+                f"progressive evidence scope {evidence_scope!r} is not visible from {bound_scope!r}"
+            )
+        try:
+            encoded = json.dumps(
+                dict(evidence_ref),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(f"progressive evidence_ref is not JSON-safe: {exc}") from exc
+        if len(encoded) > _PROGRESSIVE_EVIDENCE_MAX_BYTES:
+            raise AdapterError("progressive evidence_ref exceeds the safe size limit")
+
+    def retrieve_history_progressive(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise AdapterError("progressive history payload must be an object")
+        allowed = {
+            "version",
+            "depth",
+            "scope",
+            "query",
+            "limit",
+            "max_bytes",
+            "evidence_ref",
+        }
+        extras = set(payload) - allowed
+        required = {"version", "depth", "scope"}
+        missing = required - set(payload)
+        if extras or missing:
+            raise AdapterError(
+                "progressive history payload has invalid fields: "
+                + ", ".join(sorted(extras | missing))
+            )
+
+        version = payload.get("version")
+        if version != PROGRESSIVE_RECALL_VERSION:
+            raise AdapterError(
+                f"unsupported progressive history version: {version!r}"
+            )
+        depth = payload.get("depth")
+        if depth not in _PROGRESSIVE_DEPTHS:
+            raise AdapterError(f"unsupported progressive history depth: {depth!r}")
+        scope = self._validate_scope(payload.get("scope"))
+
+        query = payload.get("query", "")
+        if not isinstance(query, str):
+            raise AdapterError("progressive history query must be a string")
+        query = query.strip()
+        if len(query) > _PROGRESSIVE_MAX_QUERY_CHARS:
+            raise AdapterError(
+                f"progressive history query exceeds {_PROGRESSIVE_MAX_QUERY_CHARS} characters"
+            )
+        if depth != "catalog" and not query:
+            raise AdapterError(f"progressive history depth {depth!r} requires a non-empty query")
+
+        limit = payload.get("limit", 8)
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= _PROGRESSIVE_MAX_ITEMS
+        ):
+            raise AdapterError(
+                f"progressive history limit must be an integer between 1 and {_PROGRESSIVE_MAX_ITEMS}"
+            )
+        max_bytes = payload.get("max_bytes", 16384)
+        if (
+            isinstance(max_bytes, bool)
+            or not isinstance(max_bytes, int)
+            or not _PROGRESSIVE_MIN_BYTES <= max_bytes <= _PROGRESSIVE_MAX_BYTES
+        ):
+            raise AdapterError(
+                "progressive history max_bytes must be between "
+                f"{_PROGRESSIVE_MIN_BYTES} and {_PROGRESSIVE_MAX_BYTES}"
+            )
+
+        evidence_ref = payload.get("evidence_ref")
+        if depth == "source":
+            if not isinstance(evidence_ref, Mapping):
+                raise AdapterError(
+                    "progressive source depth requires evidence_ref from a prior detail item"
+                )
+            self._validate_progressive_evidence_scope(scope, evidence_ref)
+        elif evidence_ref is not None:
+            raise AdapterError("progressive evidence_ref is only valid for source depth")
+
+        entry = self._extension_entry("ai-verse-memory")
+        if entry is None:
+            raise AdapterError("AI-Verse Memory is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-memory engine")
+        memory = _load_module(engine, "_aiverse_os_host_memory_progressive")
+        progressive = getattr(memory, "progressive_recall", None)
+        installed_version = getattr(memory, "PROGRESSIVE_RECALL_VERSION", None)
+        if installed_version != version or not callable(progressive):
+            raise AdapterError(
+                f"installed AI-Verse Memory does not support {version}"
+            )
+
+        mode = memory.detect_mode(self.root)
+        try:
+            result = progressive(
+                query,
+                version=version,
+                depth=depth,
+                scope=scope,
+                limit=limit,
+                max_bytes=max_bytes,
+                evidence_ref=dict(evidence_ref) if evidence_ref is not None else None,
+                root=self.root,
+                mode=mode,
+            )
+        except (ValueError, RuntimeError, OSError) as exc:
+            raise AdapterError(f"Memory progressive recall rejected request: {exc}") from exc
+
+        if not isinstance(result, dict):
+            raise AdapterError("Memory progressive recall returned a non-object result")
+        if result.get("api_version") != version:
+            raise AdapterError("Memory progressive recall version mismatch")
+        if result.get("depth") != depth:
+            raise AdapterError("Memory progressive recall depth mismatch")
+        if result.get("scope") != scope:
+            raise AdapterError("Memory progressive recall scope mismatch")
+        try:
+            result_bytes = len(
+                json.dumps(
+                    result,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8")
+            )
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(f"Memory progressive recall returned invalid JSON data: {exc}") from exc
+        if result_bytes > max_bytes:
+            raise AdapterError(
+                f"Memory progressive recall exceeded the requested {max_bytes}-byte budget"
+            )
+        return result
 
     def _resolver(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         request = {
@@ -2384,6 +2565,8 @@ def main() -> int:
             result = host.read_context(payload.get("scope"))
         elif operation == "retrieve_history":
             result = host.retrieve_history(payload.get("query"), payload.get("scope"))
+        elif operation == PROGRESSIVE_HISTORY_OPERATION:
+            result = host.retrieve_history_progressive(payload)
         elif operation == "list_capabilities":
             result = host.list_capabilities(payload.get("scope"))
         elif operation == "list_connections":

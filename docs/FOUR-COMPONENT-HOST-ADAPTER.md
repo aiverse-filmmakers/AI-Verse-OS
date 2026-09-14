@@ -15,7 +15,8 @@ It is a host boundary only. It does not own or duplicate canonical OS, Memory, B
 The adapter delegates each responsibility to its existing owner:
 
 - current context: AI-Verse OS `scripts/current-context.mjs`
-- history recall: the Memory runtime installed at `scripts/ai-verse-memory/memory.py`
+- legacy history recall: the Memory runtime installed at `scripts/ai-verse-memory/memory.py` through unchanged `retrieve_history(query, scope)`
+- progressive history recall: the same installed Memory owner through versioned `retrieve_history_progressive`, when that Memory runtime advertises `memory.progressive-recall.v1`
 - capability discovery and selection: AI-Verse OS `scripts/capability-resolver.mjs`
 - action permission: AI-Verse OS `scripts/action-permission.mjs`
 - immutable generation pinning: the AI-Verse Skills lifecycle entrypoint
@@ -77,7 +78,7 @@ The same host config can be supplied to Brain cadence hooks instead of using the
 
 ## Supported host operations
 
-The adapter advertises:
+The adapter always advertises:
 
 - `read_context`
 - `retrieve_history`
@@ -85,6 +86,14 @@ The adapter advertises:
 - `list_connections`
 - `authorize_action`
 - `request_action`
+
+When the installed and enabled Memory engine actually exposes `memory.progressive-recall.v1`, the adapter additionally advertises:
+
+- `retrieve_history_progressive`
+
+The progressive operation is fail-closed and versioned. It accepts bounded `catalog`, `summary`, `detail`, and `source` depth requests, validates OS scope first, and delegates retrieval to Memory without persisting or copying Memory canonical state into OS. Source descent passes a prior Memory detail `evidence_ref` only after confirming that its evidence scope is visible from the bound OS scope. An operator request cannot use workspace evidence; a workspace may use only its own workspace evidence plus operator evidence already visible under Memory's established scope law.
+
+If Memory is absent, disabled, unsafe, or too old to support the progressive contract, OS does not advertise the operation. Direct attempts fail explicitly rather than falling back to guessed or flat recall. Existing `retrieve_history(query, scope)` behavior is unchanged for Brain/Gateway callers.
 
 Capability discovery remains scoped by OS. Workspace-private capabilities are available only to their validated workspace scope.
 
@@ -134,7 +143,10 @@ scripts/test-ai-verse-host-adapter.py
 The acceptance path uses the maintained adapter rather than an inline CI-only host and verifies:
 
 - OS ownership-aware current context
-- real Memory recall
+- real legacy Memory recall
+- real progressive Memory catalog/summary/detail/source routing with exact-source evidence
+- missing/incompatible Memory progressive capability is not falsely advertised
+- progressive source evidence cannot widen OS scope
 - real Skills discovery
 - Brain runtime composition
 - harmless generation-pinned capability execution

@@ -19,6 +19,19 @@ For substantial work inside AI-Verse OS:
 9. Validate before handing output to another step or taking an external action.
 10. Write back only information that deserves to become durable state.
 
+### First-use and progressive onboarding rule
+
+An incomplete profile or intake must not block an ordinary useful request.
+
+- If the user already gave a real task, begin that task and treat it as onboarding evidence.
+- If this is a fresh start with no task yet, ask: **What would you like help with?**
+- Learn missing identity, work, preference, source, boundary, tool, and goal information only when it becomes relevant.
+- Reuse known context and already-filled intake answers instead of asking again.
+- Ask only when missing information blocks safety, scope, permission, external access, consequential action, strategic ownership, or correct routing.
+- Do not ask the user to choose Memory vs Data vs Skill vs Workspace or another internal architecture decision.
+- The seven-question intake remains available when the user explicitly wants a full/deep intake; it is not a prerequisite for first value.
+- Preserve resumability through the existing canonical operator/workspace state and `ai-verse-os-intake.md`; do not create a second onboarding store.
+
 When a scope is Brain-owned, raw OS goals, priorities, objectives, and other strategic sections are frozen provenance only. They must not be merged, summarized, or routed back into active current direction. The ownership-aware current-context resolver exposes only allowed OS operational state plus Brain direction refs; Brain unavailability never causes fallback to frozen OS strategy.
 
 Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.

@@ -20,6 +20,28 @@ Read:
 
 Do not hardcode a profession or force the work into a closed taxonomy.
 
+## Automatic safe organization path
+
+For runtime-driven internal organization, use the canonical OS owner primitive:
+
+```bash
+node scripts/workspace-owner.mjs ensure --root <os-root>
+```
+
+Pass one bounded JSON request on stdin. The caller may classify the opportunity, but OS owns the mutation and rechecks:
+
+- the scope is substantial enough to deserve isolation;
+- the boundary is clear;
+- privacy is not materially ambiguous;
+- no new permission, Connection, or credential is required;
+- no duplicate workspace already owns the scope.
+
+The operation creates only the minimum required workspace structure, uses conservative approval defaults, never creates Automations or permanent Bots, preserves unrelated workspaces, and records durable workspace-local provenance in `context/AUTO-ORGANIZATION.json`.
+
+For existing workspaces it performs only safe additive domain/source evolution that can be expressed without rewriting unsupported user-authored YAML. If an existing manifest uses a shape the owner primitive cannot safely edit, it preserves that syntax and reports the skipped additive field instead of guessing.
+
+A safe automatic create/evolve does not require a technical confirmation prompt. A materially ambiguous scope/privacy boundary or a new authority requirement returns a clarification/blocked result instead.
+
 ## Step 1 - determine whether a workspace is justified
 
 A workspace is appropriate when the scope has enough independent state, sources, decisions, knowledge, outputs, privacy, or lifecycle to benefit from isolation.

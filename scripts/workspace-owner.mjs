@@ -153,7 +153,162 @@ function parseScalar(raw) {
 }
 
 function topScalar(text, key) {
-  const re = new RegExp(`^${key.replace(/[.*+?^${ }()|[\\]\\]/g, '\\$&')}:\\s*(.+?)\\s*$`, 'm');
+  const re = new RegExp(`^${key}:\\s*(.+?)\\s*#!/usr/bin/env node
+
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const SCHEMA_VERSION = 1;
+const PROVENANCE_FILE = 'context/AUTO-ORGANIZATION.json';
+const ID_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
+function fail(message, code = 4) {
+  process.stderr.write(`workspace-owner: ${message}\n`);
+  process.exit(code);
+}
+
+function parseArgs(argv) {
+  const args = [...argv];
+  const command = args.shift() || 'ensure';
+  let root = process.cwd();
+  while (args.length) {
+    const token = args.shift();
+    if (token === '--root' || token === '--dir') {
+      const value = args.shift();
+      if (!value) fail(`${token} requires a path`, 2);
+      root = path.resolve(value);
+    } else {
+      fail(`unknown option: ${token}`, 2);
+    }
+  }
+  if (command !== 'ensure') fail(`unknown command: ${command}`, 2);
+  return { root: path.resolve(root) };
+}
+
+async function readInput() {
+  let text = '';
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) text += chunk;
+  if (!text.trim()) throw new Error('ensure requires one JSON request on stdin');
+  let value;
+  try { value = JSON.parse(text); } catch (error) { throw new Error(`request is invalid JSON: ${error.message}`); }
+  return value;
+}
+
+function isInside(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+function assertPlainDirectory(target, expected, label) {
+  if (!fs.existsSync(target)) throw new Error(`${label} does not exist`);
+  if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`${label} must not be a symlink`);
+  const real = fs.realpathSync(target);
+  if (path.relative(real, expected) !== '' || path.relative(expected, real) !== '') throw new Error(`${label} is not its expected physical slot`);
+  if (!fs.statSync(real).isDirectory()) throw new Error(`${label} is not a directory`);
+  return real;
+}
+
+function safeFile(target, boundary, label) {
+  if (!fs.existsSync(target)) return null;
+  if (fs.lstatSync(target).isSymbolicLink()) throw new Error(`${label} must not be a symlink`);
+  const real = fs.realpathSync(target);
+  if (!isInside(real, boundary) || !fs.statSync(real).isFile()) throw new Error(`${label} escapes its scope boundary`);
+  return real;
+}
+
+function rejectUnknownKeys(value, allowed, label) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`${label} contains unsupported field ${key}`);
+}
+
+function cleanString(value, label, { required = false, max = 2000 } = {}) {
+  if (value == null || value === '') {
+    if (required) throw new Error(`${label} is required`);
+    return null;
+  }
+  if (typeof value !== 'string') throw new Error(`${label} must be a string`);
+  const out = value.trim();
+  if (required && !out) throw new Error(`${label} is required`);
+  if (out.length > max) throw new Error(`${label} exceeds ${max} characters`);
+  return out || null;
+}
+
+function cleanStringArray(value, label, maxItems = 32) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  if (value.length > maxItems) throw new Error(`${label} exceeds ${maxItems} items`);
+  const out = value.map((item, index) => cleanString(item, `${label}[${index}]`, { required: true, max: 500 }));
+  return [...new Set(out)];
+}
+
+function slugify(value) {
+  return value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 128).replace(/-+$/g, '');
+}
+
+function normalizedName(value) {
+  return value.toLowerCase().normalize('NFKC').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function containsSecretLike(value) {
+  const text = JSON.stringify(value);
+  return /(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|private[_ -]?key)\s*[:=]\s*["']?[^\s"',}]{6,}/i.test(text)
+    || /\bsk-[A-Za-z0-9_-]{20,}\b/.test(text);
+}
+
+function normalizeRequest(raw) {
+  rejectUnknownKeys(raw, new Set(['workspace', 'evidence', 'authority', 'provenance']), 'request');
+  rejectUnknownKeys(raw.workspace, new Set(['id', 'name', 'type', 'purpose', 'domains', 'canonical_sources']), 'workspace');
+  rejectUnknownKeys(raw.evidence, new Set(['substantial_scope', 'boundary_clear', 'reason']), 'evidence');
+  rejectUnknownKeys(raw.authority, new Set(['permission_expansion', 'privacy_ambiguous', 'new_connection', 'new_credential']), 'authority');
+  rejectUnknownKeys(raw.provenance ?? {}, new Set(['trigger_ref', 'classifier', 'source']), 'provenance');
+
+  const name = cleanString(raw.workspace.name, 'workspace.name', { required: true, max: 200 });
+  const id = cleanString(raw.workspace.id, 'workspace.id', { max: 128 }) || slugify(name);
+  if (!id || !ID_RE.test(id)) throw new Error('workspace.id cannot be derived safely; provide a lowercase slug');
+  const type = cleanString(raw.workspace.type, 'workspace.type', { max: 100 }) || 'custom';
+  const purpose = cleanString(raw.workspace.purpose, 'workspace.purpose', { max: 1000 }) || `Isolate work for ${name}.`;
+  const domains = cleanStringArray(raw.workspace.domains, 'workspace.domains');
+  const canonicalSources = cleanStringArray(raw.workspace.canonical_sources, 'workspace.canonical_sources');
+  const reason = cleanString(raw.evidence.reason, 'evidence.reason', { required: true, max: 1000 });
+  const triggerRef = cleanString(raw.provenance?.trigger_ref, 'provenance.trigger_ref', { max: 300 });
+  const classifier = cleanString(raw.provenance?.classifier, 'provenance.classifier', { max: 200 });
+  const source = cleanString(raw.provenance?.source, 'provenance.source', { max: 300 });
+
+  const normalized = {
+    workspace: { id, name, type, purpose, domains, canonical_sources: canonicalSources },
+    evidence: {
+      substantial_scope: raw.evidence.substantial_scope === true,
+      boundary_clear: raw.evidence.boundary_clear === true,
+      reason,
+    },
+    authority: {
+      permission_expansion: raw.authority.permission_expansion === true,
+      privacy_ambiguous: raw.authority.privacy_ambiguous === true,
+      new_connection: raw.authority.new_connection === true,
+      new_credential: raw.authority.new_credential === true,
+    },
+    provenance: { trigger_ref: triggerRef, classifier, source },
+  };
+  if (containsSecretLike(normalized)) throw new Error('request appears to contain credential/secret material; workspace organization accepts references, not secrets');
+  return normalized;
+}
+
+function parseScalar(raw) {
+  const value = raw.trim();
+  if (!value) return '';
+  if (value.startsWith('"') || value.startsWith("'")) {
+    if (value.startsWith('"')) {
+      try { return JSON.parse(value); } catch { return value.slice(1, -1); }
+    }
+    return value.slice(1, -1).replace(/''/g, "'");
+  }
+  return value.replace(/\s+#.*$/, '').trim();
+}
+
+function topScalar(text, key) {
+, 'm');
   const match = text.match(re);
   return match ? parseScalar(match[1]) : null;
 }
@@ -367,6 +522,24 @@ function safelyEvolveManifest(entry, request) {
   return { changed, diagnostics };
 }
 
+function ensureOperationalContext(workspaceRoot, request, now) {
+  const contextDir = path.join(workspaceRoot, 'context');
+  if (fs.existsSync(contextDir)) {
+    if (fs.lstatSync(contextDir).isSymbolicLink() || !fs.statSync(contextDir).isDirectory()) {
+      throw new Error('workspace context path must be a real directory');
+    }
+    const real = fs.realpathSync(contextDir);
+    if (!isInside(real, workspaceRoot)) throw new Error('workspace context directory escapes workspace boundary');
+  } else {
+    fs.mkdirSync(contextDir, { recursive: true, mode: 0o700 });
+  }
+  const current = path.join(contextDir, 'CURRENT.md');
+  const existing = safeFile(current, workspaceRoot, 'workspace current context');
+  if (existing) return { changed: false, path: current };
+  atomicWrite(current, renderCurrent(request, now));
+  return { changed: true, path: current };
+}
+
 function createWorkspace(workspacesRoot, request, now) {
   const target = path.join(workspacesRoot, request.workspace.id);
   if (!isInside(target, workspacesRoot)) throw new Error('workspace path escapes workspaces root');
@@ -424,18 +597,21 @@ async function main() {
   let workspaceRoot;
   let state;
   let manifestEvolution = { changed: false, diagnostics: [] };
+  let contextEvolution = { changed: false, path: null };
   if (selected.entry) {
     workspaceRoot = selected.entry.root;
     request.workspace.id = selected.entry.id;
     state = 'existing';
     manifestEvolution = safelyEvolveManifest(selected.entry, request);
+    contextEvolution = ensureOperationalContext(workspaceRoot, request, now);
   } else {
     workspaceRoot = createWorkspace(workspacesRoot, request, now);
+    contextEvolution = { changed: true, path: path.join(workspaceRoot, 'context', 'CURRENT.md') };
     state = 'created';
   }
 
   const provenance = updateProvenance(workspaceRoot, request, selected.entry ? 'evolved' : 'created', now);
-  const changed = !selected.entry || manifestEvolution.changed || provenance.changed;
+  const changed = !selected.entry || manifestEvolution.changed || contextEvolution.changed || provenance.changed;
   if (selected.entry && changed) state = 'evolved';
 
   process.stdout.write(`${JSON.stringify({

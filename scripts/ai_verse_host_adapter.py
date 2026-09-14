@@ -324,7 +324,10 @@ class AIverseOSHost:
                 "OS current-context resolution failed: "
                 + (proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}")
             )
-        return _json_object(proc.stdout, "OS current-context resolver")
+        current = _json_object(proc.stdout, "OS current-context resolver")
+        if scope.startswith("workspace:") and self._data_available():
+            current["structured_data"] = self._data_orientation(scope)
+        return current
 
     def retrieve_history(self, query: str, scope: str) -> list[Dict[str, Any]]:
         scope = self._validate_scope(scope)
@@ -1035,6 +1038,10 @@ class AIverseOSHost:
             return self._request_memory_session_digest(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "skills.learning-candidate":
             return self._request_skills_learning_candidate(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "data.structured-truth":
+            return self._request_data_structured_truth(request, scope, parameters)
+        if action_class == "read_local" and operation in _DATA_READ_OPERATIONS:
+            return self._request_data_read(request, scope, operation, parameters)
 
         if action_class != "read_local" or operation != "capability.read_instructions":
             return {
@@ -1043,7 +1050,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture, memory.session_digest and skills.learning-candidate owner actions only"
+                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth and bounded Data reads only"
                     ),
                 },
             }
@@ -1135,31 +1142,37 @@ class AIverseOSHost:
         }
 
 
-    def query_data(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
-        if not isinstance(payload, Mapping):
-            raise AdapterError("query_data payload must be an object")
-        scope = self._validate_scope(payload.get("scope"))
+    def _run_data_host_request(
+        self,
+        scope: str,
+        operation: str,
+        payload: Mapping[str, Any],
+        reason: str,
+        *,
+        actor: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        scope = self._validate_scope(scope)
         if not scope.startswith("workspace:"):
-            raise AdapterError("query_data requires workspace:<id> scope")
-        operation = payload.get("operation")
-        data_payload = payload.get("payload")
-        if operation not in _DATA_READ_OPERATIONS:
-            raise AdapterError(f"query_data operation is not read-only/supported: {operation!r}")
-        if not isinstance(data_payload, Mapping):
-            raise AdapterError("query_data payload.payload must be an object")
+            raise AdapterError("Data owner requests require workspace:<id> scope")
         if not self._data_available():
             raise AdapterError("AI-Verse Data is unavailable")
-        request = {
+        if not isinstance(operation, str) or not operation.startswith("data."):
+            raise AdapterError("Data owner operation is invalid")
+        if not isinstance(payload, Mapping):
+            raise AdapterError("Data owner payload must be an object")
+        request: Dict[str, Any] = {
             "protocol": "ai-verse-os-data-host/1.0",
-            "request_id": f"brain-data-{uuid4()}",
+            "request_id": f"os-data-{uuid4()}",
             "operation": "request",
             "scope": scope,
             "data": {
                 "operation": operation,
-                "payload": dict(data_payload),
+                "payload": dict(payload),
             },
-            "reason": "Read-only structured-data query requested through the AI-Verse OS Brain host.",
+            "reason": reason,
         }
+        if actor is not None:
+            request["actor"] = dict(actor)
         envelope = _run_json(
             ["node", str(self.data_host_cli), "--root", str(self.root)],
             request,
@@ -1171,6 +1184,368 @@ class AIverseOSHost:
         if not isinstance(result, dict):
             raise AdapterError("OS Data host returned an invalid result")
         return result
+
+    @staticmethod
+    def _data_owner_result(host_result: Mapping[str, Any], operation: str) -> Dict[str, Any]:
+        if host_result.get("status") == "approval_required":
+            return {
+                "approval_required": True,
+                "permission": host_result.get("permission"),
+            }
+        if host_result.get("status") != "succeeded":
+            raise AdapterError(f"OS Data host did not succeed for {operation}")
+        owner = host_result.get("result")
+        if not isinstance(owner, Mapping) or owner.get("ok") is not True:
+            raise AdapterError(f"Data owner returned an invalid success envelope for {operation}")
+        result = owner.get("result")
+        if not isinstance(result, (dict, list)):
+            raise AdapterError(f"Data owner returned invalid result data for {operation}")
+        return dict(owner)
+
+    def _data_orientation(self, scope: str) -> Dict[str, Any]:
+        try:
+            listed_host = self._run_data_host_request(
+                scope,
+                "data.space.list",
+                {},
+                "Read bounded structured-data orientation for runtime context.",
+            )
+            listed = self._data_owner_result(listed_host, "data.space.list")
+            spaces = listed.get("result")
+            if not isinstance(spaces, list):
+                raise AdapterError("Data space list result is invalid")
+            output = []
+            total_schemas = 0
+            for space in spaces[:16]:
+                if not isinstance(space, Mapping) or not isinstance(space.get("spaceId"), str):
+                    continue
+                schemas_host = self._run_data_host_request(
+                    scope,
+                    "data.schema.list",
+                    {"spaceId": space["spaceId"]},
+                    "Read bounded structured-data schema orientation for runtime context.",
+                )
+                schemas_owner = self._data_owner_result(schemas_host, "data.schema.list")
+                schemas = schemas_owner.get("result")
+                if not isinstance(schemas, list):
+                    continue
+                remaining = max(0, 64 - total_schemas)
+                selected = [
+                    {
+                        "spaceId": row.get("spaceId"),
+                        "entity": row.get("entity"),
+                        "name": row.get("name"),
+                        "schemaVersion": row.get("schemaVersion"),
+                        "fieldCount": row.get("fieldCount"),
+                    }
+                    for row in schemas[:remaining]
+                    if isinstance(row, Mapping)
+                ]
+                total_schemas += len(selected)
+                output.append(
+                    {
+                        "spaceId": space.get("spaceId"),
+                        "name": space.get("name"),
+                        "schemas": selected,
+                    }
+                )
+                if total_schemas >= 64:
+                    break
+            return {"state": "available", "spaces": output}
+        except Exception as exc:
+            return {
+                "state": "unavailable",
+                "spaces": [],
+                "reason": str(exc)[:500],
+            }
+
+    @staticmethod
+    def _auto_data_key(candidate_id: str, suffix: str) -> str:
+        digest = hashlib.sha256(f"{candidate_id}:{suffix}".encode("utf-8")).hexdigest()
+        return f"auto-data:{digest}"
+
+    def _request_data_read(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        operation: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if operation not in _DATA_READ_OPERATIONS:
+            raise AdapterError(f"unsupported Data read operation: {operation}")
+        if not isinstance(parameters, Mapping):
+            raise AdapterError(f"{operation} parameters must be an object")
+        host_result = self._run_data_host_request(
+            scope,
+            operation,
+            parameters,
+            "Read canonical structured current truth through the Data owner.",
+        )
+        owner = self._data_owner_result(host_result, operation)
+        if owner.get("approval_required") is True:
+            return {
+                "status": "blocked",
+                "effect_occurred": False,
+                "result": {"reason": "Data read unexpectedly requires approval"},
+            }
+        return {
+            "status": "succeeded",
+            "effect_occurred": False,
+            "result": {"data": owner.get("result")},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "read_local",
+                "operation": operation,
+            },
+        }
+
+    def _request_data_structured_truth(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not scope.startswith("workspace:"):
+            raise AdapterError("data.structured-truth requires workspace scope")
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("data.structured-truth parameters must be an object")
+        if set(parameters) != {"candidate", "task_evidence"}:
+            raise AdapterError(
+                "data.structured-truth parameters must contain exactly candidate and task_evidence"
+            )
+        candidate = parameters.get("candidate")
+        task_evidence = parameters.get("task_evidence")
+        if not isinstance(candidate, Mapping):
+            raise AdapterError("data.structured-truth candidate must be an object")
+        if (
+            not isinstance(task_evidence, Mapping)
+            or set(task_evidence) != {"substantial_task"}
+            or not isinstance(task_evidence.get("substantial_task"), bool)
+        ):
+            raise AdapterError("data.structured-truth task_evidence must contain exactly substantial_task:boolean")
+
+        if self._extension_entry("ai-verse-brain") is None:
+            raise AdapterError("AI-Verse Brain is unavailable")
+        try:
+            from aiverse_brain.learning import admit_data_structure_candidate
+        except Exception as exc:
+            raise AdapterError(f"AI-Verse Brain Data-candidate gate is unavailable: {exc}") from exc
+
+        admission = admit_data_structure_candidate(
+            dict(candidate),
+            bound_scope=scope,
+            substantial_task=task_evidence["substantial_task"],
+        )
+        if not isinstance(admission, dict) or admission.get("state") not in {"admitted", "ignored"}:
+            raise AdapterError("Brain Data-candidate gate returned an invalid result")
+        if admission["state"] == "ignored":
+            return {
+                "status": "succeeded",
+                "effect_occurred": False,
+                "result": {"data_candidate": admission},
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request),
+                    "scope": scope,
+                    "action_class": "write_local_reversible",
+                    "operation": "data.structured-truth",
+                },
+            }
+
+        envelope = admission.get("envelope")
+        if not isinstance(envelope, Mapping):
+            raise AdapterError("Brain admitted Data candidate without an envelope")
+        candidate_id = envelope.get("candidate_id")
+        structure = envelope.get("structure")
+        match = envelope.get("match")
+        record = envelope.get("record")
+        if (
+            not isinstance(candidate_id, str)
+            or not isinstance(structure, Mapping)
+            or not isinstance(match, Mapping)
+            or not isinstance(record, Mapping)
+        ):
+            raise AdapterError("Brain admitted Data envelope is incomplete")
+        space = structure.get("space")
+        schema = structure.get("schema")
+        record_data = record.get("data")
+        if not isinstance(space, Mapping) or not isinstance(schema, Mapping) or not isinstance(record_data, Mapping):
+            raise AdapterError("Brain admitted Data structure/record is invalid")
+        space_id = schema.get("spaceId")
+        entity = schema.get("entity")
+        match_field = match.get("field")
+        if not all(isinstance(value, str) and value for value in (space_id, entity, match_field)):
+            raise AdapterError("Brain admitted Data identifiers are invalid")
+
+        actor = {"kind": "system", "id": "ai-verse-gateway"}
+        structure_payload = {
+            "idempotencyKey": self._auto_data_key(candidate_id, "structure"),
+            "space": dict(space),
+            "schema": dict(schema),
+            "reason": envelope.get("summary"),
+        }
+        structure_host = self._run_data_host_request(
+            scope,
+            "data.structure.ensure",
+            structure_payload,
+            "Safely ensure the Data structure admitted by Brain.",
+            actor=actor,
+        )
+        structure_owner = self._data_owner_result(structure_host, "data.structure.ensure")
+        if structure_owner.get("approval_required") is True:
+            return {
+                "status": "blocked",
+                "effect_occurred": False,
+                "result": {
+                    "data_candidate": admission,
+                    "reason": "Data structure owner requires approval",
+                },
+            }
+
+        query_host = self._run_data_host_request(
+            scope,
+            "data.query",
+            {
+                "spaceId": space_id,
+                "entity": entity,
+                "where": {
+                    "field": match_field,
+                    "op": "eq",
+                    "value": match.get("value"),
+                },
+                "limit": 2,
+            },
+            "Check the Data owner for an existing natural-key match before mutation.",
+        )
+        query_owner = self._data_owner_result(query_host, "data.query")
+        query_result = query_owner.get("result")
+        if not isinstance(query_result, Mapping) or not isinstance(query_result.get("items"), list):
+            raise AdapterError("Data duplicate-check query returned invalid result")
+        rows = query_result["items"]
+        if query_result.get("hasMore") is True or len(rows) > 1:
+            return {
+                "status": "blocked",
+                "effect_occurred": bool(
+                    isinstance(structure_owner.get("result"), Mapping)
+                    and structure_owner["result"].get("result", {}).get("changed")
+                ),
+                "result": {
+                    "data_candidate": admission,
+                    "structure": structure_owner.get("result"),
+                    "record": {
+                        "state": "ambiguous",
+                        "reason": "multiple canonical records match the admitted natural key",
+                    },
+                },
+            }
+
+        record_state = "existing"
+        record_owner: Optional[Dict[str, Any]] = None
+        changed = False
+        if len(rows) == 0:
+            create_host = self._run_data_host_request(
+                scope,
+                "data.record.create",
+                {
+                    "spaceId": space_id,
+                    "entity": entity,
+                    "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
+                    "data": dict(record_data),
+                },
+                "Create the admitted canonical structured current record.",
+                actor=actor,
+            )
+            record_owner = self._data_owner_result(create_host, "data.record.create")
+            if record_owner.get("approval_required") is True:
+                return {
+                    "status": "blocked",
+                    "effect_occurred": False,
+                    "result": {"data_candidate": admission, "reason": "Data record create requires approval"},
+                }
+            record_state = "created"
+            changed = True
+        else:
+            existing = rows[0]
+            if not isinstance(existing, Mapping) or not isinstance(existing.get("data"), Mapping):
+                raise AdapterError("Data duplicate-check row is invalid")
+            patch = {
+                key: value
+                for key, value in record_data.items()
+                if existing["data"].get(key) != value
+            }
+            if patch:
+                record_id = existing.get("recordId")
+                version = existing.get("version")
+                if not isinstance(record_id, str) or not isinstance(version, int):
+                    raise AdapterError("Data existing record identity/version is invalid")
+                update_host = self._run_data_host_request(
+                    scope,
+                    "data.record.update",
+                    {
+                        "spaceId": space_id,
+                        "entity": entity,
+                        "recordId": record_id,
+                        "expectedVersion": version,
+                        "idempotencyKey": self._auto_data_key(candidate_id, f"record-update:{record_id}:{version}"),
+                        "patch": patch,
+                    },
+                    "Update the exact existing structured record admitted by Brain.",
+                    actor=actor,
+                )
+                record_owner = self._data_owner_result(update_host, "data.record.update")
+                if record_owner.get("approval_required") is True:
+                    return {
+                        "status": "blocked",
+                        "effect_occurred": False,
+                        "result": {"data_candidate": admission, "reason": "Data record update requires approval"},
+                    }
+                record_state = "updated"
+                changed = True
+
+        structure_result = structure_owner.get("result")
+        structure_changed = bool(
+            isinstance(structure_result, Mapping)
+            and isinstance(structure_result.get("result"), Mapping)
+            and structure_result["result"].get("changed") is True
+        )
+        return {
+            "status": "succeeded",
+            "effect_occurred": bool(changed or structure_changed),
+            "result": {
+                "data_candidate": admission,
+                "structure": structure_result,
+                "record": {
+                    "state": record_state,
+                    "owner_result": None if record_owner is None else record_owner.get("result"),
+                },
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "data.structured-truth",
+                "space_id": space_id,
+                "entity": entity,
+                "match_field": match_field,
+            },
+        }
+
+    def query_data(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, Mapping):
+            raise AdapterError("query_data payload must be an object")
+        scope = self._validate_scope(payload.get("scope"))
+        operation = payload.get("operation")
+        data_payload = payload.get("payload")
+        if operation not in _DATA_READ_OPERATIONS:
+            raise AdapterError(f"query_data operation is not read-only/supported: {operation!r}")
+        if not isinstance(data_payload, Mapping):
+            raise AdapterError("query_data payload.payload must be an object")
+        return self._run_data_host_request(
+            scope,
+            operation,
+            data_payload,
+            "Read-only structured-data query requested through the AI-Verse OS Brain host.",
+        )
 
 
 # Backward-compatible import name for existing callers.  The implementation is

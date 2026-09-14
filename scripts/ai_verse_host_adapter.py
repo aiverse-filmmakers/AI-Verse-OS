@@ -1297,6 +1297,238 @@ class AIverseOSHost:
             },
         }
 
+    @staticmethod
+    def _permanent_bot_runtime(value: Any) -> Dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise AdapterError("bots.permanent runtime must be an object")
+        if any(key in value for key in ("api_key", "token", "authorization", "credential")):
+            raise AdapterError("bots.permanent runtime must not contain raw credentials")
+        adapter = value.get("adapter")
+        if adapter == "deterministic":
+            if set(value) != {"adapter"}:
+                raise AdapterError("deterministic bots.permanent runtime contains unsupported fields")
+            return {"adapter": "deterministic"}
+        if adapter != "openai-compatible":
+            raise AdapterError("bots.permanent runtime adapter is not supported")
+        allowed = {"adapter", "endpoint", "model", "api_key_env"}
+        extras = set(value) - allowed
+        if extras:
+            raise AdapterError(
+                "openai-compatible bots.permanent runtime contains unsupported fields: "
+                + ", ".join(sorted(extras))
+            )
+        endpoint = value.get("endpoint")
+        model = value.get("model")
+        if (
+            not isinstance(endpoint, str)
+            or not endpoint.startswith(("http://", "https://"))
+            or len(endpoint) > 2048
+            or any(ch.isspace() for ch in endpoint)
+        ):
+            raise AdapterError("bots.permanent runtime endpoint must be a bounded HTTP(S) URL")
+        if not isinstance(model, str) or not model.strip() or len(model.strip()) > 256:
+            raise AdapterError("bots.permanent runtime model is invalid")
+        result: Dict[str, Any] = {
+            "adapter": "openai-compatible",
+            "endpoint": endpoint,
+            "model": model.strip(),
+        }
+        handle = value.get("api_key_env")
+        if handle is not None:
+            if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", handle):
+                raise AdapterError("bots.permanent runtime api_key_env is invalid")
+            result["api_key_env"] = handle
+        return result
+
+    def _run_multiple_bots_create_durable(self, manifest: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = self._extension_entry("ai-verse-multiple-bots")
+        if entry is None:
+            raise AdapterError("AI-Verse Multiple Bots is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-multiple-bots engine")
+        source = (
+            'import { pathToFileURL } from "node:url";'
+            'let raw=""; for await (const chunk of process.stdin) raw += chunk;'
+            'const engine = await import(pathToFileURL(process.argv[1]).href);'
+            'if (typeof engine.createDurableBot !== "function") '
+            'throw new Error("Installed Multiple Bots does not support durable Bot creation");'
+            'const result = await engine.createDurableBot(JSON.parse(raw));'
+            'process.stdout.write(JSON.stringify(result));'
+        )
+        return _run_json(
+            ["node", "--input-type=module", "--eval", source, str(engine)],
+            manifest,
+            "Multiple Bots durable Bot owner",
+        )
+
+    def _request_permanent_bot(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("bots.permanent parameters must be an object")
+        allowed = {
+            "name",
+            "role_title",
+            "mission",
+            "skill_refs",
+            "runtime",
+            "consent",
+            "provenance",
+        }
+        extras = set(parameters) - allowed
+        missing = {"name", "role_title", "mission", "runtime", "consent", "provenance"} - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "bots.permanent parameters have invalid fields: "
+                + ", ".join(sorted(extras | missing))
+            )
+
+        consent = parameters.get("consent")
+        if not isinstance(consent, Mapping):
+            raise AdapterError("bots.permanent requires trusted explicit consent")
+        mode = consent.get("mode")
+        expected_keys = {"explicit", "mode", "user_message_digest"}
+        if mode == "affirmative_to_recommendation":
+            expected_keys.add("recommendation_message_digest")
+        if set(consent) != expected_keys:
+            raise AdapterError("bots.permanent consent shape is invalid")
+        if consent.get("explicit") is not True or mode not in {
+            "direct_request",
+            "affirmative_to_recommendation",
+        }:
+            raise AdapterError("bots.permanent requires explicit user consent")
+        digest_pattern = r"^sha256:[a-f0-9]{64}$"
+        if not isinstance(consent.get("user_message_digest"), str) or not re.fullmatch(
+            digest_pattern, consent["user_message_digest"]
+        ):
+            raise AdapterError("bots.permanent user consent digest is invalid")
+        if mode == "affirmative_to_recommendation" and (
+            not isinstance(consent.get("recommendation_message_digest"), str)
+            or not re.fullmatch(digest_pattern, consent["recommendation_message_digest"])
+        ):
+            raise AdapterError("bots.permanent recommendation digest is invalid")
+
+        provenance = parameters.get("provenance")
+        if not isinstance(provenance, Mapping) or set(provenance) != {"run_id", "session_id"}:
+            raise AdapterError("bots.permanent provenance must contain exactly run_id and session_id")
+        run_id = provenance.get("run_id")
+        session_id = provenance.get("session_id")
+        if (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", run_id)
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", session_id)
+        ):
+            raise AdapterError("bots.permanent trusted provenance IDs are invalid")
+
+        name = parameters.get("name")
+        role_title = parameters.get("role_title")
+        mission = parameters.get("mission")
+        for label, value, maximum in (
+            ("name", name, 160),
+            ("role_title", role_title, 160),
+            ("mission", mission, 2000),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+                raise AdapterError(f"bots.permanent {label} is invalid")
+
+        skill_refs = parameters.get("skill_refs", [])
+        if (
+            not isinstance(skill_refs, list)
+            or len(skill_refs) > 12
+            or any(not isinstance(item, str) or not item.startswith("aiverse-skills:") for item in skill_refs)
+        ):
+            raise AdapterError("bots.permanent skill_refs are invalid")
+
+        runtime = self._permanent_bot_runtime(parameters.get("runtime"))
+        unique_skill_refs = list(dict.fromkeys(skill_refs))
+        for skill_ref in unique_skill_refs:
+            self._pinned_selection(scope, skill_ref)
+        stable_name = name.strip()
+        identity_digest = hashlib.sha256(
+            (scope + "\0" + stable_name.casefold()).encode("utf-8")
+        ).hexdigest()[:24]
+        bot_id = "bot_durable_" + identity_digest
+        bot_scope: Dict[str, Any] = {"type": "operator"}
+        if scope.startswith("workspace:"):
+            bot_scope = {
+                "type": "workspace",
+                "workspace_id": scope.split(":", 1)[1],
+            }
+        manifest = {
+            "schema_version": "1.0",
+            "id": bot_id,
+            "name": stable_name,
+            "kind": "durable",
+            "status": "active",
+            "role": {
+                "title": role_title.strip(),
+                "mission": mission.strip(),
+            },
+            "runtime": runtime,
+            "execution": {"environment_policy": "shared_workspace"},
+            "scope": bot_scope,
+            "capabilities": {
+                "skill_refs": unique_skill_refs,
+            },
+            "permissions": {
+                "policy_ref": "default-bot",
+                "allowed_peers": [],
+                "allowed_tools": [],
+                "allowed_connections": [],
+                "can_create_workers": False,
+                "can_handoff": False,
+            },
+            "coordination": {
+                "default_mode": "direct",
+                "max_parallel_workers": 0,
+                "max_hops": 0,
+            },
+            "lifecycle": {
+                "created_via": "gateway_explicit_consent",
+                "consent": dict(consent),
+                "provenance": {
+                    "gateway_run_id": run_id,
+                    "gateway_session_id": session_id,
+                },
+            },
+        }
+        owner_result = self._run_multiple_bots_create_durable(manifest)
+        state = owner_result.get("state")
+        bot = owner_result.get("bot")
+        if state not in {"created", "existing"} or not isinstance(bot, Mapping):
+            raise AdapterError("Multiple Bots durable Bot owner returned an invalid result")
+        payload = bot.get("payload")
+        if (
+            bot.get("id") != bot_id
+            or not isinstance(payload, Mapping)
+            or payload.get("kind") != "durable"
+            or payload.get("status") != "active"
+        ):
+            raise AdapterError("Multiple Bots durable Bot owner returned inconsistent canonical state")
+
+        return {
+            "status": "succeeded",
+            "effect_occurred": state == "created",
+            "result": {
+                "permanent_bot": {
+                    "state": state,
+                    "bot": dict(bot),
+                    "consent_mode": mode,
+                }
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "modify_canonical_state",
+                "operation": "bots.permanent",
+                "owner": "ai-verse-multiple-bots",
+                "gateway_run_id": run_id,
+            },
+        }
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -1317,6 +1549,8 @@ class AIverseOSHost:
             return self._request_data_structured_truth(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "workers.temporary":
             return self._request_temporary_worker(request, scope, parameters)
+        if action_class == "modify_canonical_state" and operation == "bots.permanent":
+            return self._request_permanent_bot(request, scope, parameters)
         if action_class == "read_local" and operation in _DATA_READ_OPERATIONS:
             return self._request_data_read(request, scope, operation, parameters)
 
@@ -1327,7 +1561,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary and bounded Data reads only"
+                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent and bounded Data reads only"
                     ),
                 },
             }

@@ -727,7 +727,7 @@ def _respond(request: Mapping[str, Any], result: Any = None, error: Optional[str
         response["result"] = result
     else:
         response["error"] = {"code": "AI_VERSE_OS_HOST_ERROR", "message": error}
-    sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.stdout.write(json.dumps(response, ensure_ascii=True, separators=(",", ":")) + "\n")
 
 
 def _parse_args() -> argparse.Namespace:

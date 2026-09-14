@@ -1,8 +1,10 @@
 # AI-Verse OS Universal Intake
 
-This is the source-of-truth onboarding intake for a new AI-Verse OS installation. It is intentionally profession-neutral. Run `/onboard` for a guided one-question-at-a-time conversation or fill this file directly.
+This is the resumable deep-intake worksheet for a new AI-Verse OS installation. It is intentionally profession-neutral. It is **optional for normal first use**: a new user may start with a real request immediately and AI-Verse should learn missing context progressively. Use this file when a deliberate full intake is wanted, or let `/onboard` fill relevant answers over time.
 
-**Hard cap: 7 primary questions.** Follow-up clarification is allowed only when an answer is too ambiguous to route safely.
+Unanswered placeholders are valid during normal use and must not block unrelated useful work. Reuse answers already present here instead of asking them again.
+
+**Hard cap for a deliberate full intake: 7 primary questions.** Follow-up clarification is allowed only when an answer is too ambiguous to route safely.
 
 ## Q1 - Who are you and what roles or areas of responsibility matter to this AI-Verse OS?
 
@@ -62,4 +64,4 @@ Include approval requirements, privacy boundaries, regulated/high-stakes constra
 [Your answer here]
 ```
 
-When complete, run `/onboard`. The skill should create the minimum useful operator state, connection registry, and workspace structure without hardcoding a profession.
+A full intake may be completed with `/onboard`, but completion is not required before useful work. The skill should create or refresh only the operator state, connection routes, and workspace structure that real evidence justifies, without hardcoding a profession.

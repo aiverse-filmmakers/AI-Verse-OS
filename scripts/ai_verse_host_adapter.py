@@ -1420,6 +1420,12 @@ class AIverseOSHost:
                     "reason": "Data structure owner requires approval",
                 },
             }
+        structure_result = structure_owner.get("result")
+        structure_changed = bool(
+            isinstance(structure_result, Mapping)
+            and isinstance(structure_result.get("result"), Mapping)
+            and structure_result["result"].get("changed") is True
+        )
 
         try:
             query_host = self._run_data_host_request(
@@ -1494,7 +1500,7 @@ class AIverseOSHost:
             except AdapterError as exc:
                 return {
                     "status": "blocked",
-                    "effect_occurred": structure_changed if 'structure_changed' in locals() else True,
+                    "effect_occurred": structure_changed,
                     "result": {
                         "data_candidate": admission,
                         "structure": structure_owner.get("result"),
@@ -1542,7 +1548,7 @@ class AIverseOSHost:
                 except AdapterError as exc:
                     return {
                         "status": "blocked",
-                        "effect_occurred": structure_changed if 'structure_changed' in locals() else False,
+                        "effect_occurred": structure_changed,
                         "result": {
                             "data_candidate": admission,
                             "structure": structure_owner.get("result"),
@@ -1558,12 +1564,6 @@ class AIverseOSHost:
                 record_state = "updated"
                 changed = True
 
-        structure_result = structure_owner.get("result")
-        structure_changed = bool(
-            isinstance(structure_result, Mapping)
-            and isinstance(structure_result.get("result"), Mapping)
-            and structure_result["result"].get("changed") is True
-        )
         return {
             "status": "succeeded",
             "effect_occurred": bool(changed or structure_changed),

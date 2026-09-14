@@ -542,6 +542,60 @@ class AIverseOSHost:
             )
         return selection
 
+    def _request_memory_capture(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("memory.capture parameters must be an object")
+        entry = self._extension_entry("ai-verse-memory")
+        if entry is None:
+            raise AdapterError("AI-Verse Memory is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-memory engine")
+        memory = _load_module(engine, "_aiverse_os_host_memory_capture")
+        capture = getattr(memory, "capture_candidate", None)
+        if not callable(capture):
+            raise AdapterError("installed AI-Verse Memory does not support safe automatic capture")
+
+        candidate = dict(parameters)
+        requested_scope = candidate.get("scope")
+        requested_workspace = candidate.get("workspace")
+        if scope == "operator":
+            if requested_workspace not in {None, ""}:
+                raise AdapterError("operator-scoped memory.capture cannot target a workspace")
+            if requested_scope not in {None, "", "operator", "global"}:
+                raise AdapterError("operator-scoped memory.capture has a conflicting candidate scope")
+            candidate["scope"] = "operator"
+            candidate.pop("workspace", None)
+        else:
+            workspace_id = scope.split(":", 1)[1]
+            if requested_workspace not in {None, "", workspace_id}:
+                raise AdapterError("workspace memory.capture cannot target another workspace")
+            if requested_scope not in {None, "", scope}:
+                raise AdapterError("workspace memory.capture has a conflicting candidate scope")
+            candidate["workspace"] = workspace_id
+            candidate.pop("scope", None)
+
+        result = capture(candidate, root=self.root)
+        if not isinstance(result, dict):
+            raise AdapterError("AI-Verse Memory capture returned an invalid result")
+        state = result.get("state")
+        accepted = state in {"captured", "existing", "ignored"}
+        return {
+            "status": "succeeded" if accepted else "blocked",
+            "effect_occurred": bool(result.get("changed")),
+            "result": {"memory_capture": result},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "memory.capture",
+                "memory_id": result.get("memory_id"),
+            },
+        }
+
     def _request_workspace_ensure(
         self,
         request: Mapping[str, Any],
@@ -617,6 +671,8 @@ class AIverseOSHost:
 
         if action_class == "write_local_reversible" and operation == "workspace.ensure":
             return self._request_workspace_ensure(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "memory.capture":
+            return self._request_memory_capture(request, scope, parameters)
 
         if action_class != "read_local" or operation != "capability.read_instructions":
             return {
@@ -624,8 +680,8 @@ class AIverseOSHost:
                 "effect_occurred": False,
                 "result": {
                     "reason": (
-                        "supported adapter executes capability.read_instructions "
-                        "and the safe workspace.ensure owner action only"
+                        "supported adapter executes capability.read_instructions plus the safe "
+                        "workspace.ensure and memory.capture owner actions only"
                     ),
                 },
             }

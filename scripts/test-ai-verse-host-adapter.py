@@ -360,6 +360,73 @@ def main() -> int:
     assert replay_organization["state"] == "existing"
     assert replay_organization["changed"] is False
 
+    memory_request = {
+        "request_id": "automatic-memory-client-alpha",
+        "action_class": "write_local_reversible",
+        "scope": "workspace:client-alpha",
+        "operation": "memory.capture",
+        "parameters": {
+            "text": "Client Alpha delivery reviews were more effective when the notes stayed concise.",
+            "type": "lesson",
+            "importance": 4,
+            "confidence": 0.95,
+            "source": "gateway-run",
+            "why": "This historical pattern is likely to matter on later Client Alpha delivery work.",
+            "tags": "delivery,review",
+            "effect_id": "run:host-acceptance:memory-1",
+            "evidence_refs": ["run:host-acceptance", "workspace:client-alpha"],
+            "admission": {
+                "durable": True,
+                "historical": True,
+                "current_truth": False,
+                "contains_secret": False,
+                "strategic": False,
+                "permission_expansion": False,
+                "privacy_ambiguous": False,
+                "external_authority": False,
+            },
+        },
+        "idempotency_key": "automatic-memory-client-alpha",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Capture high-confidence durable historical evidence through the Memory owner.",
+        "request_fingerprint": hashlib.sha256(
+            b"automatic-memory-client-alpha"
+        ).hexdigest(),
+    }
+    memory_auth = direct_host.authorize_action(memory_request)
+    assert memory_auth["decision"] == "allow"
+    memory_result = direct_host.request_action(memory_request)
+    assert memory_result["status"] == "succeeded"
+    capture = memory_result["result"]["memory_capture"]
+    assert capture["state"] == "captured"
+    assert capture["scope"] == "workspace:client-alpha"
+    assert memory_result["effect_occurred"] is True
+
+    memory_replay = direct_host.request_action(memory_request)
+    assert memory_replay["status"] == "succeeded"
+    assert memory_replay["result"]["memory_capture"]["state"] == "existing"
+    assert memory_replay["effect_occurred"] is False
+
+    unsafe_memory = {
+        **memory_request,
+        "request_id": "automatic-memory-secret",
+        "idempotency_key": "automatic-memory-secret",
+        "parameters": {
+            **memory_request["parameters"],
+            "text": "API key = sk-abcdefghijklmnopqrstuvwxyz1234567890",
+            "effect_id": "run:host-acceptance:memory-secret",
+        },
+    }
+    unsafe_memory["request_fingerprint"] = hashlib.sha256(
+        b"automatic-memory-secret"
+    ).hexdigest()
+    unsafe_result = direct_host.request_action(unsafe_memory)
+    assert unsafe_result["status"] == "blocked"
+    assert unsafe_result["effect_occurred"] is False
+    assert unsafe_result["result"]["memory_capture"]["state"] == "blocked"
+
     cross_scope = dict(workspace_request)
     cross_scope["scope"] = "workspace:client-alpha"
     cross_scope["parameters"] = {

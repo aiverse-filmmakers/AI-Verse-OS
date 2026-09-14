@@ -33,6 +33,15 @@ operation: workspace.ensure
 
 The adapter does not implement workspace ownership itself. It delegates to OS `scripts/workspace-owner.mjs`, which rechecks substantial scope, boundary clarity, privacy ambiguity, duplicate identity, and authority expansion before any mutation. Workspace-scoped calls may only evolve their already-bound workspace.
 
+The same owner-routed boundary supports safe historical Memory capture:
+
+```text
+action_class: write_local_reversible
+operation: memory.capture
+```
+
+OS does not decide what Memory may persist. It binds the candidate to the current action scope and delegates to the installed Memory owner's `capture_candidate` gate. Memory then admits or rejects the historical candidate using its canonical provenance, idempotency, containment and safety rules. Cross-workspace capture is rejected before owner invocation.
+
 ## Create a Brain host configuration
 
 From an AI-Verse OS checkout with Memory installed and an external Skills installation:

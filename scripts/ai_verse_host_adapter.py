@@ -1384,14 +1384,33 @@ class AIverseOSHost:
             "schema": dict(schema),
             "reason": envelope.get("summary"),
         }
-        structure_host = self._run_data_host_request(
-            scope,
-            "data.structure.ensure",
-            structure_payload,
-            "Safely ensure the Data structure admitted by Brain.",
-            actor=actor,
-        )
-        structure_owner = self._data_owner_result(structure_host, "data.structure.ensure")
+        try:
+            structure_host = self._run_data_host_request(
+                scope,
+                "data.structure.ensure",
+                structure_payload,
+                "Safely ensure the Data structure admitted by Brain.",
+                actor=actor,
+            )
+            structure_owner = self._data_owner_result(structure_host, "data.structure.ensure")
+        except AdapterError as exc:
+            return {
+                "status": "blocked",
+                "effect_occurred": False,
+                "result": {
+                    "data_candidate": admission,
+                    "record": {
+                        "state": "not_mutated",
+                        "reason": str(exc)[:1000],
+                    },
+                },
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request),
+                    "scope": scope,
+                    "action_class": "write_local_reversible",
+                    "operation": "data.structured-truth",
+                },
+            }
         if structure_owner.get("approval_required") is True:
             return {
                 "status": "blocked",
@@ -1402,22 +1421,37 @@ class AIverseOSHost:
                 },
             }
 
-        query_host = self._run_data_host_request(
-            scope,
-            "data.query",
-            {
-                "spaceId": space_id,
-                "entity": entity,
-                "where": {
-                    "field": match_field,
-                    "op": "eq",
-                    "value": match.get("value"),
+        try:
+            query_host = self._run_data_host_request(
+                scope,
+                "data.query",
+                {
+                    "spaceId": space_id,
+                    "entity": entity,
+                    "where": {
+                        "field": match_field,
+                        "op": "eq",
+                        "value": match.get("value"),
+                    },
+                    "limit": 2,
                 },
-                "limit": 2,
-            },
-            "Check the Data owner for an existing natural-key match before mutation.",
-        )
-        query_owner = self._data_owner_result(query_host, "data.query")
+                "Check the Data owner for an existing natural-key match before mutation.",
+            )
+            query_owner = self._data_owner_result(query_host, "data.query")
+        except AdapterError as exc:
+            return {
+                "status": "blocked",
+                "effect_occurred": bool(
+                    isinstance(structure_owner.get("result"), Mapping)
+                    and isinstance(structure_owner["result"].get("result"), Mapping)
+                    and structure_owner["result"]["result"].get("changed") is True
+                ),
+                "result": {
+                    "data_candidate": admission,
+                    "structure": structure_owner.get("result"),
+                    "record": {"state": "not_mutated", "reason": str(exc)[:1000]},
+                },
+            }
         query_result = query_owner.get("result")
         if not isinstance(query_result, Mapping) or not isinstance(query_result.get("items"), list):
             raise AdapterError("Data duplicate-check query returned invalid result")
@@ -1443,19 +1477,30 @@ class AIverseOSHost:
         record_owner: Optional[Dict[str, Any]] = None
         changed = False
         if len(rows) == 0:
-            create_host = self._run_data_host_request(
-                scope,
-                "data.record.create",
-                {
-                    "spaceId": space_id,
-                    "entity": entity,
-                    "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
-                    "data": dict(record_data),
-                },
-                "Create the admitted canonical structured current record.",
-                actor=actor,
-            )
-            record_owner = self._data_owner_result(create_host, "data.record.create")
+            try:
+                create_host = self._run_data_host_request(
+                    scope,
+                    "data.record.create",
+                    {
+                        "spaceId": space_id,
+                        "entity": entity,
+                        "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
+                        "data": dict(record_data),
+                    },
+                    "Create the admitted canonical structured current record.",
+                    actor=actor,
+                )
+                record_owner = self._data_owner_result(create_host, "data.record.create")
+            except AdapterError as exc:
+                return {
+                    "status": "blocked",
+                    "effect_occurred": structure_changed if 'structure_changed' in locals() else True,
+                    "result": {
+                        "data_candidate": admission,
+                        "structure": structure_owner.get("result"),
+                        "record": {"state": "not_mutated", "reason": str(exc)[:1000]},
+                    },
+                }
             if record_owner.get("approval_required") is True:
                 return {
                     "status": "blocked",
@@ -1478,21 +1523,32 @@ class AIverseOSHost:
                 version = existing.get("version")
                 if not isinstance(record_id, str) or not isinstance(version, int):
                     raise AdapterError("Data existing record identity/version is invalid")
-                update_host = self._run_data_host_request(
-                    scope,
-                    "data.record.update",
-                    {
-                        "spaceId": space_id,
-                        "entity": entity,
-                        "recordId": record_id,
-                        "expectedVersion": version,
-                        "idempotencyKey": self._auto_data_key(candidate_id, f"record-update:{record_id}:{version}"),
-                        "patch": patch,
-                    },
-                    "Update the exact existing structured record admitted by Brain.",
-                    actor=actor,
-                )
-                record_owner = self._data_owner_result(update_host, "data.record.update")
+                try:
+                    update_host = self._run_data_host_request(
+                        scope,
+                        "data.record.update",
+                        {
+                            "spaceId": space_id,
+                            "entity": entity,
+                            "recordId": record_id,
+                            "expectedVersion": version,
+                            "idempotencyKey": self._auto_data_key(candidate_id, f"record-update:{record_id}:{version}"),
+                            "patch": patch,
+                        },
+                        "Update the exact existing structured record admitted by Brain.",
+                        actor=actor,
+                    )
+                    record_owner = self._data_owner_result(update_host, "data.record.update")
+                except AdapterError as exc:
+                    return {
+                        "status": "blocked",
+                        "effect_occurred": structure_changed if 'structure_changed' in locals() else False,
+                        "result": {
+                            "data_candidate": admission,
+                            "structure": structure_owner.get("result"),
+                            "record": {"state": "not_mutated", "reason": str(exc)[:1000]},
+                        },
+                    }
                 if record_owner.get("approval_required") is True:
                     return {
                         "status": "blocked",

@@ -534,6 +534,121 @@ def main() -> int:
     assert unsafe_result["effect_occurred"] is False
     assert unsafe_result["result"]["memory_capture"]["state"] == "blocked"
 
+    captured_permanent_bots = []
+
+    def fake_create_durable_bot(manifest):
+        captured_permanent_bots.append(dict(manifest))
+        return {
+            "state": "created",
+            "bot": {
+                "id": manifest["id"],
+                "kind": "bot",
+                "workspace_id": manifest["scope"].get("workspace_id"),
+                "payload": dict(manifest),
+            },
+        }
+
+    direct_host._run_multiple_bots_create_durable = fake_create_durable_bot
+    permanent_bot_request = {
+        "request_id": "explicit-permanent-bot-client-alpha",
+        "action_class": "modify_canonical_state",
+        "scope": "workspace:client-alpha",
+        "operation": "bots.permanent",
+        "parameters": {
+            "name": "Client Alpha Reviewer",
+            "role_title": "Delivery Reviewer",
+            "mission": "Review recurring Client Alpha delivery work inside the existing workspace.",
+            "skill_refs": [],
+            "runtime": {"adapter": "deterministic"},
+            "consent": {
+                "explicit": True,
+                "mode": "direct_request",
+                "user_message_digest": "sha256:" + hashlib.sha256(
+                    b"Create me a permanent Client Alpha review bot."
+                ).hexdigest(),
+            },
+            "provenance": {
+                "run_id": "run-permanent-bot-acceptance",
+                "session_id": "session-permanent-bot-acceptance",
+            },
+        },
+        "idempotency_key": "explicit-permanent-bot-client-alpha",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": False,
+        "reason": "The user explicitly requested a durable specialist.",
+    }
+    permanent_bot_request["request_fingerprint"] = adapter_module._fingerprint(
+        permanent_bot_request
+    )
+    assert direct_host.authorize_action(permanent_bot_request)["decision"] == "allow"
+    permanent_bot_result = direct_host.request_action(permanent_bot_request)
+    assert permanent_bot_result["status"] == "succeeded"
+    assert permanent_bot_result["effect_occurred"] is True
+    assert permanent_bot_result["result"]["permanent_bot"]["state"] == "created"
+    assert permanent_bot_result["result"]["permanent_bot"]["consent_mode"] == "direct_request"
+    assert permanent_bot_result["execution_binding"]["owner"] == "ai-verse-multiple-bots"
+    assert len(captured_permanent_bots) == 1
+    permanent_manifest = captured_permanent_bots[0]
+    assert permanent_manifest["kind"] == "durable"
+    assert permanent_manifest["scope"] == {
+        "type": "workspace",
+        "workspace_id": "client-alpha",
+    }
+    assert permanent_manifest["permissions"]["allowed_tools"] == []
+    assert permanent_manifest["permissions"]["allowed_connections"] == []
+    assert permanent_manifest["permissions"]["can_create_workers"] is False
+    assert permanent_manifest["permissions"]["can_handoff"] is False
+    assert permanent_manifest["lifecycle"]["consent"]["explicit"] is True
+
+    missing_consent = {
+        **permanent_bot_request,
+        "request_id": "permanent-bot-without-consent",
+        "idempotency_key": "permanent-bot-without-consent",
+        "parameters": {
+            **permanent_bot_request["parameters"],
+            "consent": {
+                "explicit": False,
+                "mode": "direct_request",
+                "user_message_digest": "sha256:" + hashlib.sha256(
+                    b"Maybe a dedicated reviewer could help."
+                ).hexdigest(),
+            },
+        },
+    }
+    missing_consent["request_fingerprint"] = adapter_module._fingerprint(missing_consent)
+    try:
+        direct_host.request_action(missing_consent)
+    except adapter_module.AdapterError as exc:
+        assert "explicit user consent" in str(exc)
+    else:
+        raise AssertionError("bots.permanent accepted missing explicit user consent")
+    assert len(captured_permanent_bots) == 1
+
+    forged_recommendation_consent = {
+        **permanent_bot_request,
+        "request_id": "permanent-bot-forged-recommendation-consent",
+        "idempotency_key": "permanent-bot-forged-recommendation-consent",
+        "parameters": {
+            **permanent_bot_request["parameters"],
+            "consent": {
+                "explicit": True,
+                "mode": "affirmative_to_recommendation",
+                "user_message_digest": "sha256:" + hashlib.sha256(b"yes").hexdigest(),
+            },
+        },
+    }
+    forged_recommendation_consent["request_fingerprint"] = adapter_module._fingerprint(
+        forged_recommendation_consent
+    )
+    try:
+        direct_host.request_action(forged_recommendation_consent)
+    except adapter_module.AdapterError as exc:
+        assert "consent shape" in str(exc)
+    else:
+        raise AssertionError("bots.permanent accepted recommendation consent without recommendation evidence")
+    assert len(captured_permanent_bots) == 1
+
     learning_request = {
         "request_id": "automatic-skill-learning-client-alpha",
         "action_class": "write_local_reversible",

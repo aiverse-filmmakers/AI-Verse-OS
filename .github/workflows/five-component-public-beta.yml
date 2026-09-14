@@ -22,10 +22,10 @@ jobs:
           - data-brain-skills-memory
           - skills-data-memory-brain
     env:
-      BRAIN_SHA: bef8261ad35d126d29aeff5d496f46904125b7b6
+      BRAIN_SHA: 16c0b7ea32fcb4759cfb8368876b6985016eab68
       MEMORY_SHA: f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
       SKILLS_SHA: 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
-      DATA_SHA: 189b13264ab86115d2f21fee3ba8cd5a8dac6581
+      DATA_SHA: 579dae596a1c929bbc0e900541d29742c18b875e
 
     steps:
       - name: Checkout OS under test
@@ -180,6 +180,166 @@ jobs:
           call_data '{"protocol":"ai-verse-os-data-host/1.0","request_id":"pb-space","operation":"request","scope":"workspace:alpha","reason":"Create acceptance space.","data":{"operation":"data.space.create","payload":{"spaceId":"acceptance","name":"Acceptance","authority":"local_canonical"}}}'
           call_data '{"protocol":"ai-verse-os-data-host/1.0","request_id":"pb-schema","operation":"request","scope":"workspace:alpha","reason":"Create acceptance schema.","data":{"operation":"data.schema.create","payload":{"spaceId":"acceptance","entity":"items","name":"Items","fields":{"title":{"type":"string","required":true}}}}}'
           call_data '{"protocol":"ai-verse-os-data-host/1.0","request_id":"pb-record","operation":"request","scope":"workspace:alpha","reason":"Create acceptance record.","data":{"operation":"data.record.create","payload":{"spaceId":"acceptance","entity":"items","idempotencyKey":"public-beta:create","data":{"title":"public-beta-data-marker"}}}}'
+
+      - name: Prove automatic structured Data emergence and later reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"])
+          adapter_path = root / "scripts" / "ai_verse_host_adapter.py"
+          spec = importlib.util.spec_from_file_location("automatic_data_acceptance", adapter_path)
+          adapter = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules["automatic_data_acceptance"] = adapter
+          spec.loader.exec_module(adapter)
+          host = adapter.AIverseOSHost(
+              root,
+              Path(os.environ["RUNNER_TEMP"]) / "aiverse-skills-root",
+              None,
+              Path(os.environ["RUNNER_TEMP"]) / "no-local-skills",
+          )
+
+          def action(candidate_id, name, *, status_field=None):
+              fields = {
+                  "email": {"type": "string", "required": True},
+                  "name": {"type": "string"},
+                  "status": {
+                      "type": "enum",
+                      "values": ["lead", "active", "inactive"],
+                      "default": "lead",
+                  },
+              }
+              if status_field is not None:
+                  fields["status"] = status_field
+              request = {
+                  "request_id": candidate_id,
+                  "action_class": "write_local_reversible",
+                  "scope": "workspace:alpha",
+                  "operation": "data.structured-truth",
+                  "parameters": {
+                      "candidate": {
+                          "candidate_id": candidate_id,
+                          "scope": "workspace:alpha",
+                          "suggested_owner": "data",
+                          "summary": "Repeated Client Alpha contact state is structured current truth.",
+                          "evidence_refs": [f"run:{candidate_id}", "session:data-acceptance"],
+                          "confidence": 0.95,
+                          "created_at": "2026-09-14T15:10:00Z",
+                          "repeated_evidence": True,
+                          "current_truth": True,
+                          "structured_operational": True,
+                          "contains_secret": False,
+                          "privacy_ambiguous": False,
+                          "permission_expansion": False,
+                          "destructive": False,
+                          "structure": {
+                              "space": {
+                                  "spaceId": "crm",
+                                  "name": "CRM",
+                                  "authority": "local_canonical",
+                              },
+                              "schema": {
+                                  "spaceId": "crm",
+                                  "entity": "contacts",
+                                  "name": "Contacts",
+                                  "fields": fields,
+                              },
+                          },
+                          "match": {"field": "email", "value": "alice@example.test"},
+                          "record": {
+                              "data": {
+                                  "email": "alice@example.test",
+                                  "name": name,
+                                  "status": "active",
+                              },
+                          },
+                      },
+                      "task_evidence": {"substantial_task": True},
+                  },
+                  "idempotency_key": candidate_id,
+                  "in_scope": True,
+                  "within_budget": True,
+                  "reversible": True,
+                  "reason": "Automatically organize repeated structured current truth.",
+              }
+              request["request_fingerprint"] = adapter._fingerprint(request)
+              assert host.authorize_action(request)["decision"] == "allow"
+              return host.request_action(request)
+
+          created = action("data-acceptance-create", "Alice")
+          assert created["status"] == "succeeded", created
+          assert created["effect_occurred"] is True
+          assert created["result"]["record"]["state"] == "created"
+
+          orientation = host.read_context("workspace:alpha")["structured_data"]
+          assert orientation["state"] == "available"
+          crm = next(space for space in orientation["spaces"] if space["spaceId"] == "crm")
+          assert any(schema["entity"] == "contacts" for schema in crm["schemas"])
+
+          updated = action("data-acceptance-update", "Alice Updated")
+          assert updated["status"] == "succeeded", updated
+          assert updated["result"]["record"]["state"] == "updated"
+
+          existing = action("data-acceptance-existing", "Alice Updated")
+          assert existing["status"] == "succeeded", existing
+          assert existing["effect_occurred"] is False
+          assert existing["result"]["record"]["state"] == "existing"
+
+          read_request = {
+              "request_id": "data-acceptance-read",
+              "action_class": "read_local",
+              "scope": "workspace:alpha",
+              "operation": "data.query",
+              "parameters": {
+                  "spaceId": "crm",
+                  "entity": "contacts",
+                  "where": {
+                      "field": "email",
+                      "op": "eq",
+                      "value": "alice@example.test",
+                  },
+                  "limit": 2,
+              },
+              "idempotency_key": "data-acceptance-read",
+              "in_scope": True,
+              "within_budget": True,
+              "reversible": False,
+              "reason": "Read canonical structured current truth.",
+          }
+          read_request["request_fingerprint"] = adapter._fingerprint(read_request)
+          answer = host.request_action(read_request)
+          assert answer["status"] == "succeeded"
+          rows = answer["result"]["data"]["items"]
+          assert len(rows) == 1
+          assert rows[0]["data"]["name"] == "Alice Updated"
+          assert rows[0]["version"] == 2
+
+          blocked = action(
+              "data-acceptance-destructive-drift",
+              "Alice Updated",
+              status_field={
+                  "type": "enum",
+                  "values": ["active"],
+                  "default": "active",
+              },
+          )
+          assert blocked["status"] == "blocked", blocked
+          assert blocked["effect_occurred"] is False
+          assert blocked["result"]["record"]["state"] == "not_mutated"
+
+          after = host.request_action(read_request)
+          rows = after["result"]["data"]["items"]
+          assert len(rows) == 1
+          assert rows[0]["data"]["status"] == "active"
+          assert rows[0]["version"] == 2
+          print("Automatic structured Data emergence + reuse: PASS")
+          PY
 
       - name: Same host config discovers late Memory Skills Data and Connections metadata
         shell: bash

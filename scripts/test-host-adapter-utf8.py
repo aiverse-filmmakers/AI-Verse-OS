@@ -33,6 +33,18 @@ class HostAdapterUtf8Tests(unittest.TestCase):
         self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
         self.assertTrue(run.call_args.kwargs["text"])
 
+    def test_protocol_response_is_ascii_safe_json(self):
+        module = load_adapter()
+        import io
+        stream = io.StringIO()
+        request = {"protocol": module.PROTOCOL, "request_id": "utf8-output"}
+        with patch.object(module.sys, "stdout", stream):
+            module._respond(request, result={"current_context": "Direcție: continuă"})
+        raw = stream.getvalue()
+        raw.encode("ascii")
+        decoded = json.loads(raw)
+        self.assertEqual(decoded["result"]["current_context"], "Direcție: continuă")
+
     def test_current_context_resolver_uses_utf8(self):
         module = load_adapter()
         with tempfile.TemporaryDirectory() as tmp:

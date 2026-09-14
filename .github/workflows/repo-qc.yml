@@ -23,6 +23,9 @@ jobs:
       - name: Check architecture and adapter parity
         run: bash scripts/check-architecture.sh
 
+      - name: Test UTF-8 host adapter subprocess boundaries
+        run: python3 scripts/test-host-adapter-utf8.py
+
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 

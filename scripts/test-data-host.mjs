@@ -51,6 +51,7 @@ export function describe() {
     actorBinding: 'human:local-operator',
     authorizationBinding: 'local-operator',
     workspaceInitialization: 'explicit',
+    hostBoundActorRequests: true,
     dataProtocol: 'ai-verse-data/0.1'
   };
 }
@@ -330,6 +331,79 @@ test('Data host forwards explicit discovery and initialization through the engin
     const logged = calls(f);
     assert.equal(logged[0].operation, 'workspace.discover');
     assert.equal(logged[1].operation, 'workspace.init');
+  } finally {
+    f.cleanup();
+  }
+});
+
+
+test('Data host forwards trusted actor only through host-bound engine path', async () => {
+  const f = fixture();
+  try {
+    const result = await invokeDataHost({
+      osRoot: f.root,
+      request: request({
+        request_id: 'req-data-host-actor-bound',
+        actor: { kind: 'system', id: 'ai-verse-gateway' },
+        data: {
+          operation: 'data.structure.ensure',
+          payload: {
+            idempotencyKey: 'gateway:data:structure:1',
+            space: {
+              spaceId: 'crm',
+              name: 'CRM',
+              authority: 'local_canonical',
+            },
+            schema: {
+              spaceId: 'crm',
+              entity: 'contacts',
+              name: 'Contacts',
+              fields: {
+                email: { type: 'string', required: true },
+              },
+            },
+            reason: 'Repeated structured contact truth',
+          },
+        },
+      }),
+    });
+    assert.equal(result.status, 'succeeded');
+    assert.equal(result.effect_occurred, true);
+    assert.equal(result.permission.decision, 'allow');
+
+    const logged = calls(f);
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0].operation, 'data.host_bound_request');
+    assert.deepEqual(logged[0].actor, {
+      kind: 'system',
+      id: 'ai-verse-gateway',
+    });
+    assert.equal(logged[0].authorization.mode, 'host-bound');
+    assert.equal(logged[0].authorization.capabilityRefs.length, 1);
+    assert.match(
+      logged[0].authorization.capabilityRefs[0],
+      /^os-permission:[a-f0-9]{64}$/,
+    );
+    assert.equal(logged[0].data.operation, 'data.structure.ensure');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('Data host rejects malformed attribution before engine invocation', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(
+      () => invokeDataHost({
+        osRoot: f.root,
+        request: request({
+          request_id: 'req-data-host-bad-actor',
+          actor: { kind: 'root', id: '../admin' },
+        }),
+      }),
+      /actor\.kind is invalid/,
+    );
+    assert.deepEqual(calls(f), []);
   } finally {
     f.cleanup();
   }

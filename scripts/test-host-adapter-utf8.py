@@ -38,7 +38,6 @@ class HostAdapterUtf8Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             host = module.OSFourComponentHost.__new__(module.OSFourComponentHost)
             host.root = Path(tmp)
-            host.current_context_cli = host.root / "scripts" / "current-context.mjs"
             payload = {
                 "scope": "workspace:alpha",
                 "direction_owner": "os",

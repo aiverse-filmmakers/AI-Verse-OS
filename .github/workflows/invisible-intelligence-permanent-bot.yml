@@ -1,0 +1,211 @@
+name: Invisible Intelligence Permanent Bot Consent
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  permanent-bot-consent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MULTIPLE_BOTS_SHA: c600e2bc014351a61e1c0e2673fc63f5d5fa54ec
+
+    steps:
+      - name: Checkout AI-Verse OS under test
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build exact accepted Multiple Bots owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOTS="$RUNNER_TEMP/AI-Verse-Multiple-Bots"
+          git clone https://github.com/aiverse-filmmakers/AI-Verse-Multiple-Bots.git "$BOTS"
+          git -C "$BOTS" checkout --detach "$MULTIPLE_BOTS_SHA"
+          test "$(git -C "$BOTS" rev-parse HEAD)" = "$MULTIPLE_BOTS_SHA"
+          npm --prefix "$BOTS" install --no-audit --no-fund
+          npm --prefix "$BOTS" run build
+          printf '%s' "$BOTS" > "$RUNNER_TEMP/bots-repo.txt"
+
+      - name: Prepare active workspace and install owner extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p workspaces/alpha/context
+          cat > workspaces/alpha/WORKSPACE.yaml <<'YAML'
+          schema_version: "2.0"
+          id: alpha
+          name: Alpha
+          type: project
+          status: active
+          purpose: Permanent Bot consent acceptance.
+          domains: []
+          owners: []
+          success_criteria: []
+          canonical_sources: []
+          connections: []
+          current_context: context/CURRENT.md
+          YAML
+          cat > workspaces/alpha/context/CURRENT.md <<'MD'
+          # Current Workspace Context
+
+          ## Objective
+
+          Maintain Client Alpha delivery quality.
+
+          ## Current state
+
+          Recurring delivery review work is active.
+          MD
+
+          BOTS="$(cat "$RUNNER_TEMP/bots-repo.txt")"
+          BOTS="$BOTS" node --input-type=module <<'NODE'
+          const mod = await import(process.env.BOTS + "/dist/src/ai-verse-os-install.js");
+          const result = mod.installAiVerseOsExtension(process.cwd());
+          if (!["installed", "unchanged"].includes(result.status)) {
+            throw new Error("Multiple Bots extension installation failed");
+          }
+          NODE
+
+      - name: Prove explicit consent creates exactly one conservative durable Bot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          root = Path.cwd()
+          path = root / "scripts" / "ai_verse_host_adapter.py"
+          spec = importlib.util.spec_from_file_location("permanent_bot_consent_acceptance", path)
+          adapter = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules["permanent_bot_consent_acceptance"] = adapter
+          spec.loader.exec_module(adapter)
+
+          host = adapter.AIverseOSHost(root)
+          user_text = "Create me a permanent bot for Client Alpha delivery reviews."
+          request = {
+              "request_id": "req_permanent_bot_acceptance",
+              "action_class": "modify_canonical_state",
+              "scope": "workspace:alpha",
+              "operation": "bots.permanent",
+              "parameters": {
+                  "name": "Client Alpha Reviewer",
+                  "role_title": "Delivery Reviewer",
+                  "mission": "Review recurring Client Alpha delivery work inside the current workspace.",
+                  "skill_refs": [],
+                  "runtime": {"adapter": "deterministic"},
+                  "consent": {
+                      "explicit": True,
+                      "mode": "direct_request",
+                      "user_message_digest": "sha256:" + hashlib.sha256(user_text.encode("utf-8")).hexdigest(),
+                  },
+                  "provenance": {
+                      "run_id": "run_permanent_bot_acceptance",
+                      "session_id": "session_permanent_bot_acceptance",
+                  },
+              },
+              "idempotency_key": "permanent-bot-acceptance",
+              "in_scope": True,
+              "within_budget": True,
+              "reversible": False,
+              "reason": "The user explicitly requested this durable specialist.",
+          }
+          request["request_fingerprint"] = adapter._fingerprint(request)
+
+          permission = host.authorize_action(request)
+          assert permission["decision"] == "allow", permission
+          created = host.request_action(request)
+          assert created["status"] == "succeeded", created
+          assert created["effect_occurred"] is True
+          durable = created["result"]["permanent_bot"]
+          assert durable["state"] == "created"
+          assert durable["consent_mode"] == "direct_request"
+          assert created["execution_binding"]["owner"] == "ai-verse-multiple-bots"
+
+          replay = host.request_action(request)
+          assert replay["status"] == "succeeded"
+          assert replay["effect_occurred"] is False
+          assert replay["result"]["permanent_bot"]["state"] == "existing"
+
+          denied = {
+              **request,
+              "request_id": "req_permanent_bot_no_consent",
+              "idempotency_key": "permanent-bot-no-consent",
+              "parameters": {
+                  **request["parameters"],
+                  "name": "Unauthorized Reviewer",
+                  "consent": {
+                      "explicit": False,
+                      "mode": "direct_request",
+                      "user_message_digest": "sha256:" + hashlib.sha256(b"Maybe this could be useful.").hexdigest(),
+                  },
+              },
+          }
+          denied["request_fingerprint"] = adapter._fingerprint(denied)
+          try:
+              host.request_action(denied)
+          except adapter.AdapterError as exc:
+              assert "explicit user consent" in str(exc)
+          else:
+              raise AssertionError("Durable Bot was accepted without explicit consent")
+
+          print("OS explicit permanent Bot consent boundary: PASS")
+          PY
+
+      - name: Inspect canonical registry authority and persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOTS="$(cat "$RUNNER_TEMP/bots-repo.txt")"
+          BOTS="$BOTS" node --input-type=module <<'NODE'
+          import path from "node:path";
+          const { CoordinationStore } = await import(process.env.BOTS + "/dist/src/store.js");
+          const store = new CoordinationStore(path.resolve("runtime/ai-verse-bots/coordination.db"));
+          try {
+            const bots = store.listObjects("bot", "alpha");
+            const workers = store.listObjects("worker", "alpha");
+            if (bots.length !== 1) throw new Error("consent path did not create exactly one durable Bot");
+            if (workers.length !== 0) throw new Error("durable creation unexpectedly created a temporary Worker");
+            const bot = bots[0];
+            if (bot.payload.kind !== "durable" || bot.payload.status !== "active") {
+              throw new Error("canonical Bot is not active durable identity");
+            }
+            if (bot.payload.scope?.type !== "workspace" || bot.payload.scope?.workspace_id !== "alpha") {
+              throw new Error("durable Bot escaped requested workspace");
+            }
+            const permissions = bot.payload.permissions ?? {};
+            if (
+              JSON.stringify(permissions.allowed_tools) !== "[]" ||
+              JSON.stringify(permissions.allowed_connections) !== "[]" ||
+              JSON.stringify(permissions.allowed_peers) !== "[]" ||
+              permissions.can_create_workers !== false ||
+              permissions.can_handoff !== false
+            ) {
+              throw new Error("durable Bot silently gained authority");
+            }
+            if (bot.payload.lifecycle?.created_via !== "gateway_explicit_consent") {
+              throw new Error("durable Bot consent provenance is missing");
+            }
+            if (bot.payload.lifecycle?.consent?.mode !== "direct_request") {
+              throw new Error("durable Bot consent mode was not preserved");
+            }
+            console.log("Canonical durable Bot conservative authority and consent provenance: PASS");
+          } finally {
+            store.close();
+          }
+          NODE

@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MEMORY_COMMIT: f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
+      MEMORY_COMMIT: 1c6acf036d42937e57d94dfe48ac501727861653
       BRAIN_COMMIT: bef8261ad35d126d29aeff5d496f46904125b7b6
       SKILLS_COMMIT: 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
 

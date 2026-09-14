@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -303,6 +304,78 @@ def main() -> int:
         root.parent / "no-local-skills",
         after_pin=switch_generation,
     )
+
+    workspace_request = {
+        "request_id": "automatic-workspace-client-alpha",
+        "action_class": "write_local_reversible",
+        "scope": "operator",
+        "operation": "workspace.ensure",
+        "parameters": {
+            "workspace": {
+                "id": "client-alpha",
+                "name": "Client Alpha",
+                "type": "client",
+                "purpose": "Keep repeated Client Alpha work isolated.",
+                "domains": ["delivery"],
+                "canonical_sources": ["source://client-alpha"],
+            },
+            "evidence": {
+                "substantial_scope": True,
+                "boundary_clear": True,
+                "reason": "Repeated meaningful Client Alpha work established a clear durable scope.",
+            },
+            "authority": {
+                "permission_expansion": False,
+                "privacy_ambiguous": False,
+                "new_connection": False,
+                "new_credential": False,
+            },
+            "provenance": {
+                "trigger_ref": "run:host-acceptance",
+                "classifier": "gateway-runtime",
+                "source": "gateway",
+            },
+        },
+        "idempotency_key": "automatic-workspace-client-alpha",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Safe internal workspace organization requested through Gateway-compatible host action.",
+        "request_fingerprint": hashlib.sha256(
+            b"automatic-workspace-client-alpha"
+        ).hexdigest(),
+    }
+    workspace_auth = direct_host.authorize_action(workspace_request)
+    assert workspace_auth["decision"] == "allow"
+    workspace_result = direct_host.request_action(workspace_request)
+    assert workspace_result["status"] == "succeeded"
+    organization = workspace_result["result"]["workspace_organization"]
+    assert organization["state"] == "created"
+    assert organization["workspace"]["id"] == "client-alpha"
+    assert organization["user_confirmation_required"] is False
+    assert (root / "workspaces" / "client-alpha" / "WORKSPACE.yaml").is_file()
+
+    workspace_replay = direct_host.request_action(workspace_request)
+    replay_organization = workspace_replay["result"]["workspace_organization"]
+    assert replay_organization["state"] == "existing"
+    assert replay_organization["changed"] is False
+
+    cross_scope = dict(workspace_request)
+    cross_scope["scope"] = "workspace:client-alpha"
+    cross_scope["parameters"] = {
+        **workspace_request["parameters"],
+        "workspace": {
+            **workspace_request["parameters"]["workspace"],
+            "id": "other-client",
+            "name": "Other Client",
+        },
+    }
+    try:
+        direct_host.request_action(cross_scope)
+    except adapter_module.AdapterError:
+        pass
+    else:
+        raise AssertionError("workspace-scoped ensure escaped its bound workspace")
     for invalid_scope in ("workspace:film_team", "workspace:film.team"):
         try:
             direct_host.list_capabilities(invalid_scope)

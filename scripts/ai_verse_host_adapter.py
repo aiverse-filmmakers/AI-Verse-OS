@@ -200,6 +200,10 @@ class AIverseOSHost:
     def data_host_cli(self) -> Path:
         return self.root / "scripts" / "data-host.mjs"
 
+    @property
+    def workspace_owner_cli(self) -> Path:
+        return self.root / "scripts" / "workspace-owner.mjs"
+
     def _safe_repo_file(self, relative: Any, label: str) -> Path:
         if (
             not isinstance(relative, str)
@@ -536,6 +540,71 @@ class AIverseOSHost:
             )
         return selection
 
+    def _request_workspace_ensure(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("workspace.ensure parameters must be an object")
+        allowed = {"workspace", "evidence", "authority", "provenance"}
+        extras = set(parameters) - allowed
+        missing = {"workspace", "evidence", "authority"} - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "workspace.ensure parameters must contain workspace, evidence, authority "
+                "and optional provenance only"
+            )
+        workspace = parameters.get("workspace")
+        if not isinstance(workspace, Mapping):
+            raise AdapterError("workspace.ensure workspace must be an object")
+        requested_id = workspace.get("id")
+        if scope.startswith("workspace:"):
+            bound_id = scope.split(":", 1)[1]
+            if requested_id != bound_id:
+                raise AdapterError(
+                    "workspace-scoped workspace.ensure may only evolve its already-bound workspace"
+                )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(self.workspace_owner_cli),
+                "ensure",
+                "--root",
+                str(self.root),
+            ],
+            input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),
+            text=True,
+            capture_output=True,
+            shell=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            raise AdapterError(f"OS workspace owner failed: {detail}")
+        organized = _json_object(proc.stdout, "OS workspace owner")
+        state = organized.get("state")
+        accepted = state in {"created", "evolved", "existing", "ignored-trivial"}
+        return {
+            "status": "succeeded" if accepted else "blocked",
+            "effect_occurred": bool(organized.get("changed")),
+            "result": {
+                "workspace_organization": organized,
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "workspace.ensure",
+                "workspace_id": (
+                    organized.get("workspace", {}).get("id")
+                    if isinstance(organized.get("workspace"), dict)
+                    else None
+                ),
+            },
+        }
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -543,12 +612,19 @@ class AIverseOSHost:
         scope = self._validate_scope(request.get("scope"))
         operation = request.get("operation")
         parameters = request.get("parameters")
+
+        if action_class == "write_local_reversible" and operation == "workspace.ensure":
+            return self._request_workspace_ensure(request, scope, parameters)
+
         if action_class != "read_local" or operation != "capability.read_instructions":
             return {
                 "status": "failed",
                 "effect_occurred": False,
                 "result": {
-                    "reason": "supported adapter only executes the safe capability.read_instructions local action",
+                    "reason": (
+                        "supported adapter executes capability.read_instructions "
+                        "and the safe workspace.ensure owner action only"
+                    ),
                 },
             }
         if not isinstance(parameters, Mapping):
@@ -637,6 +713,7 @@ class AIverseOSHost:
             },
             "execution_binding": binding,
         }
+
 
     def query_data(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(payload, Mapping):

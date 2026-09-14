@@ -24,6 +24,15 @@ The adapter delegates each responsibility to its existing owner:
 
 The adapter does not create another goal store, capability registry, memory database, permission system, or scheduler.
 
+For Invisible Intelligence workspace organization, the same generic action boundary also supports one owner-routed internal action:
+
+```text
+action_class: write_local_reversible
+operation: workspace.ensure
+```
+
+The adapter does not implement workspace ownership itself. It delegates to OS `scripts/workspace-owner.mjs`, which rechecks substantial scope, boundary clarity, privacy ambiguity, duplicate identity, and authority expansion before any mutation. Workspace-scoped calls may only evolve their already-bound workspace.
+
 ## Create a Brain host configuration
 
 From an AI-Verse OS checkout with Memory installed and an external Skills installation:

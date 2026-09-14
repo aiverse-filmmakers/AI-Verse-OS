@@ -1,0 +1,190 @@
+name: Invisible Intelligence Temporary Worker
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  temporary-worker-owner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MULTIPLE_BOTS_SHA: ba97408fa14ba7a5823c4376b10e190c887958b4
+
+    steps:
+      - name: Checkout AI-Verse OS under test
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build exact accepted Multiple Bots owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOTS="$RUNNER_TEMP/AI-Verse-Multiple-Bots"
+          git clone https://github.com/aiverse-filmmakers/AI-Verse-Multiple-Bots.git "$BOTS"
+          git -C "$BOTS" checkout --detach "$MULTIPLE_BOTS_SHA"
+          test "$(git -C "$BOTS" rev-parse HEAD)" = "$MULTIPLE_BOTS_SHA"
+          npm --prefix "$BOTS" install --no-audit --no-fund
+          npm --prefix "$BOTS" run build
+          printf '%s' "$BOTS" > "$RUNNER_TEMP/bots-repo.txt"
+
+      - name: Prepare active workspace and install owner extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p workspaces/alpha/context
+          cat > workspaces/alpha/WORKSPACE.yaml <<'YAML'
+          schema_version: "2.0"
+          id: alpha
+          name: Alpha
+          type: project
+          status: active
+          purpose: Invisible Intelligence temporary Worker acceptance.
+          domains: []
+          owners: []
+          success_criteria: []
+          canonical_sources: []
+          connections: []
+          current_context: context/CURRENT.md
+          YAML
+          cat > workspaces/alpha/context/CURRENT.md <<'MD'
+          # Current Workspace Context
+
+          ## Objective
+
+          Complete the bounded foreground task safely.
+
+          ## Current state
+
+          Temporary specialist acceptance is active.
+          MD
+
+          BOTS="$(cat "$RUNNER_TEMP/bots-repo.txt")"
+          BOTS="$BOTS" node --input-type=module <<'NODE'
+          const mod = await import(process.env.BOTS + "/dist/src/ai-verse-os-install.js");
+          const result = mod.installAiVerseOsExtension(process.cwd());
+          if (!["installed", "unchanged"].includes(result.status)) {
+            throw new Error("Multiple Bots extension installation failed");
+          }
+          console.log(JSON.stringify({
+            status: result.status,
+            engine: result.engine_path,
+            db: result.coordination_db_path
+          }));
+          NODE
+
+      - name: Execute bounded temporary Worker through OS host action boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import importlib.util
+          import sys
+          from pathlib import Path
+
+          root = Path.cwd()
+          path = root / "scripts" / "ai_verse_host_adapter.py"
+          spec = importlib.util.spec_from_file_location("temporary_worker_host_acceptance", path)
+          adapter = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules["temporary_worker_host_acceptance"] = adapter
+          spec.loader.exec_module(adapter)
+
+          host = adapter.AIverseOSHost(root)
+          parameters = {
+              "objective": "Review the current bounded task independently and return one useful result.",
+              "role_title": "Temporary Reviewer",
+              "reason": "A separate bounded review improves the foreground task.",
+              "runtime": {"adapter": "deterministic"},
+              "skill_refs": [],
+              "required_constraints": [
+                  "Do not create a durable Bot.",
+                  "Do not perform external actions.",
+              ],
+              "budget": {
+                  "token_limit": 1000,
+                  "wall_clock_seconds": 60,
+              },
+              "task_evidence": {
+                  "substantial_task": True,
+                  "temporary_help_useful": True,
+                  "permission_expansion": False,
+                  "durable_commitment": False,
+                  "external_effect": False,
+              },
+              "provenance": {
+                  "run_id": "run_temp_worker_acceptance",
+                  "session_id": "session_temp_worker_acceptance",
+              },
+          }
+          request = {
+              "request_id": "req_temp_worker_acceptance",
+              "action_class": "write_local_reversible",
+              "scope": "workspace:alpha",
+              "operation": "workers.temporary",
+              "parameters": parameters,
+              "idempotency_key": "temp-worker-acceptance",
+              "in_scope": True,
+              "within_budget": True,
+              "reversible": True,
+              "reason": "Use temporary internal specialist help for the current bounded task.",
+          }
+          request["request_fingerprint"] = adapter._fingerprint(request)
+          permission = host.authorize_action(request)
+          assert permission["decision"] == "allow", permission
+          result = host.request_action(request)
+          assert result["status"] == "succeeded", result
+          assert result["effect_occurred"] is True
+          temp = result["result"]["temporary_worker"]
+          assert temp["state"] == "completed", temp
+          assert temp["output"] is not None
+          assert temp["worker_id"]
+          assert temp["run_id"]
+          assert result["execution_binding"]["owner"] == "ai-verse-multiple-bots"
+          print("OS -> Multiple Bots temporary Worker route: PASS")
+          PY
+
+      - name: Prove no durable Bot and no live temporary authority remains
+        shell: bash
+        run: |
+          set -euo pipefail
+          BOTS="$(cat "$RUNNER_TEMP/bots-repo.txt")"
+          BOTS="$BOTS" node --input-type=module <<'NODE'
+          import path from "node:path";
+          const { CoordinationStore } = await import(process.env.BOTS + "/dist/src/store.js");
+          const store = new CoordinationStore(path.resolve("runtime/ai-verse-bots/coordination.db"));
+          try {
+            const bots = store.listObjects("bot");
+            const workers = store.listObjects("worker", "alpha");
+            const runs = store.listObjects("team_run", "alpha");
+            const leases = store.listObjects("capability_lease", "alpha");
+            const artifacts = store.listObjects("artifact", "alpha");
+
+            if (bots.length !== 0) throw new Error("temporary help created a durable Bot");
+            if (workers.length !== 1 || workers[0].payload.kind !== "temporary" || workers[0].payload.status !== "expired") {
+              throw new Error("temporary Worker did not cleanly expire");
+            }
+            if (runs.length !== 1 || runs[0].payload.status !== "completed" || runs[0].payload.leader_kind !== "runtime" || runs[0].payload.leader_lifecycle !== "run_scoped") {
+              throw new Error("Team Run did not remain run-scoped");
+            }
+            if (leases.length !== 1 || typeof leases[0].payload.cleanup_revoked_at !== "string") {
+              throw new Error("temporary Worker lease remained live");
+            }
+            if (artifacts.length !== 1 || artifacts[0].payload.provenance?.origin !== "worker_generated") {
+              throw new Error("temporary Worker result artifact was not preserved");
+            }
+            console.log("Temporary Worker non-durable cleanup boundary: PASS");
+          } finally {
+            store.close();
+          }
+          NODE

@@ -1,11 +1,22 @@
 ---
 name: onboard
-description: Use on first setup, when someone says set me up or onboard me, or when refreshing an AI-Verse OS installation from the universal seven-question intake. Builds domain-neutral operator state, a safe connection registry, and the minimum useful workspace routes without assuming a profession.
+description: Use on first setup, when someone says set me up or onboard me, when profile/context is incomplete, or when refreshing AI-Verse OS from the universal intake. Starts progressively from real work by default and keeps the existing seven-question intake available when a deeper intake is explicitly wanted.
 ---
 
 # Onboard
 
-Establish a useful AI-Verse OS without turning onboarding into a profession-specific questionnaire or a long consulting exercise.
+Establish a useful AI-Verse OS without forcing a questionnaire before first value.
+
+The default product behavior is progressive:
+
+```text
+user arrives
+-> "What would you like help with?"
+-> begin useful work
+-> learn missing context only when it becomes relevant
+```
+
+The seven-question intake remains available for a deliberate full/deep intake. It is not a prerequisite for ordinary work.
 
 ## Read first
 
@@ -20,34 +31,76 @@ Read:
 
 The core files remain generic. Do **not** personalize `AGENTS.md`, `CLAUDE.md`, or `AI-VERSE.yaml` with operator-specific facts.
 
-## Step 0 - preserve existing state and resolve direction ownership
+## Step 0 - preserve state and resolve direction ownership
 
-Before writing:
+Before durable writes:
 
-- inspect v2 operator/workspace files when they exist
+- inspect existing v2 operator/workspace files when they matter
 - inspect legacy `context/`, `decisions/`, `connections.md`, and operator-specific reference files if they contain real data
+- inspect any already-filled answers in `ai-verse-os-intake.md`
 - never delete or bulk-move existing user state during onboarding
 - if old and new sources conflict, mark the ambiguity and preserve provenance
 - run `node scripts/direction-owner.mjs status --scope operator`
 - before any operator goal/priority/success-definition write, run `node scripts/direction-owner.mjs assert-strategic-write --scope operator`
 
-Re-running onboarding must be safe.
+Re-running onboarding must be safe and must reuse known answers rather than asking them again.
 
-If the operator scope is Brain-owned, OS onboarding must **not** create, refresh, or silently recover an editable OS strategic store. Read `.aiverse/direction/views/operator.md` when present and treat legacy OS goals/priorities as frozen provenance. Brain being unavailable does not change this rule.
+If the operator scope is Brain-owned, OS onboarding must **not** create, refresh, or silently recover an editable OS strategic store. Read `.aiverse/direction/views/operator.md` when present and treat legacy OS goals/priorities as frozen provenance. Brain unavailability does not change this rule.
 
-## Step 1 - inspect the seven-question intake
+## Step 1 - start from real work
 
-Use `ai-verse-os-intake.md` as the intake for OS-owned fields.
+If the user already supplied a real request, treat that request as the first onboarding evidence and begin the useful work.
 
-- If all applicable answers are usable, scaffold from them.
-- If some are filled, ask only for missing applicable questions unless the user wants a partial setup.
-- If none are filled, interview one question at a time.
-- Save each OS-owned answer to the intake immediately so onboarding can resume after interruption.
-- If direction is Brain-owned, do not persist Q2 strategic content into the OS intake; route strategic answers to Brain instead.
+Do **not** stop the task merely because Q1-Q7 are incomplete.
 
-Do not treat placeholders as answers.
+If the user has not supplied a real task yet, ask only:
 
-## Step 2 - ask at most seven primary questions
+> What would you like help with?
+
+From the request, infer only what is well-supported, such as:
+
+- relevant role or responsibility
+- current scope/project/client
+- communication preference demonstrated or stated
+- source/tool involved
+- privacy/approval boundary
+- repeated workflow evidence
+
+Persist supported facts only in their canonical owner when doing so is appropriate. Do not invent missing profile details.
+
+## Step 2 - ask only when blocked
+
+Before asking an onboarding question, determine whether the missing answer actually blocks:
+
+- safety
+- scope/privacy
+- permission
+- external access
+- a consequential action
+- correct canonical routing
+- a strategic write whose owner cannot be resolved
+
+If none of those are blocked, continue the work and leave the unrelated intake field unanswered.
+
+Do not ask the user to choose internal architecture such as Memory vs Data vs Skill vs Workspace.
+
+Do not ask a question merely to make the profile look complete.
+
+## Step 3 - preserve progressive state
+
+`ai-verse-os-intake.md` remains the resumable intake record for OS-owned answers.
+
+- reuse any usable existing answer
+- save an OS-owned answer when it is explicitly supplied or safely inferred from strong evidence
+- leave unknown fields as placeholders
+- after restart, inspect the file and canonical operator/workspace state before asking anything
+- if direction is Brain-owned, do not persist Q2 strategic content into the OS intake; route strategic answers to Brain instead
+
+A partially completed intake is valid during normal use.
+
+## Optional full/deep intake
+
+Run the existing seven-question intake only when the user explicitly asks for full onboarding, a complete profile/intake, or equivalent deliberate setup.
 
 Use the exact intent of the intake:
 
@@ -59,11 +112,11 @@ Use the exact intent of the intake:
 6. Which tools, systems, people, or channels does the work pass through?
 7. Which repeated/high-friction/high-value task should improve first, and what boundaries must be respected?
 
-Do not add an eighth primary question. Follow-up clarification is allowed only when a response cannot be routed safely or meaningfully.
+Do not add an eighth primary question. Ask one missing applicable question at a time and save each answer immediately so the full intake can resume after interruption.
 
-When `direction_owner = brain`, Q2 belongs to Brain onboarding and is not written by OS. OS may still use a Brain-generated reference view to understand which operational work is relevant.
+When `direction_owner = brain`, Q2 belongs to Brain onboarding and is not written by OS. OS may use a Brain-generated reference view for operational relevance.
 
-## Step 3 - create operator state
+## Step 4 - create or refresh only useful operator state
 
 Using only supported facts, create or refresh as relevant:
 
@@ -73,80 +126,65 @@ Using only supported facts, create or refresh as relevant:
 - `operator/context/CURRENT.md`
 - `operator/profile/goals.md` **only when** `assert-strategic-write --scope operator` succeeds
 
+Do not create empty profile files merely to claim onboarding completion.
+
 When OS owns direction, `CURRENT.md` may contain editable current priorities. When Brain owns direction, current priorities must be a generated/reference pointer to `.aiverse/direction/views/operator.md` or Brain refs; keep editable OS content to current facts, active workspaces, pending decisions, constraints and operational state.
 
-The public template gitignores these files by default. Do not weaken that privacy protection during onboarding.
+## Step 5 - add connections only when relevant
 
-## Step 4 - create the connection registry
+If a relevant source/system needs routing and `connections/registry.yaml` does not exist, initialize it from `connections/registry.example.yaml`.
 
-If `connections/registry.yaml` does not exist, initialize it from `connections/registry.example.yaml`.
-
-Use Q5 and Q6 to create safe entries for relevant sources and systems.
-
-For each entry distinguish:
+For each relevant entry distinguish:
 
 - planned
 - configured
 - verified
 - degraded/unavailable
 
-Naming a tool does not prove access. Never store secrets. Record only safe authentication metadata such as `environment`, `credential manager`, `interactive`, `none`, or another non-secret description.
+Naming a tool does not prove access. Never store secrets. Missing credentials or new external authorization are approval/authorization boundaries, not profile questions to bypass.
 
-## Step 5 - establish workspaces
+Do not pre-populate unrelated connections.
 
-Use Q4 and current direction references to identify substantial scopes that deserve isolation.
+## Step 6 - establish workspaces only when earned by real work
 
-Create a workspace only when the boundary is reasonably clear. A tool, folder, or single task is not automatically a workspace.
+When current evidence shows a substantial scope that deserves isolation, follow the `/workspace` capability.
 
-For each clearly justified workspace:
+Create/evolve a workspace only when the boundary is reasonably clear. A single trivial task, tool, or file is not automatically a workspace.
 
-- create a unique `workspaces/<id>/WORKSPACE.yaml`
-- create `context/CURRENT.md`
-- use free-form `type` and `domains`
-- record source routes and privacy/approval constraints
-- add optional layers only when immediately useful
-- resolve `workspace:<id>` direction ownership before writing its objective/current outcome
+Do not force the user to answer Q4 before useful work can begin.
 
-Follow the `/workspace` skill's rules. Do not pre-create profession-specific global folders.
+## Step 7 - treat improvement evidence safely
 
-If Q4 reveals many possible scopes but priorities do not make the active ones clear, record candidates in operator current context and defer unnecessary scaffolding.
+A repeated/high-friction/high-value workflow may become an improvement candidate, but ordinary onboarding does not itself authorize a new Automation, permanent Bot, credential, Connection, permission expansion, destructive change, or strategic handover.
 
-## Step 6 - capture the first improvement candidate
+Do not create a new recurring Automation or permanent Bot unless the user has already explicitly requested that responsibility.
 
-Treat Q7 as an improvement candidate for `/level-up`, not an instruction to automate immediately.
+## Verification
 
-Record the constraint in the narrowest relevant current context. Preserve stated approval, privacy, or high-stakes boundaries. Do not reinterpret the improvement candidate as permission to change Brain-owned strategic direction.
+Before a progressive onboarding write or full-intake completion, verify:
 
-Do not create a new skill or automation during onboarding unless the user explicitly requests implementation and the workflow is sufficiently understood.
-
-## Step 7 - verify
-
-Before finishing verify:
-
-- direction ownership was resolved before any strategic write
-- if OS owns direction, Q2/goal writes went only to OS canonical direction
-- if Brain owns direction, OS contains only Brain refs/generated strategic views plus frozen provenance; no editable parallel OS direction was created
-- Brain unavailability was never treated as an ownership transfer
-- all applicable primary questions are answered or clearly unknown
-- operator facts are stored outside system-owned files
-- current context is compact and routes to active workspaces
-- workspaces use the universal manifest rather than profession-specific root structure
+- known facts were reused rather than re-asked
+- unanswered intake fields did not block unrelated useful work
+- direction ownership was resolved before strategic writes
+- Brain-owned direction did not create editable parallel OS goals
+- Brain unavailability was never treated as ownership transfer
+- operator facts remain outside system-owned files
+- workspace boundaries remain isolated
 - connection entries do not overclaim access
 - no secrets were written
 - existing user state was preserved
 - `AGENTS.md`, `CLAUDE.md`, and `AI-VERSE.yaml` remain generic system files
 
-## Closing handoff
+## User-facing handoff
 
-Keep it compact:
+For normal progressive use, keep it natural and brief. Do not announce subsystem choices.
+
+When no additional information is needed, continue the task.
+
+If a first-run handoff is useful:
 
 ```text
-Onboarding complete.
-Direction owner: <os / brain>
-Operator context: <created/updated paths>
-Active workspaces: <list or none yet>
-Connections: <verified/configured/planned summary>
-First improvement candidate: <constraint>
-
-Next: use the system for real work, then run /audit. Use /workspace when another substantial scope needs isolation and /level-up when the first repeated constraint is ready to improve.
+You're ready to work. I'll learn missing details as they become relevant.
 ```
+
+For an explicitly requested full intake, a compact completion summary is still appropriate.

@@ -598,25 +598,27 @@ function onboard(options) {
 
   const claude = commandVersion('claude');
   const codex = commandVersion('codex');
-  out('AI-Verse OS onboarding');
-  out('----------------------');
+  out('AI-Verse OS first use');
+  out('--------------------');
   out(`OS: ${root}`);
+  out('Start with a real request. AI-Verse will learn missing context progressively.');
+  out('Optional deep intake remains available through the onboard capability.');
   if (claude) {
     out('Claude Code detected.');
     out(`  cd "${root}"`);
     out('  claude');
-    out('Then run: /onboard');
+    out('Then ask for what you want help with. Optional deep intake: /onboard full');
   }
   if (codex) {
     out('Codex detected.');
     out(`  cd "${root}"`);
     out('  codex');
-    out('Then run: $onboard');
+    out('Then ask for what you want help with. Optional deep intake: $onboard full');
   }
   if (!claude && !codex) {
     out('Open this folder in a supported capable AI runtime.');
-    out('Claude Code: run /onboard');
-    out('Codex: run $onboard or select the onboard skill');
+    out('Start with a real request.');
+    out('Optional deep intake: select the onboard capability and request a full intake.');
   }
 }
 

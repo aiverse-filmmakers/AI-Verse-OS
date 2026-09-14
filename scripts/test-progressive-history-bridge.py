@@ -29,7 +29,7 @@ adapter = load_adapter()
 
 def make_root(base: Path) -> Path:
     root = base / "os"
-    root.mkdir()
+    root.mkdir(parents=True)
     (root / "AI-VERSE.yaml").write_text(
         'schema_version: "2.0"\narchitecture: unified-workspace\n',
         encoding="utf-8",

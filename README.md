@@ -135,7 +135,7 @@ After `setup` and a green `doctor`:
 ai-verse-os onboard
 ```
 
-Then use the OS through a supported capable AI runtime.
+This opens the first-use handoff. In the supported capable AI runtime, start with a real request. AI-Verse learns missing context progressively and asks only when information is actually needed for safe/correct work. The existing seven-question intake remains available when you deliberately want a full intake.
 
 Core OS capabilities include:
 

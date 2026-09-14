@@ -1,0 +1,196 @@
+name: Invisible Intelligence Automation Consent
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  os-automations-consent:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AUTOMATIONS_SHA: caaed83b98026dd955640fc015d181529b91a1c6
+
+    steps:
+      - name: Checkout AI-Verse OS under test
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch and install exact accepted Automations owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          AUT="$RUNNER_TEMP/AI-Verse-Automations"
+          git clone https://github.com/aiverse-filmmakers/AI-Verse-Automations.git "$AUT"
+          git -C "$AUT" checkout --detach "$AUTOMATIONS_SHA"
+          test "$(git -C "$AUT" rev-parse HEAD)" = "$AUTOMATIONS_SHA"
+          python -m pip install "$AUT"
+          printf '%s' "$AUT" > "$RUNNER_TEMP/automations-repo.txt"
+
+      - name: Prepare active workspace and attach canonical Automations owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p workspaces/alpha/context
+          cat > workspaces/alpha/WORKSPACE.yaml <<'YAML'
+          schema_version: "2.0"
+          id: alpha
+          name: Alpha
+          type: project
+          status: active
+          purpose: Automation consent acceptance.
+          domains: []
+          owners: []
+          success_criteria: []
+          canonical_sources: []
+          connections: []
+          current_context: context/CURRENT.md
+          YAML
+          cat > workspaces/alpha/context/CURRENT.md <<'MD'
+          # Current Workspace Context
+
+          ## Objective
+
+          Maintain Client Alpha delivery quality.
+
+          ## Current state
+
+          Weekly review work is active.
+          MD
+
+          STATE="$RUNNER_TEMP/automations-state"
+          STATE="$STATE" OS_ROOT="$GITHUB_WORKSPACE" python - <<'PY'
+          import os
+          from pathlib import Path
+          from aiverse_automations.lifecycle import setup
+          from aiverse_automations.os_extension import install_os_extension
+
+          state=Path(os.environ["STATE"])
+          root=Path(os.environ["OS_ROOT"])
+          report=setup(state,os_root=str(root),enable=True)
+          if report["state"]!="ready":
+              raise SystemExit(f"Automations setup not ready: {report}")
+          attached=install_os_extension(state,root)
+          if attached["status"] not in {"installed","unchanged"}:
+              raise SystemExit(f"Automations attachment failed: {attached}")
+          print("Accepted Automations owner attached through OS registry: PASS")
+          PY
+
+      - name: Prove explicit consent creates exactly one canonical schedule
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE="$RUNNER_TEMP/automations-state"
+          STATE="$STATE" OS_ROOT="$GITHUB_WORKSPACE" python - <<'PY'
+          import hashlib
+          import importlib.util
+          import os
+          import sys
+          from pathlib import Path
+          from aiverse_automations.store import Store
+
+          root=Path(os.environ["OS_ROOT"])
+          path=root/"scripts"/"ai_verse_host_adapter.py"
+          spec=importlib.util.spec_from_file_location("automation_consent_acceptance",path)
+          adapter=importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          sys.modules["automation_consent_acceptance"]=adapter
+          spec.loader.exec_module(adapter)
+
+          host=adapter.AIverseOSHost(root)
+          user_text="Every Monday at 09:00 Europe/Bucharest, review the Client Alpha delivery checklist."
+          request={
+              "request_id":"req_automation_consent",
+              "action_class":"modify_canonical_state",
+              "scope":"workspace:alpha",
+              "operation":"automations.create",
+              "parameters":{
+                  "name":"Monday Client Alpha review",
+                  "objective":"Review the Client Alpha delivery checklist and prepare the usual concise summary.",
+                  "trigger":{
+                      "kind":"cron",
+                      "spec":{"expr":"0 9 * * MON","timezone":"Europe/Bucharest"},
+                  },
+                  "consent":{
+                      "explicit":True,
+                      "mode":"direct_request",
+                      "user_message_digest":"sha256:"+hashlib.sha256(user_text.encode()).hexdigest(),
+                  },
+                  "provenance":{
+                      "run_id":"run_automation_acceptance",
+                      "session_id":"session_automation_acceptance",
+                  },
+              },
+              "idempotency_key":"gateway-run-automation-acceptance",
+              "in_scope":True,
+              "within_budget":True,
+              "reversible":False,
+              "reason":"The user explicitly requested this recurring responsibility.",
+          }
+          request["request_fingerprint"]=adapter._fingerprint(request)
+          permission=host.authorize_action(request)
+          assert permission["decision"]=="allow",permission
+
+          created=host.request_action(request)
+          assert created["status"]=="succeeded",created
+          assert created["effect_occurred"] is True
+          result=created["result"]["automation"]
+          assert result["state"]=="created"
+          assert result["consent_mode"]=="direct_request"
+          assert created["execution_binding"]["owner"]=="ai-verse-automations"
+
+          replay=host.request_action(request)
+          assert replay["status"]=="succeeded"
+          assert replay["effect_occurred"] is False
+          assert replay["result"]["automation"]["state"]=="existing"
+          assert replay["result"]["automation"]["automation_id"]==result["automation_id"]
+          assert replay["result"]["automation"]["trigger_id"]==result["trigger_id"]
+
+          store=Store(Path(os.environ["STATE"]))
+          rows=store.list_automations()
+          assert len(rows)==1,rows
+          canonical=rows[0]
+          assert canonical["scope"]=="workspace:alpha"
+          assert canonical["target_kind"]=="gateway"
+          assert canonical["action_class"]=="read_local"
+          trigger=store.get_trigger(result["trigger_id"])
+          assert trigger["kind"]=="cron"
+          assert trigger["spec"]=={"expr":"0 9 * * MON","timezone":"Europe/Bucharest"}
+          assert canonical["wake"]["objective"].startswith("Review the Client Alpha")
+          assert canonical["wake"]["created_via"]=="gateway_explicit_consent"
+          assert canonical["wake"]["consent"]["mode"]=="direct_request"
+
+          denied={
+              **request,
+              "request_id":"req_automation_no_consent",
+              "parameters":{
+                  **request["parameters"],
+                  "name":"Unauthorized weekly review",
+                  "consent":{
+                      "explicit":False,
+                      "mode":"direct_request",
+                      "user_message_digest":"sha256:"+hashlib.sha256(b"We seem to do this every Monday.").hexdigest(),
+                  },
+              },
+          }
+          denied["request_fingerprint"]=adapter._fingerprint(denied)
+          try:
+              host.request_action(denied)
+          except adapter.AdapterError as exc:
+              assert "explicit user consent" in str(exc)
+          else:
+              raise AssertionError("Automation was created without explicit consent")
+          assert len(store.list_automations())==1
+
+          print("OS -> canonical Automations explicit consent and replay: PASS")
+          PY

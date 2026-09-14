@@ -1443,6 +1443,9 @@ class AIverseOSHost:
             raise AdapterError("bots.permanent skill_refs are invalid")
 
         runtime = self._permanent_bot_runtime(parameters.get("runtime"))
+        unique_skill_refs = list(dict.fromkeys(skill_refs))
+        for skill_ref in unique_skill_refs:
+            self._pinned_selection(scope, skill_ref)
         stable_name = name.strip()
         identity_digest = hashlib.sha256(
             (scope + "\0" + stable_name.casefold()).encode("utf-8")
@@ -1468,7 +1471,7 @@ class AIverseOSHost:
             "execution": {"environment_policy": "shared_workspace"},
             "scope": bot_scope,
             "capabilities": {
-                "skill_refs": list(dict.fromkeys(skill_refs)),
+                "skill_refs": unique_skill_refs,
             },
             "permissions": {
                 "policy_ref": "default-bot",

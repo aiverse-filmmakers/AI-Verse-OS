@@ -584,6 +584,165 @@ def main() -> int:
     assert race_result["execution_binding"]["generation_id"] == first_pin["generation_id"]
     assert race_result["result"]["receipt"]["binding"]["generation_id"] == first_pin["generation_id"]
 
+    # Prove the full later-use path with the real Skills owner:
+    # auto-promote -> restart host -> rediscover -> execute -> quarantine -> rollback.
+    learning_mode = json.loads(run([
+        sys.executable,
+        str(skills_entrypoint),
+        "--root",
+        str(skills_root),
+        "learning",
+        "mode",
+        "auto",
+        "--json",
+    ]).stdout)
+    assert learning_mode["mode"] == "auto"
+
+    later_host = adapter_module.OSFourComponentHost(
+        root,
+        skills_root,
+        skills_entrypoint,
+        root.parent / "no-local-skills",
+    )
+    later_request = {
+        **learning_request,
+        "request_id": "automatic-skill-learning-later-use",
+        "idempotency_key": "automatic-skill-learning-later-use",
+        "parameters": {
+            **learning_request["parameters"],
+            "candidate": {
+                **learning_request["parameters"]["candidate"],
+                "candidate_id": "learn-host-client-alpha-later-use",
+                "skill_id": "client-alpha-later-use",
+                "summary": "Reusable verified Client Alpha later-use review procedure.",
+                "created_at": "2026-09-14T14:30:00Z",
+            },
+            "skill_md": (
+                "---\n"
+                "name: client-alpha-later-use\n"
+                "description: Reusable verified Client Alpha later-use review procedure\n"
+                "version: 1.0.0\n"
+                "---\n\n"
+                "Review the delivery against the brief, keep notes concise, verify completion, "
+                "and preserve a short evidence-backed handoff.\n"
+            ),
+        },
+    }
+    later_request["request_fingerprint"] = adapter_module._fingerprint(later_request)
+    assert later_host.authorize_action(later_request)["decision"] == "allow"
+    later_result = later_host.request_action(later_request)
+    assert later_result["status"] == "succeeded"
+    assert later_result["result"]["learning_candidate"]["state"] == "admitted"
+    applied = later_result["result"]["skills_result"]
+    assert applied["state"] == "applied"
+    assert applied["approved_by"] == "policy:auto"
+    learned_proposal_id = applied["proposal_id"]
+    learned_generation_id = applied["applied_generation_id"]
+    backup_generation_id = applied["backup_generation_id"]
+    assert skills_pin(skills_entrypoint, skills_root)["generation_id"] == learned_generation_id
+
+    # Recreate the host object to prove discovery comes from persisted owner state,
+    # not an in-process cache or the learning response.
+    restarted_host = adapter_module.OSFourComponentHost(
+        root,
+        skills_root,
+        skills_entrypoint,
+        root.parent / "no-local-skills",
+    )
+    restarted_capabilities = restarted_host.list_capabilities("workspace:client-alpha")
+    learned_capability = next(
+        row for row in restarted_capabilities
+        if row.get("id") == "aiverse-skills:client-alpha-later-use"
+    )
+    assert learned_capability["generation_id"] == learned_generation_id
+
+    use_request = {
+        "request_id": "later-task-use-learned-skill",
+        "action_class": "read_local",
+        "scope": "workspace:client-alpha",
+        "operation": "capability.read_instructions",
+        "parameters": {
+            "capability_id": learned_capability["id"],
+            "expected_generation_id": learned_capability["generation_id"],
+            "expected_package_digest": learned_capability["digest"],
+        },
+        "idempotency_key": "later-task-use-learned-skill",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": False,
+        "reason": "Use the persisted learned Skill on a later Client Alpha task.",
+    }
+    use_request["request_fingerprint"] = adapter_module._fingerprint(use_request)
+    assert restarted_host.authorize_action(use_request)["decision"] == "allow"
+    used = restarted_host.request_action(use_request)
+    assert used["status"] == "succeeded"
+    assert used["execution_binding"]["generation_id"] == learned_generation_id
+    assert "keep notes concise" in used["result"]["instructions"]
+    assert used["result"]["receipt"]["binding"]["capability_id"] == learned_capability["id"]
+
+    unsafe_later = {
+        **later_request,
+        "request_id": "automatic-skill-learning-quarantine",
+        "idempotency_key": "automatic-skill-learning-quarantine",
+        "parameters": {
+            **later_request["parameters"],
+            "candidate": {
+                **later_request["parameters"]["candidate"],
+                "candidate_id": "learn-host-client-alpha-quarantine",
+                "skill_id": "client-alpha-quarantine",
+                "summary": "Unsafe candidate must remain quarantined.",
+                "created_at": "2026-09-14T14:31:00Z",
+            },
+            "skill_md": (
+                "---\n"
+                "name: client-alpha-quarantine\n"
+                "description: Unsafe quarantine fixture\n"
+                "version: 1.0.0\n"
+                "---\n\n"
+                "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n"
+            ),
+        },
+    }
+    unsafe_later["request_fingerprint"] = adapter_module._fingerprint(unsafe_later)
+    unsafe_later_result = restarted_host.request_action(unsafe_later)
+    assert unsafe_later_result["status"] == "succeeded"
+    assert unsafe_later_result["result"]["skills_result"]["state"] == "quarantined"
+    after_quarantine = adapter_module.OSFourComponentHost(
+        root,
+        skills_root,
+        skills_entrypoint,
+        root.parent / "no-local-skills",
+    ).list_capabilities("workspace:client-alpha")
+    assert not any(
+        row.get("id") == "aiverse-skills:client-alpha-quarantine"
+        for row in after_quarantine
+    )
+
+    rolled_back = json.loads(run([
+        sys.executable,
+        str(skills_entrypoint),
+        "--root",
+        str(skills_root),
+        "proposals",
+        "rollback",
+        learned_proposal_id,
+        "--json",
+    ]).stdout)
+    assert rolled_back["rollback_generation_id"] == backup_generation_id
+    assert skills_pin(skills_entrypoint, skills_root)["generation_id"] == backup_generation_id
+
+    post_rollback_host = adapter_module.OSFourComponentHost(
+        root,
+        skills_root,
+        skills_entrypoint,
+        root.parent / "no-local-skills",
+    )
+    post_rollback_capabilities = post_rollback_host.list_capabilities("workspace:client-alpha")
+    assert not any(
+        row.get("id") == "aiverse-skills:client-alpha-later-use"
+        for row in post_rollback_capabilities
+    )
+
     print("Supported dynamic OS host adapter acceptance: PASS")
     return 0
 

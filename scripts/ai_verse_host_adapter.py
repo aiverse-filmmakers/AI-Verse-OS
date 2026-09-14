@@ -1022,6 +1022,281 @@ class AIverseOSHost:
             },
         }
 
+    @staticmethod
+    def _temporary_worker_budget(value: Any) -> Dict[str, Any]:
+        if value is None:
+            value = {}
+        if not isinstance(value, Mapping):
+            raise AdapterError("workers.temporary budget must be an object")
+        allowed = {"token_limit", "cost_limit", "wall_clock_seconds"}
+        extras = set(value) - allowed
+        if extras:
+            raise AdapterError(
+                "workers.temporary budget contains unsupported fields: "
+                + ", ".join(sorted(extras))
+            )
+        budget: Dict[str, Any] = {
+            "max_workers": 1,
+            "max_tasks": 1,
+            "max_actions": 1,
+            "max_hops": 0,
+            "token_limit": 4096,
+            "wall_clock_seconds": 120,
+        }
+        for key in allowed:
+            if key not in value:
+                continue
+            item = value[key]
+            if not isinstance(item, (int, float)) or isinstance(item, bool) or item <= 0:
+                raise AdapterError(f"workers.temporary budget {key} must be a positive number")
+            if key in {"token_limit", "wall_clock_seconds"} and int(item) != item:
+                raise AdapterError(f"workers.temporary budget {key} must be an integer")
+            budget[key] = int(item) if key in {"token_limit", "wall_clock_seconds"} else float(item)
+        budget["token_limit"] = min(int(budget["token_limit"]), 16384)
+        budget["wall_clock_seconds"] = min(int(budget["wall_clock_seconds"]), 300)
+        return budget
+
+    @staticmethod
+    def _temporary_worker_runtime(value: Any) -> Dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise AdapterError("workers.temporary runtime must be an object")
+        if any(key in value for key in ("api_key", "token", "authorization", "credential")):
+            raise AdapterError("workers.temporary runtime must not contain raw credentials")
+        adapter = value.get("adapter")
+        if adapter == "deterministic":
+            if set(value) != {"adapter"}:
+                raise AdapterError("deterministic workers.temporary runtime contains unsupported fields")
+            return {"adapter": "deterministic"}
+        if adapter != "openai-compatible":
+            raise AdapterError("workers.temporary runtime adapter is not supported for automatic temporary help")
+        allowed = {"adapter", "endpoint", "model", "api_key_env"}
+        extras = set(value) - allowed
+        if extras:
+            raise AdapterError(
+                "openai-compatible workers.temporary runtime contains unsupported fields: "
+                + ", ".join(sorted(extras))
+            )
+        endpoint = value.get("endpoint")
+        model = value.get("model")
+        if (
+            not isinstance(endpoint, str)
+            or not endpoint.startswith(("http://", "https://"))
+            or len(endpoint) > 2048
+            or any(ch.isspace() for ch in endpoint)
+        ):
+            raise AdapterError("workers.temporary runtime endpoint must be a bounded HTTP(S) URL")
+        if not isinstance(model, str) or not model.strip() or len(model.strip()) > 256:
+            raise AdapterError("workers.temporary runtime model is invalid")
+        result: Dict[str, Any] = {
+            "adapter": "openai-compatible",
+            "endpoint": endpoint,
+            "model": model.strip(),
+        }
+        handle = value.get("api_key_env")
+        if handle is not None:
+            if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", handle):
+                raise AdapterError("workers.temporary runtime api_key_env is invalid")
+            result["api_key_env"] = handle
+        return result
+
+    def _run_multiple_bots_temporary_worker(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = self._extension_entry("ai-verse-multiple-bots")
+        if entry is None:
+            raise AdapterError("AI-Verse Multiple Bots is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-multiple-bots engine")
+        source = (
+            'import { pathToFileURL } from "node:url";'
+            'let raw=""; for await (const chunk of process.stdin) raw += chunk;'
+            'const engine = await import(pathToFileURL(process.argv[1]).href);'
+            'if (typeof engine.runScopedTemporaryWorker !== "function") '
+            'throw new Error("Installed Multiple Bots does not support run-scoped temporary Workers");'
+            'const result = await engine.runScopedTemporaryWorker(JSON.parse(raw));'
+            'process.stdout.write(JSON.stringify(result));'
+        )
+        return _run_json(
+            ["node", "--input-type=module", "--eval", source, str(engine)],
+            payload,
+            "Multiple Bots temporary Worker owner",
+        )
+
+    def _request_temporary_worker(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not scope.startswith("workspace:"):
+            raise AdapterError("workers.temporary requires workspace scope")
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("workers.temporary parameters must be an object")
+        allowed = {
+            "objective",
+            "role_title",
+            "reason",
+            "runtime",
+            "skill_refs",
+            "required_constraints",
+            "budget",
+            "task_evidence",
+            "provenance",
+        }
+        extras = set(parameters) - allowed
+        missing = {"objective", "role_title", "reason", "runtime", "task_evidence", "provenance"} - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "workers.temporary parameters have invalid fields: "
+                + ", ".join(sorted(extras | missing))
+            )
+
+        evidence = parameters.get("task_evidence")
+        expected_evidence = {
+            "substantial_task",
+            "temporary_help_useful",
+            "permission_expansion",
+            "durable_commitment",
+            "external_effect",
+        }
+        if not isinstance(evidence, Mapping) or set(evidence) != expected_evidence:
+            raise AdapterError("workers.temporary task_evidence shape is invalid")
+        if any(not isinstance(evidence[key], bool) for key in expected_evidence):
+            raise AdapterError("workers.temporary task_evidence values must be boolean")
+        if (
+            evidence["substantial_task"] is not True
+            or evidence["temporary_help_useful"] is not True
+            or evidence["permission_expansion"] is not False
+            or evidence["durable_commitment"] is not False
+            or evidence["external_effect"] is not False
+        ):
+            return {
+                "status": "succeeded",
+                "effect_occurred": False,
+                "result": {
+                    "temporary_worker": {
+                        "state": "ignored",
+                        "reason": "temporary help did not pass the safe internal-work admission boundary",
+                    }
+                },
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request),
+                    "scope": scope,
+                    "action_class": "write_local_reversible",
+                    "operation": "workers.temporary",
+                },
+            }
+
+        provenance = parameters.get("provenance")
+        if not isinstance(provenance, Mapping) or set(provenance) != {"run_id", "session_id"}:
+            raise AdapterError("workers.temporary provenance must contain exactly run_id and session_id")
+        run_id = provenance.get("run_id")
+        session_id = provenance.get("session_id")
+        if (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", run_id)
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", session_id)
+        ):
+            raise AdapterError("workers.temporary trusted provenance IDs are invalid")
+
+        objective = parameters.get("objective")
+        role_title = parameters.get("role_title")
+        reason = parameters.get("reason")
+        for label, value, maximum in (
+            ("objective", objective, 4000),
+            ("role_title", role_title, 160),
+            ("reason", reason, 1000),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
+                raise AdapterError(f"workers.temporary {label} is invalid")
+
+        skill_refs = parameters.get("skill_refs", [])
+        constraints = parameters.get("required_constraints", [])
+        if (
+            not isinstance(skill_refs, list)
+            or len(skill_refs) > 12
+            or any(not isinstance(item, str) or not item.startswith("aiverse-skills:") for item in skill_refs)
+        ):
+            raise AdapterError("workers.temporary skill_refs are invalid")
+        if (
+            not isinstance(constraints, list)
+            or len(constraints) > 32
+            or any(not isinstance(item, str) or not item.strip() or len(item) > 1000 for item in constraints)
+        ):
+            raise AdapterError("workers.temporary required_constraints are invalid")
+
+        runtime = self._temporary_worker_runtime(parameters.get("runtime"))
+        run_budget = self._temporary_worker_budget(parameters.get("budget"))
+        worker_budget = {
+            key: value
+            for key, value in run_budget.items()
+            if key not in {"max_workers", "max_tasks"}
+        }
+        leader_id = "runtime_gateway_" + hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:24]
+        workspace_id = scope.split(":", 1)[1]
+        owner_result = self._run_multiple_bots_temporary_worker(
+            {
+                "leaderId": leader_id,
+                "workspaceId": workspace_id,
+                "rootObjectiveId": "gateway:" + run_id,
+                "objective": objective.strip(),
+                "roleTitle": role_title.strip(),
+                "reason": reason.strip(),
+                "runtimeLeader": {
+                    "runtime": runtime,
+                    "allowedTools": [],
+                    "allowedConnections": [],
+                    "skillRefs": list(dict.fromkeys(skill_refs)),
+                },
+                "requiredConstraints": list(dict.fromkeys(item.strip() for item in constraints)),
+                "skillRefs": list(dict.fromkeys(skill_refs)),
+                "tools": [],
+                "connections": [],
+                "runBudget": run_budget,
+                "workerBudget": worker_budget,
+                "expectedOutput": {"contract": "artifact-or-structured-result"},
+            }
+        )
+        execution_status = owner_result.get("execution_status")
+        artifact = owner_result.get("artifact")
+        artifact_payload = artifact.get("payload") if isinstance(artifact, Mapping) else None
+        output = artifact_payload.get("inline_content") if isinstance(artifact_payload, Mapping) else None
+        usage = artifact_payload.get("usage") if isinstance(artifact_payload, Mapping) else {}
+        worker = owner_result.get("worker")
+        worker_payload = worker.get("payload") if isinstance(worker, Mapping) else {}
+        run = owner_result.get("run")
+        run_payload = run.get("payload") if isinstance(run, Mapping) else {}
+        completed = (
+            execution_status == "completed"
+            and isinstance(worker_payload, Mapping)
+            and worker_payload.get("kind") == "temporary"
+            and worker_payload.get("status") == "expired"
+            and isinstance(run_payload, Mapping)
+            and run_payload.get("leader_kind") == "runtime"
+            and run_payload.get("leader_lifecycle") == "run_scoped"
+        )
+        return {
+            "status": "succeeded" if completed else "blocked",
+            "effect_occurred": True,
+            "result": {
+                "temporary_worker": {
+                    "state": "completed" if completed else "blocked",
+                    "output": output if completed else None,
+                    "usage": usage if isinstance(usage, Mapping) else {},
+                    "artifact_id": artifact.get("id") if isinstance(artifact, Mapping) else None,
+                    "worker_id": worker.get("id") if isinstance(worker, Mapping) else None,
+                    "run_id": run.get("id") if isinstance(run, Mapping) else None,
+                    "cleanup": owner_result.get("cleanup"),
+                }
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "workers.temporary",
+                "owner": "ai-verse-multiple-bots",
+                "gateway_run_id": run_id,
+            },
+        }
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -1040,6 +1315,8 @@ class AIverseOSHost:
             return self._request_skills_learning_candidate(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "data.structured-truth":
             return self._request_data_structured_truth(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "workers.temporary":
+            return self._request_temporary_worker(request, scope, parameters)
         if action_class == "read_local" and operation in _DATA_READ_OPERATIONS:
             return self._request_data_read(request, scope, operation, parameters)
 
@@ -1050,7 +1327,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth and bounded Data reads only"
+                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary and bounded Data reads only"
                     ),
                 },
             }

@@ -1,0 +1,47 @@
+name: Release Descriptor
+
+on:
+  pull_request:
+    paths:
+      - "release/component-release.json"
+      - ".github/workflows/release-descriptor.yml"
+  push:
+    branches: [main]
+    paths:
+      - "release/component-release.json"
+      - ".github/workflows/release-descriptor.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate release descriptor
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const d = JSON.parse(fs.readFileSync("release/component-release.json", "utf8"));
+          const sha = /^[0-9a-f]{40}$/;
+          if (d.schema_version !== "ai-verse.component-release/v1") throw new Error("wrong schema_version");
+          if (d.component_id !== "ai-verse-os") throw new Error("wrong component_id");
+          if (!sha.test(d.revision)) throw new Error("revision must be exact 40-char sha");
+          if (d.semantics?.release_metadata_only !== true || d.semantics?.live_health_truth !== false) throw new Error("descriptor must remain release metadata only");
+          for (const key of ["preserve_on_update","preserve_on_uninstall","preserve_unknown_user_files"]) if (d.state?.[key] !== true) throw new Error(key+" must be true");
+          for (const key of ["grants_permissions","changes_direction_owner","changes_scope","enables_disabled_component","exposes_remote_listener"]) if (d.authority?.[key] !== false) throw new Error(key+" must be false");
+          for (const group of ["ci","acceptance"]) {
+            if (!Array.isArray(d.evidence?.[group]) || !d.evidence[group].length) throw new Error("missing "+group+" evidence");
+            for (const e of d.evidence[group]) if (e.status !== "pass" || e.revision !== d.revision) throw new Error(group+" evidence must pass and bind exact revision");
+          }
+          console.log("descriptor structure OK", d.component_id, d.version, d.revision);
+          NODE
+          REVISION="$(node -p 'require("./release/component-release.json").revision')"
+          git cat-file -e "$REVISION^{commit}"

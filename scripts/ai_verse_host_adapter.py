@@ -596,6 +596,166 @@ class AIverseOSHost:
             },
         }
 
+    def _request_memory_session_digest(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("memory.session_digest parameters must be an object")
+        allowed = {
+            "session_id",
+            "run_id",
+            "topic",
+            "summary",
+            "significant_outcomes",
+            "unresolved_items",
+            "source_coverage",
+            "source_fingerprint",
+            "completed_at",
+        }
+        extras = set(parameters) - allowed
+        required = {
+            "session_id",
+            "run_id",
+            "topic",
+            "summary",
+            "source_coverage",
+            "source_fingerprint",
+            "completed_at",
+        }
+        missing = required - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "memory.session_digest accepts only compact Gateway digest fields and requires "
+                "session_id, run_id, topic, summary, source_coverage, source_fingerprint, completed_at"
+            )
+
+        session_id = parameters.get("session_id")
+        run_id = parameters.get("run_id")
+        safe_id = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+        if not isinstance(session_id, str) or not safe_id.fullmatch(session_id):
+            raise AdapterError("memory.session_digest session_id is invalid")
+        if not isinstance(run_id, str) or not safe_id.fullmatch(run_id):
+            raise AdapterError("memory.session_digest run_id is invalid")
+
+        topic = parameters.get("topic")
+        summary = parameters.get("summary")
+        if not isinstance(topic, str) or not topic.strip() or len(topic.strip()) > 240:
+            raise AdapterError("memory.session_digest topic must be 1..240 characters")
+        if not isinstance(summary, str) or not summary.strip() or len(summary.strip()) > 6000:
+            raise AdapterError("memory.session_digest summary must be 1..6000 characters")
+
+        def bounded_strings(name: str, value: Any, *, limit: int, item_limit: int) -> list[str]:
+            if value is None:
+                return []
+            if not isinstance(value, list) or len(value) > limit:
+                raise AdapterError(f"memory.session_digest {name} must be an array with at most {limit} items")
+            result: list[str] = []
+            for item in value:
+                if not isinstance(item, str) or not item.strip() or len(item.strip()) > item_limit:
+                    raise AdapterError(
+                        f"memory.session_digest {name} entries must be non-empty strings up to {item_limit} characters"
+                    )
+                normalized = item.strip()
+                if normalized not in result:
+                    result.append(normalized)
+            return result
+
+        significant = bounded_strings(
+            "significant_outcomes",
+            parameters.get("significant_outcomes", []),
+            limit=24,
+            item_limit=1200,
+        )
+        unresolved = bounded_strings(
+            "unresolved_items",
+            parameters.get("unresolved_items", []),
+            limit=24,
+            item_limit=1200,
+        )
+        coverage = bounded_strings(
+            "source_coverage",
+            parameters.get("source_coverage"),
+            limit=8,
+            item_limit=2048,
+        )
+        if not coverage:
+            raise AdapterError("memory.session_digest source_coverage cannot be empty")
+        expected_prefix = f"gateway:run:{run_id}:"
+        if any(not item.startswith(expected_prefix) for item in coverage):
+            raise AdapterError("memory.session_digest source_coverage must be bound to the supplied Gateway run")
+
+        source_fingerprint = parameters.get("source_fingerprint")
+        if (
+            not isinstance(source_fingerprint, str)
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", source_fingerprint)
+        ):
+            raise AdapterError("memory.session_digest source_fingerprint must be sha256:<64 lowercase hex>")
+
+        completed_at = parameters.get("completed_at")
+        if not isinstance(completed_at, str) or not completed_at.strip() or len(completed_at.strip()) > 128:
+            raise AdapterError("memory.session_digest completed_at is invalid")
+
+        entry = self._extension_entry("ai-verse-memory")
+        if entry is None:
+            raise AdapterError("AI-Verse Memory is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-memory engine")
+        memory = _load_module(engine, "_aiverse_os_host_memory_session_digest")
+        writer = getattr(memory, "write_session_digest", None)
+        if not callable(writer):
+            raise AdapterError("installed AI-Verse Memory does not support session digests")
+
+        digest_id, path, created = writer(
+            session_id,
+            summary.strip(),
+            run_id=run_id,
+            scope=scope,
+            topic=topic.strip(),
+            unresolved_items=unresolved,
+            significant_outcomes=significant,
+            source_refs=[
+                f"gateway:session:{session_id}",
+                f"gateway:run:{run_id}",
+            ],
+            provenance={
+                "owner": "ai-verse-gateway",
+                "kind": "completed_session",
+                "session_id": session_id,
+                "run_id": run_id,
+            },
+            source_coverage=coverage,
+            source_fingerprint=source_fingerprint,
+            source_version="gateway-run-v1",
+            completed_at=completed_at.strip(),
+            root=self.root,
+            effect_id=f"gateway:{run_id}:session-digest",
+        )
+        state = "captured" if created else "existing"
+        return {
+            "status": "succeeded",
+            "effect_occurred": bool(created),
+            "result": {
+                "memory_session_digest": {
+                    "state": state,
+                    "changed": bool(created),
+                    "digest_id": digest_id,
+                    "scope": scope,
+                    "session_id": session_id,
+                    "run_id": run_id,
+                    "path": memory.relpath(path, self.root),
+                },
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "memory.session_digest",
+                "digest_id": digest_id,
+            },
+        }
+
     def _request_workspace_ensure(
         self,
         request: Mapping[str, Any],
@@ -673,6 +833,8 @@ class AIverseOSHost:
             return self._request_workspace_ensure(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.capture":
             return self._request_memory_capture(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "memory.session_digest":
+            return self._request_memory_session_digest(request, scope, parameters)
 
         if action_class != "read_local" or operation != "capability.read_instructions":
             return {
@@ -681,7 +843,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure and memory.capture owner actions only"
+                        "workspace.ensure, memory.capture and memory.session_digest owner actions only"
                     ),
                 },
             }

@@ -534,6 +534,111 @@ def main() -> int:
     assert unsafe_result["effect_occurred"] is False
     assert unsafe_result["result"]["memory_capture"]["state"] == "blocked"
 
+    learning_request = {
+        "request_id": "automatic-skill-learning-client-alpha",
+        "action_class": "write_local_reversible",
+        "scope": "workspace:client-alpha",
+        "operation": "skills.learning-candidate",
+        "parameters": {
+            "candidate": {
+                "candidate_id": "learn-host-client-alpha-review",
+                "scope": "workspace:client-alpha",
+                "suggested_owner": "skills",
+                "kind": "create",
+                "summary": "Reusable concise Client Alpha delivery review procedure.",
+                "skill_id": "client-alpha-review",
+                "evidence_refs": ["run:host-learning", "session:host-learning"],
+                "success_signal": ["delivery review completed successfully"],
+                "failure_signal": [],
+                "risk": "low",
+                "confidence": 0.95,
+                "created_at": "2026-09-14T14:00:00Z",
+                "requested_capabilities": [],
+                "requested_dependencies": [],
+                "requires_connection": False,
+                "requires_credential": False,
+                "source_ownership": "agent_learned",
+            },
+            "skill_md": (
+                "---\n"
+                "name: client-alpha-review\n"
+                "description: Reusable concise Client Alpha delivery review procedure\n"
+                "version: 1.0.0\n"
+                "---\n\n"
+                "Review the delivery against the brief, keep notes concise, and verify completion.\n"
+            ),
+            "task_evidence": {"substantial_task": True},
+        },
+        "idempotency_key": "automatic-skill-learning-client-alpha",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Route substantial reusable-procedure evidence through Brain and Skills owners.",
+        "request_fingerprint": hashlib.sha256(
+            b"automatic-skill-learning-client-alpha"
+        ).hexdigest(),
+    }
+    learning_auth = direct_host.authorize_action(learning_request)
+    assert learning_auth["decision"] == "allow"
+    learning_result = direct_host.request_action(learning_request)
+    assert learning_result["status"] == "succeeded"
+    assert learning_result["effect_occurred"] is True
+    assert learning_result["result"]["learning_candidate"]["state"] == "admitted"
+    assert learning_result["result"]["skills_result"]["state"] == "pending_approval"
+    proposal_id = learning_result["execution_binding"]["proposal_id"]
+    assert proposal_id == "learn-host-client-alpha-review"
+
+    learning_replay = direct_host.request_action(learning_request)
+    assert learning_replay["status"] == "succeeded"
+    assert learning_replay["effect_occurred"] is False
+    assert learning_replay["result"]["idempotent_replay"] is True
+    assert learning_replay["execution_binding"]["proposal_id"] == proposal_id
+
+    trivial_learning = {
+        **learning_request,
+        "request_id": "trivial-skill-learning",
+        "idempotency_key": "trivial-skill-learning",
+        "parameters": {
+            **learning_request["parameters"],
+            "candidate": {
+                **learning_request["parameters"]["candidate"],
+                "candidate_id": "learn-trivial-client-alpha-review",
+                "skill_id": "trivial-client-alpha-review",
+            },
+            "task_evidence": {"substantial_task": False},
+        },
+    }
+    trivial_learning["request_fingerprint"] = hashlib.sha256(
+        b"trivial-skill-learning"
+    ).hexdigest()
+    trivial_result = direct_host.request_action(trivial_learning)
+    assert trivial_result["status"] == "succeeded"
+    assert trivial_result["effect_occurred"] is False
+    assert trivial_result["result"]["learning_candidate"]["state"] == "ignored"
+
+    unsafe_learning = {
+        **learning_request,
+        "request_id": "unsafe-skill-learning",
+        "idempotency_key": "unsafe-skill-learning",
+        "parameters": {
+            **learning_request["parameters"],
+            "candidate": {
+                **learning_request["parameters"]["candidate"],
+                "candidate_id": "learn-unsafe-client-alpha-review",
+                "skill_id": "../escape",
+            },
+        },
+    }
+    unsafe_learning["request_fingerprint"] = hashlib.sha256(
+        b"unsafe-skill-learning"
+    ).hexdigest()
+    try:
+        direct_host.request_action(unsafe_learning)
+    except Exception as exc:
+        assert "safe skill_id" in str(exc)
+    else:
+        raise AssertionError("unsafe learned Skill id was not rejected by Brain before Skills mutation")
+
     cross_scope = dict(workspace_request)
     cross_scope["scope"] = "workspace:client-alpha"
     cross_scope["parameters"] = {

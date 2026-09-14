@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from uuid import uuid4
 
@@ -542,6 +543,203 @@ class AIverseOSHost:
             )
         return selection
 
+    def _skills_owner_entrypoint(self) -> Path:
+        path = self.skills_entrypoint
+        if path is None:
+            raise AdapterError(
+                "Skills owner mutation entrypoint is not configured; runtime reads remain available"
+            )
+        if not path.is_file() or path.is_symlink():
+            raise AdapterError(f"Skills owner mutation entrypoint is missing or unsafe: {path}")
+        return path.resolve()
+
+    def _run_skills_owner_cli(self, args: Iterable[str], label: str) -> Dict[str, Any]:
+        entrypoint = self._skills_owner_entrypoint()
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(entrypoint),
+                "--root",
+                str(self.skills_root),
+                *list(args),
+            ],
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            shell=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            return {
+                "owner_refused": True,
+                "reason": detail[:4000],
+            }
+        try:
+            return _json_object(proc.stdout, label)
+        except AdapterError as exc:
+            raise AdapterError(f"{label} returned invalid JSON: {exc}") from exc
+
+    def _request_skills_learning_candidate(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("skills.learning-candidate parameters must be an object")
+        allowed = {"candidate", "skill_md", "task_evidence"}
+        extras = set(parameters) - allowed
+        missing = {"candidate", "skill_md", "task_evidence"} - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "skills.learning-candidate parameters must contain exactly candidate, skill_md, task_evidence"
+            )
+
+        candidate = parameters.get("candidate")
+        task_evidence = parameters.get("task_evidence")
+        skill_md = parameters.get("skill_md")
+        if not isinstance(candidate, Mapping):
+            raise AdapterError("skills.learning-candidate candidate must be an object")
+        if not isinstance(task_evidence, Mapping):
+            raise AdapterError("skills.learning-candidate task_evidence must be an object")
+        if set(task_evidence) != {"substantial_task"} or not isinstance(task_evidence.get("substantial_task"), bool):
+            raise AdapterError("task_evidence must contain exactly substantial_task:boolean")
+        if not isinstance(skill_md, str) or not skill_md.strip():
+            raise AdapterError("skills.learning-candidate requires non-empty SKILL.md content")
+        encoded = skill_md.encode("utf-8")
+        if len(encoded) > _MAX_SKILL_BYTES:
+            raise AdapterError("skills.learning-candidate SKILL.md exceeds the safe size limit")
+        if "\x00" in skill_md:
+            raise AdapterError("skills.learning-candidate SKILL.md contains a NUL byte")
+
+        brain_entry = self._extension_entry("ai-verse-brain")
+        if brain_entry is None:
+            raise AdapterError("AI-Verse Brain is unavailable")
+        try:
+            from aiverse_brain.learning import admit_skills_learning_candidate
+        except Exception as exc:
+            raise AdapterError(f"AI-Verse Brain learning-candidate gate is unavailable: {exc}") from exc
+
+        admission = admit_skills_learning_candidate(
+            dict(candidate),
+            bound_scope=scope,
+            substantial_task=task_evidence["substantial_task"],
+        )
+        if not isinstance(admission, dict) or admission.get("state") not in {"admitted", "ignored"}:
+            raise AdapterError("Brain learning-candidate gate returned an invalid result")
+        if admission["state"] == "ignored":
+            return {
+                "status": "succeeded",
+                "effect_occurred": False,
+                "result": {"learning_candidate": admission},
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request),
+                    "scope": scope,
+                    "action_class": "write_local_reversible",
+                    "operation": "skills.learning-candidate",
+                },
+            }
+
+        envelope = admission.get("envelope")
+        if not isinstance(envelope, dict):
+            raise AdapterError("Brain admitted candidate without a Skills envelope")
+
+        with tempfile.TemporaryDirectory(
+            prefix=".aiverse-learning-route-",
+            dir=str(self.skills_root.parent),
+        ) as temp_name:
+            temp_root = Path(temp_name)
+            candidate_dir = temp_root / "candidate"
+            candidate_dir.mkdir(mode=0o700)
+            (candidate_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+            envelope_path = temp_root / "envelope.json"
+            envelope_path.write_text(
+                json.dumps(envelope, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+
+            submitted = self._run_skills_owner_cli(
+                [
+                    "learning",
+                    "submit",
+                    "--envelope",
+                    str(envelope_path),
+                    "--candidate-dir",
+                    str(candidate_dir),
+                    "--trigger",
+                    "post-run",
+                    "--json",
+                ],
+                "Skills learning submit",
+            )
+            if submitted.get("owner_refused") is True:
+                return {
+                    "status": "blocked",
+                    "effect_occurred": False,
+                    "result": {
+                        "learning_candidate": admission,
+                        "skills": submitted,
+                    },
+                    "execution_binding": {
+                        "request_fingerprint": _fingerprint(request),
+                        "scope": scope,
+                        "action_class": "write_local_reversible",
+                        "operation": "skills.learning-candidate",
+                    },
+                }
+
+            proposal_id = submitted.get("proposal_id")
+            state = submitted.get("state")
+            replay = submitted.get("idempotent_replay") is True
+            final = submitted
+            if not replay and isinstance(proposal_id, str) and state in {"proposal", "pending_approval", "auto_eligible"}:
+                final = self._run_skills_owner_cli(
+                    [
+                        "proposals",
+                        "evaluate",
+                        proposal_id,
+                        "--apply-auto",
+                        "--json",
+                    ],
+                    "Skills learning evaluate",
+                )
+                if final.get("owner_refused") is True:
+                    return {
+                        "status": "blocked",
+                        "effect_occurred": True,
+                        "result": {
+                            "learning_candidate": admission,
+                            "skills_submission": submitted,
+                            "skills_evaluation": final,
+                        },
+                        "execution_binding": {
+                            "request_fingerprint": _fingerprint(request),
+                            "scope": scope,
+                            "action_class": "write_local_reversible",
+                            "operation": "skills.learning-candidate",
+                            "proposal_id": proposal_id,
+                        },
+                    }
+
+        return {
+            "status": "succeeded",
+            "effect_occurred": not replay,
+            "result": {
+                "learning_candidate": admission,
+                "skills_submission": submitted,
+                "skills_result": final,
+                "idempotent_replay": replay,
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "skills.learning-candidate",
+                "proposal_id": proposal_id,
+                "proposal_state": final.get("state") if isinstance(final, dict) else None,
+            },
+        }
+
     def _request_memory_capture(
         self,
         request: Mapping[str, Any],
@@ -835,6 +1033,8 @@ class AIverseOSHost:
             return self._request_memory_capture(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.session_digest":
             return self._request_memory_session_digest(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "skills.learning-candidate":
+            return self._request_skills_learning_candidate(request, scope, parameters)
 
         if action_class != "read_local" or operation != "capability.read_instructions":
             return {
@@ -843,7 +1043,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture and memory.session_digest owner actions only"
+                        "workspace.ensure, memory.capture, memory.session_digest and skills.learning-candidate owner actions only"
                     ),
                 },
             }

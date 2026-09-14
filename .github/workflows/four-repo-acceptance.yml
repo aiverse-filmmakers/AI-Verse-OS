@@ -15,8 +15,8 @@ jobs:
     timeout-minutes: 30
     env:
       MEMORY_COMMIT: 1c6acf036d42937e57d94dfe48ac501727861653
-      BRAIN_COMMIT: bef8261ad35d126d29aeff5d496f46904125b7b6
-      SKILLS_COMMIT: 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
+      BRAIN_COMMIT: a53f79cf083d99b39a87d9ffe9509bf4e2d02922
+      SKILLS_COMMIT: fb0c138ef424734cd2e5359040f376e35c4c5875
 
     steps:
       - name: Checkout AI-Verse OS under test

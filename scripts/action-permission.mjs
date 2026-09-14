@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 export const ACTION_PERMISSION_SOURCE = 'ai-verse-os/action-permission-v1';
 export const POLICY_VALUES = new Set(['allow', 'confirm', 'human-review', 'deny']);
@@ -342,7 +343,7 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+const invoked = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 if (invoked) {
   main().catch((error) => {
     process.stderr.write(`action-permission: ${error.message}\n`);

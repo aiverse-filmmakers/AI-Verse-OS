@@ -1529,6 +1529,176 @@ class AIverseOSHost:
             },
         }
 
+    def _run_automations_create_definition(self, definition: Mapping[str, Any]) -> Dict[str, Any]:
+        entry = self._extension_entry("ai-verse-automations")
+        if entry is None:
+            raise AdapterError("AI-Verse Automations is unavailable")
+        engine = self._safe_repo_file(entry.get("engine"), "ai-verse-automations engine")
+        return _run_json(
+            [sys.executable, str(engine)],
+            {
+                "operation": "create_definition",
+                "definition": dict(definition),
+            },
+            "Automations definition owner",
+        )
+
+    def _request_automation_create(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("automations.create parameters must be an object")
+        allowed = {"name", "objective", "trigger", "consent", "provenance"}
+        extras = set(parameters) - allowed
+        missing = allowed - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "automations.create parameters have invalid fields: "
+                + ", ".join(sorted(extras | missing))
+            )
+
+        consent = parameters.get("consent")
+        if not isinstance(consent, Mapping):
+            raise AdapterError("automations.create requires trusted explicit consent")
+        mode = consent.get("mode")
+        expected_consent = {"explicit", "mode", "user_message_digest"}
+        if mode == "affirmative_to_recommendation":
+            expected_consent.add("recommendation_message_digest")
+        if set(consent) != expected_consent:
+            raise AdapterError("automations.create consent shape is invalid")
+        if consent.get("explicit") is not True or mode not in {
+            "direct_request",
+            "affirmative_to_recommendation",
+        }:
+            raise AdapterError("automations.create requires explicit user consent")
+        digest_pattern = r"^sha256:[a-f0-9]{64}$"
+        if not isinstance(consent.get("user_message_digest"), str) or not re.fullmatch(
+            digest_pattern, consent["user_message_digest"]
+        ):
+            raise AdapterError("automations.create user consent digest is invalid")
+        if mode == "affirmative_to_recommendation" and (
+            not isinstance(consent.get("recommendation_message_digest"), str)
+            or not re.fullmatch(digest_pattern, consent["recommendation_message_digest"])
+        ):
+            raise AdapterError("automations.create recommendation digest is invalid")
+
+        provenance = parameters.get("provenance")
+        if not isinstance(provenance, Mapping) or set(provenance) != {"run_id", "session_id"}:
+            raise AdapterError("automations.create provenance must contain exactly run_id and session_id")
+        run_id = provenance.get("run_id")
+        session_id = provenance.get("session_id")
+        if (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", run_id)
+            or not isinstance(session_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", session_id)
+        ):
+            raise AdapterError("automations.create trusted provenance IDs are invalid")
+
+        name = parameters.get("name")
+        objective = parameters.get("objective")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 160:
+            raise AdapterError("automations.create name is invalid")
+        if not isinstance(objective, str) or not objective.strip() or len(objective.strip()) > 4000:
+            raise AdapterError("automations.create objective is invalid")
+
+        trigger = parameters.get("trigger")
+        if not isinstance(trigger, Mapping) or set(trigger) != {"kind", "spec"}:
+            raise AdapterError("automations.create trigger must contain exactly kind and spec")
+        trigger_kind = trigger.get("kind")
+        trigger_spec = trigger.get("spec")
+        if trigger_kind not in {"cron", "interval"} or not isinstance(trigger_spec, Mapping):
+            raise AdapterError("automations.create supports recurring cron or interval triggers only")
+        try:
+            trigger_bytes = json.dumps(
+                dict(trigger_spec),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(f"automations.create trigger is not JSON-safe: {exc}") from exc
+        if len(trigger_bytes) > 16 * 1024:
+            raise AdapterError("automations.create trigger exceeds the safe size limit")
+
+        canonical_trigger = {
+            "kind": trigger_kind,
+            "spec": dict(trigger_spec),
+        }
+        stable_name = name.strip()
+        stable_objective = objective.strip()
+        identity_material = {
+            "scope": scope,
+            "name": stable_name.casefold(),
+            "objective": stable_objective,
+            "trigger": canonical_trigger,
+            "target_kind": "gateway",
+            "action_class": "read_local",
+        }
+        semantic_digest = hashlib.sha256(
+            json.dumps(
+                identity_material,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        definition = {
+            "name": stable_name,
+            "scope": scope,
+            "target_kind": "gateway",
+            "target_ref": None,
+            "action_class": "read_local",
+            "wake": {
+                "objective": stable_objective,
+                "created_via": "gateway_explicit_consent",
+                "consent": dict(consent),
+            },
+            "trigger": canonical_trigger,
+            "idempotency_key": "gateway-consented:" + semantic_digest,
+        }
+        owner_result = self._run_automations_create_definition(definition)
+        state = owner_result.get("state")
+        automation = owner_result.get("automation")
+        created_trigger = owner_result.get("trigger")
+        if (
+            state not in {"created", "existing"}
+            or not isinstance(automation, Mapping)
+            or not isinstance(created_trigger, Mapping)
+            or automation.get("scope") != scope
+            or automation.get("target_kind") != "gateway"
+            or automation.get("action_class") != "read_local"
+            or created_trigger.get("kind") != trigger_kind
+        ):
+            raise AdapterError("Automations owner returned inconsistent canonical state")
+
+        return {
+            "status": "succeeded",
+            "effect_occurred": state == "created",
+            "result": {
+                "automation": {
+                    "state": state,
+                    "automation_id": automation.get("id"),
+                    "trigger_id": created_trigger.get("id"),
+                    "trigger_kind": trigger_kind,
+                    "next_run_at": created_trigger.get("next_run_at"),
+                    "consent_mode": mode,
+                }
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "modify_canonical_state",
+                "operation": "automations.create",
+                "owner": "ai-verse-automations",
+                "gateway_run_id": run_id,
+            },
+        }
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -1551,6 +1721,8 @@ class AIverseOSHost:
             return self._request_temporary_worker(request, scope, parameters)
         if action_class == "modify_canonical_state" and operation == "bots.permanent":
             return self._request_permanent_bot(request, scope, parameters)
+        if action_class == "modify_canonical_state" and operation == "automations.create":
+            return self._request_automation_create(request, scope, parameters)
         if action_class == "read_local" and operation in _DATA_READ_OPERATIONS:
             return self._request_data_read(request, scope, operation, parameters)
 
@@ -1561,7 +1733,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent and bounded Data reads only"
+                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
                     ),
                 },
             }

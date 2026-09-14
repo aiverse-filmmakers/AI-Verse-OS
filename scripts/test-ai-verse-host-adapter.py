@@ -649,6 +649,135 @@ def main() -> int:
         raise AssertionError("bots.permanent accepted recommendation consent without recommendation evidence")
     assert len(captured_permanent_bots) == 1
 
+    captured_automations = []
+
+    def fake_create_automation_definition(definition):
+        captured_automations.append(dict(definition))
+        digest = hashlib.sha256(definition["idempotency_key"].encode("utf-8")).hexdigest()[:40]
+        return {
+            "state": "created",
+            "automation": {
+                "id": "aut_" + digest,
+                "scope": definition["scope"],
+                "target_kind": definition["target_kind"],
+                "action_class": definition["action_class"],
+            },
+            "trigger": {
+                "id": "trg_" + digest,
+                "kind": definition["trigger"]["kind"],
+                "next_run_at": "2026-09-21T06:00:00Z",
+            },
+        }
+
+    direct_host._run_automations_create_definition = fake_create_automation_definition
+    user_schedule_text = "Every Monday at 09:00 Europe/Bucharest, review the Client Alpha delivery checklist."
+    automation_request = {
+        "request_id": "explicit-automation-client-alpha",
+        "action_class": "modify_canonical_state",
+        "scope": "workspace:client-alpha",
+        "operation": "automations.create",
+        "parameters": {
+            "name": "Monday Client Alpha review",
+            "objective": "Review the Client Alpha delivery checklist and prepare the usual concise summary.",
+            "trigger": {
+                "kind": "cron",
+                "spec": {
+                    "expr": "0 9 * * MON",
+                    "timezone": "Europe/Bucharest",
+                },
+            },
+            "consent": {
+                "explicit": True,
+                "mode": "direct_request",
+                "user_message_digest": "sha256:" + hashlib.sha256(
+                    user_schedule_text.encode("utf-8")
+                ).hexdigest(),
+            },
+            "provenance": {
+                "run_id": "run-automation-acceptance",
+                "session_id": "session-automation-acceptance",
+            },
+        },
+        "idempotency_key": "gateway-run-automation-acceptance",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": False,
+        "reason": "The user explicitly requested this recurring responsibility.",
+    }
+    automation_request["request_fingerprint"] = adapter_module._fingerprint(
+        automation_request
+    )
+    assert direct_host.authorize_action(automation_request)["decision"] == "allow"
+    automation_result = direct_host.request_action(automation_request)
+    assert automation_result["status"] == "succeeded"
+    assert automation_result["effect_occurred"] is True
+    assert automation_result["result"]["automation"]["state"] == "created"
+    assert automation_result["result"]["automation"]["consent_mode"] == "direct_request"
+    assert automation_result["execution_binding"]["owner"] == "ai-verse-automations"
+    assert len(captured_automations) == 1
+    owner_definition = captured_automations[0]
+    assert owner_definition["scope"] == "workspace:client-alpha"
+    assert owner_definition["target_kind"] == "gateway"
+    assert owner_definition["target_ref"] is None
+    assert owner_definition["action_class"] == "read_local"
+    assert owner_definition["trigger"] == automation_request["parameters"]["trigger"]
+    assert owner_definition["wake"]["objective"] == automation_request["parameters"]["objective"]
+    assert owner_definition["wake"]["created_via"] == "gateway_explicit_consent"
+    assert owner_definition["wake"]["consent"]["mode"] == "direct_request"
+    assert owner_definition["idempotency_key"].startswith("gateway-consented:")
+
+    missing_automation_consent = {
+        **automation_request,
+        "request_id": "automation-without-consent",
+        "idempotency_key": "automation-without-consent",
+        "parameters": {
+            **automation_request["parameters"],
+            "name": "Unauthorized recurring review",
+            "consent": {
+                "explicit": False,
+                "mode": "direct_request",
+                "user_message_digest": "sha256:" + hashlib.sha256(
+                    b"We seem to do this every Monday."
+                ).hexdigest(),
+            },
+        },
+    }
+    missing_automation_consent["request_fingerprint"] = adapter_module._fingerprint(
+        missing_automation_consent
+    )
+    try:
+        direct_host.request_action(missing_automation_consent)
+    except adapter_module.AdapterError as exc:
+        assert "explicit user consent" in str(exc)
+    else:
+        raise AssertionError("automations.create accepted missing explicit consent")
+    assert len(captured_automations) == 1
+
+    unsupported_trigger = {
+        **automation_request,
+        "request_id": "automation-unsupported-trigger",
+        "idempotency_key": "automation-unsupported-trigger",
+        "parameters": {
+            **automation_request["parameters"],
+            "trigger": {
+                "kind": "webhook",
+                "spec": {
+                    "secret_ref": "env:SHOULD_NOT_BE_CREATED",
+                },
+            },
+        },
+    }
+    unsupported_trigger["request_fingerprint"] = adapter_module._fingerprint(
+        unsupported_trigger
+    )
+    try:
+        direct_host.request_action(unsupported_trigger)
+    except adapter_module.AdapterError as exc:
+        assert "recurring cron or interval" in str(exc)
+    else:
+        raise AssertionError("automations.create silently expanded into webhook authority")
+    assert len(captured_automations) == 1
+
     learning_request = {
         "request_id": "automatic-skill-learning-client-alpha",
         "action_class": "write_local_reversible",

@@ -92,12 +92,14 @@ def main() -> int:
     assert {
         "read_context",
         "retrieve_history",
+        "retrieve_history_progressive",
         "list_capabilities",
         "list_connections",
         "authorize_action",
         "request_action",
     }.issubset(set(selection.operations))
     host = selection.host
+    adapter_module = load_adapter(adapter_path)
 
     current = root / "operator" / "context" / "CURRENT.md"
     current.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +142,86 @@ def main() -> int:
 
     history = list(host.retrieve_history("Aurora release prerequisite whisper", "operator"))
     assert any("Aurora release prerequisite" in str(row.get("text", "")) for row in history)
+
+    progressive_host = adapter_module.AIverseOSHost(
+        root,
+        skills_root,
+        skills_entrypoint,
+        root.parent / "no-local-skills",
+    )
+    progressive_catalog = progressive_host.retrieve_history_progressive({
+        "version": "memory.progressive-recall.v1",
+        "depth": "catalog",
+        "scope": "operator",
+        "query": "",
+        "limit": 8,
+        "max_bytes": 4096,
+    })
+    assert progressive_catalog["depth"] == "catalog"
+    assert progressive_catalog["scope"] == "operator"
+    assert progressive_catalog["api_version"] == "memory.progressive-recall.v1"
+
+    progressive_summary = progressive_host.retrieve_history_progressive({
+        "version": "memory.progressive-recall.v1",
+        "depth": "summary",
+        "scope": "operator",
+        "query": "Aurora release prerequisite whisper",
+        "limit": 8,
+        "max_bytes": 8192,
+    })
+    assert progressive_summary["depth"] == "summary"
+    assert any(
+        "Aurora release prerequisite" in str(item)
+        for item in progressive_summary["items"]
+    )
+
+    progressive_detail = progressive_host.retrieve_history_progressive({
+        "version": "memory.progressive-recall.v1",
+        "depth": "detail",
+        "scope": "operator",
+        "query": "Aurora release prerequisite whisper",
+        "limit": 8,
+        "max_bytes": 12000,
+    })
+    detail_item = next(
+        item
+        for item in progressive_detail["items"]
+        if item.get("record_type") == "indexed_record"
+        and "Aurora release prerequisite" in str(item.get("text", ""))
+    )
+    assert progressive_detail["source_depth_available"] is True
+
+    progressive_source = progressive_host.retrieve_history_progressive({
+        "version": "memory.progressive-recall.v1",
+        "depth": "source",
+        "scope": "operator",
+        "query": "Aurora release prerequisite",
+        "limit": 8,
+        "max_bytes": 12000,
+        "evidence_ref": detail_item,
+    })
+    assert progressive_source["status"] == "ok"
+    assert progressive_source["exact_evidence"] is True
+    assert "Aurora release prerequisite" in progressive_source["source"]["content"]
+
+    cross_scope_evidence = {
+        **detail_item,
+        "scope": "workspace:beta",
+    }
+    try:
+        progressive_host.retrieve_history_progressive({
+            "version": "memory.progressive-recall.v1",
+            "depth": "source",
+            "scope": "operator",
+            "query": "Aurora release prerequisite",
+            "limit": 8,
+            "max_bytes": 12000,
+            "evidence_ref": cross_scope_evidence,
+        })
+    except adapter_module.AdapterError:
+        pass
+    else:
+        raise AssertionError("progressive history bridge accepted cross-scope evidence")
 
     connection_registry = root / "connections" / "registry.yaml"
     connection_registry.parent.mkdir(parents=True, exist_ok=True)
@@ -284,7 +366,6 @@ def main() -> int:
     restored = skills_pin(skills_entrypoint, skills_root)
     assert restored["generation_id"] == first_pin["generation_id"]
 
-    adapter_module = load_adapter(adapter_path)
     switched = {"done": False}
 
     def switch_generation(_pin):

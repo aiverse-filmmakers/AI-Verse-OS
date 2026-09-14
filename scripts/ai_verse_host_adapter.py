@@ -75,6 +75,7 @@ def _run_json(command: Iterable[str], payload: Mapping[str, Any], label: str) ->
         list(command),
         input=json.dumps(dict(payload), ensure_ascii=False, separators=(",", ":")),
         text=True,
+        encoding="utf-8",
         capture_output=True,
         shell=False,
     )
@@ -313,6 +314,7 @@ class AIverseOSHost:
                 scope,
             ],
             text=True,
+            encoding="utf-8",
             capture_output=True,
             shell=False,
         )

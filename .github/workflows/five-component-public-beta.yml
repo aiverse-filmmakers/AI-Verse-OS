@@ -25,7 +25,7 @@ jobs:
       BRAIN_SHA: 16c0b7ea32fcb4759cfb8368876b6985016eab68
       MEMORY_SHA: f5b417f9e7ce1b3f05bc80d10a483d10f6ad10ee
       SKILLS_SHA: 3ab838e6e64561bbb7cea8f85d0ebc75b9e84337
-      DATA_SHA: 579dae596a1c929bbc0e900541d29742c18b875e
+      DATA_SHA: 8edde7dca5afa34e300130cc6b8ee2b4170ad40f
 
     steps:
       - name: Checkout OS under test

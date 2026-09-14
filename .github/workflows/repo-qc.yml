@@ -32,6 +32,9 @@ jobs:
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 
+      - name: Test progressive onboarding contract
+        run: node scripts/test-progressive-onboarding.mjs
+
       - name: Test ownership-aware adapter synchronization
         shell: bash
         run: |

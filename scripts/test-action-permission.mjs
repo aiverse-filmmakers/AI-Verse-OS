@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { evaluateActionPermission } from './action-permission.mjs';
 
@@ -172,6 +173,22 @@ for (const status of ['paused', 'archived']) {
   // A permissive operator policy cannot erase a missing workspace destructive/high-stakes floor.
   assert.equal(evaluate(root, 'delete_data', 'workspace:safe-defaults').decision, 'approval_required');
   assert.equal(evaluate(root, 'high_stakes_domain_action', 'workspace:safe-defaults').decision, 'approval_required');
+}
+
+
+{
+  const root = tempRoot();
+  const payload = request('read_local', 'operator', 'cli-entrypoint');
+  const invoked = spawnSync(
+    process.execPath,
+    [path.join(import.meta.dirname, 'action-permission.mjs'), '--root', root],
+    { input: JSON.stringify(payload), encoding: 'utf8', shell: false },
+  );
+  assert.equal(invoked.status, 0, invoked.stderr);
+  assert.ok(invoked.stdout.trim(), 'CLI invocation must emit a JSON response');
+  const result = JSON.parse(invoked.stdout);
+  assert.equal(result.decision, 'allow');
+  assert.equal(result.request_fingerprint, payload.request_fingerprint);
 }
 
 console.log('Action permission acceptance tests: PASS');

@@ -35,6 +35,9 @@ jobs:
       - name: Test progressive onboarding contract
         run: node scripts/test-progressive-onboarding.mjs
 
+      - name: Test automatic workspace owner primitive
+        run: node scripts/test-workspace-owner.mjs
+
       - name: Test ownership-aware adapter synchronization
         shell: bash
         run: |

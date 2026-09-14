@@ -409,6 +409,113 @@ def main() -> int:
     assert memory_replay["result"]["memory_capture"]["state"] == "existing"
     assert memory_replay["effect_occurred"] is False
 
+    digest_request = {
+        "request_id": "completed-session-digest-client-alpha",
+        "action_class": "write_local_reversible",
+        "scope": "workspace:client-alpha",
+        "operation": "memory.session_digest",
+        "parameters": {
+            "session_id": "sess-host-acceptance",
+            "run_id": "run-host-acceptance",
+            "topic": "Client Alpha delivery review",
+            "summary": (
+                "Request: Review Client Alpha delivery.\n"
+                "Outcome: The concise checkpoint workflow was validated and the run completed."
+            ),
+            "significant_outcomes": ["Concise checkpoint workflow validated"],
+            "unresolved_items": [],
+            "source_coverage": [
+                "gateway:run:run-host-acceptance:messages:0-5"
+            ],
+            "source_fingerprint": "sha256:" + hashlib.sha256(
+                b"gateway-run-host-acceptance"
+            ).hexdigest(),
+            "completed_at": "2026-09-14T14:00:00+00:00",
+        },
+        "idempotency_key": "gateway:run-host-acceptance:session-digest",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Persist compact completed-session history through the Memory owner.",
+        "request_fingerprint": hashlib.sha256(
+            b"completed-session-digest-client-alpha"
+        ).hexdigest(),
+    }
+    digest_auth = direct_host.authorize_action(digest_request)
+    assert digest_auth["decision"] == "allow"
+    digest_result = direct_host.request_action(digest_request)
+    assert digest_result["status"] == "succeeded"
+    assert digest_result["effect_occurred"] is True
+    digest = digest_result["result"]["memory_session_digest"]
+    assert digest["state"] == "captured"
+    assert digest["scope"] == "workspace:client-alpha"
+    assert digest["session_id"] == "sess-host-acceptance"
+    assert digest["run_id"] == "run-host-acceptance"
+    assert digest["digest_id"].startswith("sdg-")
+
+    digest_replay = direct_host.request_action(digest_request)
+    replay_digest = digest_replay["result"]["memory_session_digest"]
+    assert replay_digest["state"] == "existing"
+    assert replay_digest["changed"] is False
+    assert replay_digest["digest_id"] == digest["digest_id"]
+    assert digest_replay["effect_occurred"] is False
+
+    memory_engine_path = root / "scripts" / "ai-verse-memory" / "memory.py"
+    memory_module = load_adapter(memory_engine_path)
+    stored_digest = memory_module.read_session_digest(
+        digest["digest_id"],
+        scope="workspace:client-alpha",
+        root=root,
+        mode=memory_module.MODE_NATIVE,
+    )
+    assert stored_digest["source_refs"] == [
+        "gateway:session:sess-host-acceptance",
+        "gateway:run:run-host-acceptance",
+    ]
+    assert stored_digest["source_version"] == "gateway-run-v1"
+    assert stored_digest["provenance"]["owner"] == "ai-verse-gateway"
+    assert stored_digest["source_coverage"] == [
+        "gateway:run:run-host-acceptance:messages:0-5"
+    ]
+
+    raw_digest = {
+        **digest_request,
+        "request_id": "completed-session-digest-raw-transcript",
+        "idempotency_key": "completed-session-digest-raw-transcript",
+        "parameters": {
+            **digest_request["parameters"],
+            "transcript": "User: raw transcript must never be accepted",
+        },
+    }
+    raw_digest["request_fingerprint"] = hashlib.sha256(
+        b"completed-session-digest-raw-transcript"
+    ).hexdigest()
+    try:
+        direct_host.request_action(raw_digest)
+    except adapter_module.AdapterError:
+        pass
+    else:
+        raise AssertionError("memory.session_digest accepted a raw transcript field")
+
+    cross_run_coverage = {
+        **digest_request,
+        "request_id": "completed-session-digest-cross-run",
+        "idempotency_key": "completed-session-digest-cross-run",
+        "parameters": {
+            **digest_request["parameters"],
+            "source_coverage": ["gateway:run:other-run:messages:0-5"],
+        },
+    }
+    cross_run_coverage["request_fingerprint"] = hashlib.sha256(
+        b"completed-session-digest-cross-run"
+    ).hexdigest()
+    try:
+        direct_host.request_action(cross_run_coverage)
+    except adapter_module.AdapterError:
+        pass
+    else:
+        raise AssertionError("memory.session_digest accepted coverage from another Gateway run")
+
     unsafe_memory = {
         **memory_request,
         "request_id": "automatic-memory-secret",

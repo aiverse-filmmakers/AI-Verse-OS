@@ -44,6 +44,45 @@ def load_adapter(path: Path):
     return module
 
 
+def prove_utf8_subprocess_contract(adapter_module, root: Path):
+    original_run = adapter_module.subprocess.run
+    seen = []
+
+    def fake_run(command, **kwargs):
+        seen.append((list(command), dict(kwargs)))
+        if kwargs.get("encoding") != "utf-8":
+            raise AssertionError(f"host subprocess boundary is not explicit UTF-8: {kwargs}")
+        return subprocess.CompletedProcess(
+            list(command),
+            0,
+            stdout=json.dumps({"message": "direcție — verificare ✓"}, ensure_ascii=False),
+            stderr="",
+        )
+
+    class ReadContextStub:
+        current_context_cli = root / "scripts" / "current-context.mjs"
+
+        def __init__(self):
+            self.root = root
+
+        def _validate_scope(self, scope):
+            return scope
+
+    adapter_module.subprocess.run = fake_run
+    try:
+        direct = adapter_module._run_json(
+            ["node", "fixture.mjs"],
+            {"message": "direcție — verificare ✓"},
+            "UTF-8 subprocess acceptance",
+        )
+        assert direct["message"] == "direcție — verificare ✓"
+        resolved = adapter_module.OSFourComponentHost.read_context(ReadContextStub(), "operator")
+        assert resolved["message"] == "direcție — verificare ✓"
+        assert len(seen) == 2
+    finally:
+        adapter_module.subprocess.run = original_run
+
+
 def skills_pin(skills_entrypoint: Path, skills_root: Path):
     result = run([
         sys.executable,
@@ -284,6 +323,7 @@ def main() -> int:
     assert restored["generation_id"] == first_pin["generation_id"]
 
     adapter_module = load_adapter(adapter_path)
+    prove_utf8_subprocess_contract(adapter_module, root)
     switched = {"done": False}
 
     def switch_generation(_pin):

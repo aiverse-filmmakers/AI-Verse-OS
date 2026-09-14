@@ -15,6 +15,8 @@ export const MAX_HOST_REQUEST_BYTES = 256 * 1024;
 
 const SCOPE = /^workspace:([a-z0-9][a-z0-9-]{0,127})$/;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const ACTOR_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+const ACTOR_KINDS = new Set(['human','bot','worker','app','automation','system','import','connection']);
 const READ_OPERATIONS = new Set([
   'data.space.list',
   'data.space.get',
@@ -38,6 +40,7 @@ const WRITE_OPERATIONS = new Set([
   'data.record.update',
   'data.bulk.execute',
   'data.transaction.execute',
+  'data.structure.ensure',
 ]);
 const DELETE_OPERATIONS = new Set(['data.record.delete']);
 
@@ -165,9 +168,20 @@ async function loadDataEngine(root) {
   return { entry, engine, description };
 }
 
+function validateActor(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('actor must be an object');
+  const keys = Object.keys(raw);
+  if (keys.length !== 2 || keys.some((key) => key !== 'kind' && key !== 'id')) {
+    fail('actor must contain exactly kind and id');
+  }
+  if (!ACTOR_KINDS.has(raw.kind)) fail('actor.kind is invalid');
+  if (typeof raw.id !== 'string' || !ACTOR_ID.test(raw.id)) fail('actor.id is invalid');
+  return { kind: raw.kind, id: raw.id };
+}
+
 function validateRequest(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail('Data host request must be an object');
-  const allowed = new Set(['protocol', 'request_id', 'operation', 'scope', 'data', 'reason']);
+  const allowed = new Set(['protocol', 'request_id', 'operation', 'scope', 'data', 'reason', 'actor']);
   for (const key of Object.keys(raw)) if (!allowed.has(key)) fail(`unknown Data host request field: ${key}`);
   if (raw.protocol !== OS_DATA_HOST_PROTOCOL) fail(`protocol must equal ${OS_DATA_HOST_PROTOCOL}`);
   if (typeof raw.request_id !== 'string' || !REQUEST_ID.test(raw.request_id)) fail('request_id is invalid');
@@ -176,7 +190,7 @@ function validateRequest(raw) {
     fail('reason must be a non-empty bounded string');
   }
   if (raw.operation === 'describe') {
-    if (raw.scope !== undefined || raw.data !== undefined) fail('describe does not accept scope or data');
+    if (raw.scope !== undefined || raw.data !== undefined || raw.actor !== undefined) fail('describe does not accept scope, data, or actor');
     return { ...raw };
   }
   if (typeof raw.scope !== 'string') fail('workspace scope is required');
@@ -192,10 +206,14 @@ function validateRequest(raw) {
     if (!raw.data.payload || typeof raw.data.payload !== 'object' || Array.isArray(raw.data.payload)) {
       fail('data.payload must be an object');
     }
-  } else if (raw.data !== undefined) {
-    fail('only request may include data');
+  } else if (raw.data !== undefined || raw.actor !== undefined) {
+    fail('only request may include data or actor');
   }
-  return { ...raw, workspaceId: match[1] };
+  return {
+    ...raw,
+    ...(raw.actor === undefined ? {} : { actor: validateActor(raw.actor) }),
+    workspaceId: match[1],
+  };
 }
 
 function containsDeleteMutation(data) {
@@ -236,7 +254,11 @@ function permissionFor(root, request, action) {
     action_class: action.actionClass,
     scope: request.scope ?? 'operator',
     operation: action.operation,
-    parameters: stableValue(action.parameters),
+    parameters: stableValue(
+      request.actor === undefined
+        ? action.parameters
+        : { data: action.parameters, attribution_actor: request.actor }
+    ),
     idempotency_key: request.data?.payload?.idempotencyKey ?? request.request_id,
     in_scope: true,
     within_budget: true,
@@ -303,6 +325,22 @@ export async function invokeDataHost({ osRoot = process.cwd(), request }) {
       operation: 'workspace.init',
       rootPath: root,
       workspaceId: normalized.workspaceId,
+    };
+  } else if (normalized.actor !== undefined) {
+    if (description.hostBoundActorRequests !== true) {
+      fail('AI-Verse Data engine does not support trusted host-bound actor requests', 4);
+    }
+    engineRequest = {
+      protocol: DATA_ENGINE_PROTOCOL,
+      operation: 'data.host_bound_request',
+      rootPath: root,
+      workspaceId: normalized.workspaceId,
+      actor: normalized.actor,
+      authorization: {
+        mode: 'host-bound',
+        capabilityRefs: [`os-permission:${permission.request_fingerprint}`],
+      },
+      data: normalized.data,
     };
   } else {
     engineRequest = {

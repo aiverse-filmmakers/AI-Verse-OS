@@ -56,7 +56,7 @@ _MIGRATION_MAX_CLARIFICATIONS = 32
 _MIGRATION_MAX_RESOLUTIONS = 32
 _MIGRATION_MAX_PENDING_RESULTS = 64
 _MIGRATION_INTERNAL_QUESTION_TERMS = re.compile(
-    r"\\b(?:workspace|memory|data|skill|automation|bot|connection|canonical|owner|scope)\\b",
+    r"\b(?:workspace|memory|data|skill|automation|bot|connection|canonical|owner|scope)\b",
     re.IGNORECASE,
 )
 _DEFAULT_SKILLS_ROOT = Path.home() / ".aiverse" / "skills"

@@ -1986,6 +1986,71 @@ class AIverseOSHost:
             raise AdapterError(f"migration.import {key} must be an array with at most {limit} items")
         return list(value)
 
+    @staticmethod
+    def _migration_secret_like(value: str) -> bool:
+        return bool(
+            re.search(
+                r"(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|private[_ -]?key)\\s*[:=]\\s*[\"']?[^\\s\"',}]{6,}",
+                value,
+                re.IGNORECASE,
+            )
+            or re.search(r"\\bsk-[A-Za-z0-9_-]{20,}\\b", value)
+        )
+
+    def _migration_verified_spans(
+        self,
+        *,
+        source_text: str,
+        source_digest: str,
+        spans: Any,
+        label: str,
+        max_items: int = 8,
+        require_one: bool = False,
+        persist_text: bool = False,
+    ) -> tuple[list[str], list[str]]:
+        if not isinstance(spans, list) or len(spans) > max_items:
+            raise AdapterError(f"{label} must be an array with at most {max_items} items")
+        if require_one and not spans:
+            raise AdapterError(f"{label} requires at least one exact source excerpt")
+        refs: list[str] = []
+        persisted: list[str] = []
+        for index, span in enumerate(spans):
+            if not isinstance(span, str) or not span.strip() or len(span.strip()) > 1000:
+                raise AdapterError(f"{label} entries must be non-empty strings up to 1000 characters")
+            normalized = span.strip()
+            if normalized not in source_text:
+                raise AdapterError(f"{label} excerpt {index} is not present in the supplied source")
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            ref = f"migration-source:sha256:{source_digest}:span:{digest}"
+            if ref not in refs:
+                refs.append(ref)
+                if persist_text and not self._migration_secret_like(normalized):
+                    persisted.append(normalized)
+        return refs, persisted
+
+    @staticmethod
+    def _migration_atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
+        temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        temp_path.write_text(
+            json.dumps(dict(payload), indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(path)
+
+    def _migration_load_receipt(self, path: Path) -> Dict[str, Any]:
+        receipts_root = self._migration_receipts_root()
+        if path.parent.resolve() != receipts_root.resolve():
+            raise AdapterError("migration receipt path escapes migration receipt ownership")
+        if not path.exists() or path.is_symlink() or not path.is_file():
+            raise AdapterError("migration receipt is missing or unsafe")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise AdapterError(f"migration receipt is invalid: {exc}") from exc
+        if not isinstance(payload, dict) or payload.get("owner") != "ai-verse-os":
+            raise AdapterError("migration receipt owner/schema is invalid")
+        return payload
+
     def _migration_execute_subaction(
         self,
         *,
@@ -2039,9 +2104,19 @@ class AIverseOSHost:
             organized = payload.get("workspace_organization")
             if isinstance(organized, Mapping):
                 compact["state"] = organized.get("state")
+                compact["user_confirmation_required"] = organized.get("user_confirmation_required") is True
                 workspace = organized.get("workspace")
                 if isinstance(workspace, Mapping):
                     compact["workspace_id"] = workspace.get("id")
+                if isinstance(organized.get("reason"), str):
+                    compact["reason"] = organized.get("reason")[:500]
+        elif kind == "profile":
+            organized = payload.get("operator_profile")
+            if isinstance(organized, Mapping):
+                compact["state"] = organized.get("state")
+                compact["user_confirmation_required"] = organized.get("user_confirmation_required") is True
+                if isinstance(organized.get("reason"), str):
+                    compact["reason"] = organized.get("reason")[:500]
         elif kind == "memory":
             captured = payload.get("memory_capture")
             if isinstance(captured, Mapping):
@@ -2057,6 +2132,232 @@ class AIverseOSHost:
         if isinstance(payload.get("reason"), str):
             compact["reason"] = payload.get("reason")[:500]
         return compact
+
+    def _migration_clarification(
+        self,
+        *,
+        raw: Any,
+        index: int,
+        source_text: str,
+        source_digest: str,
+    ) -> Dict[str, Any]:
+        if not isinstance(raw, Mapping):
+            return {"index": index, "status": "rejected", "reason": "clarification item must be an object"}
+        allowed = {"topic", "kind", "question", "choices", "reason", "evidence_spans"}
+        if set(raw) - allowed or not {"topic", "kind", "question", "reason", "evidence_spans"}.issubset(raw):
+            return {
+                "index": index,
+                "status": "rejected",
+                "reason": "clarification requires topic, kind, question, reason and evidence_spans, with optional choices",
+            }
+        topic = raw.get("topic")
+        kind = raw.get("kind")
+        question = raw.get("question")
+        reason = raw.get("reason")
+        choices = raw.get("choices", [])
+        for label, value, limit in (
+            ("topic", topic, 200),
+            ("kind", kind, 80),
+            ("question", question, 500),
+            ("reason", reason, 1000),
+        ):
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
+                return {"index": index, "status": "rejected", "reason": f"clarification {label} is invalid"}
+        if _MIGRATION_INTERNAL_QUESTION_TERMS.search(question):
+            return {
+                "index": index,
+                "status": "rejected",
+                "reason": "clarification question exposes internal AI-Verse architecture instead of asking about real-world meaning",
+            }
+        if not isinstance(choices, list) or len(choices) > 8:
+            return {"index": index, "status": "rejected", "reason": "clarification choices must contain at most 8 items"}
+        clean_choices: list[str] = []
+        for choice in choices:
+            if not isinstance(choice, str) or not choice.strip() or len(choice.strip()) > 160:
+                return {"index": index, "status": "rejected", "reason": "clarification choices must be bounded strings"}
+            if choice.strip() not in clean_choices:
+                clean_choices.append(choice.strip())
+        try:
+            refs, evidence = self._migration_verified_spans(
+                source_text=source_text,
+                source_digest=source_digest,
+                spans=raw.get("evidence_spans"),
+                label="clarification evidence_spans",
+                require_one=True,
+                persist_text=True,
+            )
+        except Exception as exc:
+            return {"index": index, "status": "rejected", "reason": str(exc)[:500]}
+        identity = json.dumps(
+            {
+                "source": source_digest,
+                "topic": topic.strip(),
+                "kind": kind.strip(),
+                "question": question.strip(),
+                "refs": refs,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        clarification_id = "clarify-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        return {
+            "index": index,
+            "status": "pending",
+            "clarification_id": clarification_id,
+            "topic": topic.strip(),
+            "kind": kind.strip(),
+            "question": question.strip(),
+            "choices": clean_choices,
+            "reason": reason.strip(),
+            "evidence_refs": refs,
+            "evidence_spans": evidence,
+        }
+
+    def _migration_resolution(
+        self,
+        *,
+        raw: Any,
+        index: int,
+        source_text: str,
+        source_digest: str,
+        current_import_key: str,
+    ) -> tuple[Dict[str, Any], Optional[tuple[Path, Dict[str, Any], int]]]:
+        if not isinstance(raw, Mapping):
+            return ({"index": index, "status": "rejected", "reason": "resolution item must be an object"}, None)
+        allowed = {"source_import_key", "clarification_id", "answer_spans"}
+        if set(raw) != allowed:
+            return (
+                {
+                    "index": index,
+                    "status": "rejected",
+                    "reason": "resolution requires exactly source_import_key, clarification_id and answer_spans",
+                },
+                None,
+            )
+        source_import_key = raw.get("source_import_key")
+        clarification_id = raw.get("clarification_id")
+        if (
+            not isinstance(source_import_key, str)
+            or not _HEX64.fullmatch(source_import_key)
+            or source_import_key == current_import_key
+        ):
+            return ({"index": index, "status": "rejected", "reason": "resolution source_import_key is invalid"}, None)
+        if not isinstance(clarification_id, str) or not re.fullmatch(r"clarify-[a-f0-9]{24}", clarification_id):
+            return ({"index": index, "status": "rejected", "reason": "resolution clarification_id is invalid"}, None)
+        try:
+            refs, _ = self._migration_verified_spans(
+                source_text=source_text,
+                source_digest=source_digest,
+                spans=raw.get("answer_spans"),
+                label="resolution answer_spans",
+                require_one=True,
+                persist_text=False,
+            )
+        except Exception as exc:
+            return ({"index": index, "status": "rejected", "reason": str(exc)[:500]}, None)
+        path = self._migration_receipts_root() / f"{source_import_key}.json"
+        try:
+            receipt = self._migration_load_receipt(path)
+        except Exception as exc:
+            return ({"index": index, "status": "rejected", "reason": str(exc)[:500]}, None)
+        clarifications = receipt.get("clarifications")
+        if not isinstance(clarifications, list):
+            return ({"index": index, "status": "rejected", "reason": "source migration has no clarification state"}, None)
+        match_index = next(
+            (
+                item_index
+                for item_index, item in enumerate(clarifications)
+                if isinstance(item, Mapping) and item.get("clarification_id") == clarification_id
+            ),
+            None,
+        )
+        if match_index is None:
+            return ({"index": index, "status": "rejected", "reason": "referenced clarification does not exist"}, None)
+        current = clarifications[match_index]
+        if current.get("status") == "resolved":
+            return (
+                {
+                    "index": index,
+                    "status": "already-resolved",
+                    "source_import_key": source_import_key,
+                    "clarification_id": clarification_id,
+                },
+                None,
+            )
+        if current.get("status") != "pending":
+            return ({"index": index, "status": "rejected", "reason": "referenced clarification is not pending"}, None)
+        result = {
+            "index": index,
+            "status": "resolved",
+            "source_import_key": source_import_key,
+            "clarification_id": clarification_id,
+            "answer_evidence_refs": refs,
+        }
+        return result, (path, receipt, match_index)
+
+    def _request_migration_pending(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if scope != "operator":
+            raise AdapterError("migration.pending requires operator scope")
+        if parameters is None:
+            parameters = {}
+        if not isinstance(parameters, Mapping) or set(parameters) - {"limit"}:
+            raise AdapterError("migration.pending parameters may contain only limit")
+        limit = parameters.get("limit", _MIGRATION_MAX_PENDING_RESULTS)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= _MIGRATION_MAX_PENDING_RESULTS:
+            raise AdapterError(f"migration.pending limit must be within 1..{_MIGRATION_MAX_PENDING_RESULTS}")
+        pending: list[Dict[str, Any]] = []
+        receipts_root = self._migration_receipts_root()
+        for path in sorted(receipts_root.glob("*.json"), key=lambda value: value.stat().st_mtime, reverse=True):
+            if len(pending) >= limit:
+                break
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                receipt = self._migration_load_receipt(path)
+            except Exception:
+                continue
+            import_key = receipt.get("import_key")
+            source_label = receipt.get("source_label")
+            for item in receipt.get("clarifications", []):
+                if len(pending) >= limit:
+                    break
+                if not isinstance(item, Mapping) or item.get("status") != "pending":
+                    continue
+                pending.append(
+                    {
+                        "source_import_key": import_key,
+                        "source_label": source_label,
+                        "clarification_id": item.get("clarification_id"),
+                        "topic": item.get("topic"),
+                        "kind": item.get("kind"),
+                        "question": item.get("question"),
+                        "choices": item.get("choices", []),
+                        "evidence_spans": item.get("evidence_spans", []),
+                    }
+                )
+        return {
+            "status": "succeeded",
+            "effect_occurred": False,
+            "result": {
+                "migration_pending": {
+                    "state": "needs-clarification" if pending else "clear",
+                    "count": len(pending),
+                    "items": pending,
+                }
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "read_local",
+                "operation": "migration.pending",
+            },
+        }
 
     def _request_migration_import(
         self,
@@ -2093,7 +2394,7 @@ class AIverseOSHost:
         ):
             raise AdapterError("migration.import source.label is invalid when provided")
 
-        plan_allowed = {"workspaces", "memories", "data"}
+        plan_allowed = {"profile", "workspaces", "memories", "data", "clarifications", "resolutions"}
         extras = set(plan) - plan_allowed
         if extras:
             raise AdapterError(
@@ -2114,35 +2415,27 @@ class AIverseOSHost:
                 f"migration.import plan exceeds {_MIGRATION_MAX_PLAN_BYTES} bytes; split it into bounded chunks"
             )
 
-        workspaces = self._migration_bounded_list(
-            plan, "workspaces", _MIGRATION_MAX_WORKSPACES
+        profile = plan.get("profile")
+        if profile is not None and not isinstance(profile, Mapping):
+            raise AdapterError("migration.import profile must be an object when provided")
+        workspaces = self._migration_bounded_list(plan, "workspaces", _MIGRATION_MAX_WORKSPACES)
+        memories = self._migration_bounded_list(plan, "memories", _MIGRATION_MAX_MEMORIES)
+        data_items = self._migration_bounded_list(plan, "data", _MIGRATION_MAX_DATA_ITEMS)
+        clarification_items = self._migration_bounded_list(
+            plan, "clarifications", _MIGRATION_MAX_CLARIFICATIONS
         )
-        memories = self._migration_bounded_list(
-            plan, "memories", _MIGRATION_MAX_MEMORIES
-        )
-        data_items = self._migration_bounded_list(
-            plan, "data", _MIGRATION_MAX_DATA_ITEMS
+        resolution_items = self._migration_bounded_list(
+            plan, "resolutions", _MIGRATION_MAX_RESOLUTIONS
         )
 
         source_digest = hashlib.sha256(source_bytes).hexdigest()
         plan_digest = hashlib.sha256(plan_bytes).hexdigest()
-        import_key = hashlib.sha256(
-            f"{source_digest}:{plan_digest}".encode("utf-8")
-        ).hexdigest()
+        import_key = hashlib.sha256(f"{source_digest}:{plan_digest}".encode("utf-8")).hexdigest()
         receipts_root = self._migration_receipts_root()
         receipt_path = receipts_root / f"{import_key}.json"
         if receipt_path.exists():
-            if receipt_path.is_symlink() or not receipt_path.is_file():
-                raise AdapterError("existing migration import receipt is unsafe")
-            try:
-                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
-            except Exception as exc:
-                raise AdapterError(f"existing migration import receipt is invalid: {exc}") from exc
-            if (
-                not isinstance(existing, dict)
-                or existing.get("source_sha256") != source_digest
-                or existing.get("plan_sha256") != plan_digest
-            ):
+            existing = self._migration_load_receipt(receipt_path)
+            if existing.get("source_sha256") != source_digest or existing.get("plan_sha256") != plan_digest:
                 raise AdapterError("migration import idempotency receipt does not match its source/plan")
             return {
                 "status": "succeeded",
@@ -2158,10 +2451,63 @@ class AIverseOSHost:
                 },
             }
 
+        profile_results: list[Dict[str, Any]] = []
         workspace_results: list[Dict[str, Any]] = []
         memory_results: list[Dict[str, Any]] = []
         data_results: list[Dict[str, Any]] = []
+        clarifications: list[Dict[str, Any]] = []
+        resolutions: list[Dict[str, Any]] = []
+        resolution_updates: list[tuple[Path, Dict[str, Any], int, Dict[str, Any]]] = []
         any_effect = False
+
+        if profile is not None:
+            allowed_profile = {"identity", "preferences", "evidence", "evidence_spans"}
+            if set(profile) - allowed_profile or "evidence" not in profile or "evidence_spans" not in profile:
+                profile_results.append({
+                    "index": 0,
+                    "status": "rejected",
+                    "reason": "profile requires evidence and evidence_spans, with optional identity/preferences",
+                })
+            elif "provenance" in profile:
+                profile_results.append({
+                    "index": 0,
+                    "status": "rejected",
+                    "reason": "profile migration may not supply trusted provenance",
+                })
+            else:
+                try:
+                    refs, _ = self._migration_verified_spans(
+                        source_text=source_text,
+                        source_digest=source_digest,
+                        spans=profile.get("evidence_spans"),
+                        label="profile evidence_spans",
+                        require_one=True,
+                        persist_text=False,
+                    )
+                    params = {
+                        key: dict(profile[key])
+                        for key in ("identity", "preferences", "evidence")
+                        if key in profile
+                    }
+                    params["provenance"] = {
+                        "trigger_ref": f"migration:sha256:{source_digest}",
+                        "classifier": "migration-runtime",
+                        "source": source_kind.strip(),
+                    }
+                    sub = self._migration_execute_subaction(
+                        action_class="write_local_reversible",
+                        scope="operator",
+                        operation="operator.profile.ensure",
+                        parameters=params,
+                        idempotency_key=f"migration:{import_key}:profile",
+                        reason="Import stable strongly-supported operator identity/preferences through the OS profile owner.",
+                    )
+                    compact = self._compact_migration_result("profile", 0, sub)
+                    compact["evidence_refs"] = refs
+                    any_effect = any_effect or compact["effect_occurred"]
+                    profile_results.append(compact)
+                except Exception as exc:
+                    profile_results.append({"index": 0, "status": "rejected", "reason": str(exc)[:500]})
 
         for index, raw in enumerate(workspaces):
             if not isinstance(raw, Mapping):
@@ -2183,7 +2529,7 @@ class AIverseOSHost:
                     operation="workspace.ensure",
                     parameters=params,
                     idempotency_key=f"migration:{import_key}:workspace:{index}",
-                    reason="Create or evolve a clear substantial workspace found in an explicit migration drop.",
+                    reason="Create or evolve a clear substantial real-world scope found in a migration drop.",
                 )
                 compact = self._compact_migration_result("workspace", index, sub)
                 any_effect = any_effect or compact["effect_occurred"]
@@ -2249,26 +2595,17 @@ class AIverseOSHost:
             if not isinstance(candidate, Mapping):
                 data_results.append({"index": index, "status": "rejected", "reason": "Data migration candidate must be an object"})
                 continue
-            candidate = dict(candidate)
-            if not isinstance(evidence_spans, list) or len(evidence_spans) > 8:
-                data_results.append({"index": index, "status": "rejected", "reason": "Data migration evidence_spans must be an array with at most 8 items"})
-                continue
-            verified_refs: list[str] = []
-            for span_index, span in enumerate(evidence_spans):
-                if not isinstance(span, str) or not span.strip() or len(span.strip()) > 1000:
-                    data_results.append({"index": index, "status": "rejected", "reason": "Data migration evidence spans must be non-empty strings up to 1000 characters"})
-                    verified_refs = []
-                    break
-                normalized_span = span.strip()
-                if normalized_span not in source_text:
-                    data_results.append({"index": index, "status": "rejected", "reason": f"Data migration evidence span {span_index} is not present in the supplied source"})
-                    verified_refs = []
-                    break
-                span_digest = hashlib.sha256(normalized_span.encode("utf-8")).hexdigest()
-                ref = f"migration-source:sha256:{source_digest}:span:{span_digest}"
-                if ref not in verified_refs:
-                    verified_refs.append(ref)
-            if evidence_spans and not verified_refs:
+            try:
+                verified_refs, _ = self._migration_verified_spans(
+                    source_text=source_text,
+                    source_digest=source_digest,
+                    spans=evidence_spans,
+                    label="Data migration evidence_spans",
+                    require_one=False,
+                    persist_text=False,
+                )
+            except Exception as exc:
+                data_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
                 continue
             candidate = dict(candidate)
             forbidden = {
@@ -2289,10 +2626,7 @@ class AIverseOSHost:
                 "evidence_refs": verified_refs or [f"migration-source:sha256:{source_digest}"],
                 "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })
-            params = {
-                "candidate": candidate,
-                "task_evidence": {"substantial_task": True},
-            }
+            params = {"candidate": candidate, "task_evidence": {"substantial_task": True}}
             try:
                 sub = self._migration_execute_subaction(
                     action_class="write_local_reversible",
@@ -2314,11 +2648,58 @@ class AIverseOSHost:
             except Exception as exc:
                 data_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
 
+        for index, raw in enumerate(clarification_items):
+            clarifications.append(
+                self._migration_clarification(
+                    raw=raw,
+                    index=index,
+                    source_text=source_text,
+                    source_digest=source_digest,
+                )
+            )
+
+        for index, raw in enumerate(resolution_items):
+            result, update = self._migration_resolution(
+                raw=raw,
+                index=index,
+                source_text=source_text,
+                source_digest=source_digest,
+                current_import_key=import_key,
+            )
+            resolutions.append(result)
+            if update is not None:
+                path, prior, match_index = update
+                resolution_updates.append((path, prior, match_index, result))
+
         completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for path, prior, match_index, resolution in resolution_updates:
+            item = dict(prior["clarifications"][match_index])
+            item.update({
+                "status": "resolved",
+                "resolved_at": completed_at,
+                "resolved_by_import_key": import_key,
+                "resolved_source_sha256": source_digest,
+                "answer_evidence_refs": resolution.get("answer_evidence_refs", []),
+            })
+            prior["clarifications"][match_index] = item
+            prior["state"] = (
+                "needs-clarification"
+                if any(
+                    isinstance(row, Mapping) and row.get("status") == "pending"
+                    for row in prior.get("clarifications", [])
+                )
+                else "complete"
+            )
+            self._migration_atomic_json(path, prior)
+            any_effect = True
+
+        pending_count = sum(1 for row in clarifications if row.get("status") == "pending")
+        owner_rows = [*profile_results, *workspace_results, *memory_results, *data_results]
         receipt = {
-            "schema_version": "1.0",
+            "schema_version": "1.1",
             "owner": "ai-verse-os",
             "operation": "migration.import",
+            "state": "needs-clarification" if pending_count else "complete",
             "source_kind": source_kind.strip(),
             "source_label": source_label.strip() if isinstance(source_label, str) else None,
             "source_sha256": source_digest,
@@ -2326,28 +2707,30 @@ class AIverseOSHost:
             "plan_sha256": plan_digest,
             "import_key": import_key,
             "completed_at": completed_at,
+            "profile": profile_results,
             "workspaces": workspace_results,
             "memories": memory_results,
             "data": data_results,
+            "clarifications": clarifications,
+            "resolutions": resolutions,
             "counts": {
+                "profile_items": 1 if profile is not None else 0,
                 "workspace_items": len(workspaces),
                 "memory_items": len(memories),
                 "data_items": len(data_items),
-                "effects": sum(
-                    1
-                    for row in [*workspace_results, *memory_results, *data_results]
-                    if row.get("effect_occurred") is True
-                ),
+                "clarification_items": len(clarification_items),
+                "pending_clarifications": pending_count,
+                "resolution_items": len(resolution_items),
+                "resolved_clarifications": sum(1 for row in resolutions if row.get("status") == "resolved"),
+                "effects": sum(1 for row in owner_rows if row.get("effect_occurred") is True),
             },
             "raw_source_persisted": False,
+            "bounded_clarification_evidence_persisted": any(
+                bool(row.get("evidence_spans")) for row in clarifications if isinstance(row, Mapping)
+            ),
             "replayed": False,
         }
-        temp_path = receipt_path.with_name(f".{receipt_path.name}.{uuid4().hex}.tmp")
-        temp_path.write_text(
-            json.dumps(receipt, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        temp_path.replace(receipt_path)
+        self._migration_atomic_json(receipt_path, receipt)
 
         return {
             "status": "succeeded",

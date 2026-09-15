@@ -2160,11 +2160,12 @@ class AIverseOSHost:
             if not isinstance(raw, Mapping):
                 data_results.append({"index": index, "status": "rejected", "reason": "Data plan item must be an object"})
                 continue
-            if set(raw) != {"scope", "candidate"}:
-                data_results.append({"index": index, "status": "rejected", "reason": "Data migration item must contain exactly scope and candidate"})
+            if set(raw) - {"scope", "candidate", "evidence_spans"} or not {"scope", "candidate"}.issubset(raw):
+                data_results.append({"index": index, "status": "rejected", "reason": "Data migration item must contain scope and candidate, with optional evidence_spans"})
                 continue
             item_scope = raw.get("scope")
             candidate = raw.get("candidate")
+            evidence_spans = raw.get("evidence_spans", [])
             try:
                 item_scope = self._validate_scope(item_scope)
                 if not item_scope.startswith("workspace:"):
@@ -2174,6 +2175,27 @@ class AIverseOSHost:
                 continue
             if not isinstance(candidate, Mapping):
                 data_results.append({"index": index, "status": "rejected", "reason": "Data migration candidate must be an object"})
+                continue
+            candidate = dict(candidate)
+            if not isinstance(evidence_spans, list) or len(evidence_spans) > 8:
+                data_results.append({"index": index, "status": "rejected", "reason": "Data migration evidence_spans must be an array with at most 8 items"})
+                continue
+            verified_refs: list[str] = []
+            for span_index, span in enumerate(evidence_spans):
+                if not isinstance(span, str) or not span.strip() or len(span.strip()) > 1000:
+                    data_results.append({"index": index, "status": "rejected", "reason": "Data migration evidence spans must be non-empty strings up to 1000 characters"})
+                    verified_refs = []
+                    break
+                normalized_span = span.strip()
+                if normalized_span not in source_text:
+                    data_results.append({"index": index, "status": "rejected", "reason": f"Data migration evidence span {span_index} is not present in the supplied source"})
+                    verified_refs = []
+                    break
+                span_digest = hashlib.sha256(normalized_span.encode("utf-8")).hexdigest()
+                ref = f"migration-source:sha256:{source_digest}:span:{span_digest}"
+                if ref not in verified_refs:
+                    verified_refs.append(ref)
+            if evidence_spans and not verified_refs:
                 continue
             candidate = dict(candidate)
             forbidden = {
@@ -2191,7 +2213,7 @@ class AIverseOSHost:
             candidate.update({
                 "candidate_id": f"migration-data-{import_key[:24]}-{index}",
                 "scope": item_scope,
-                "evidence_refs": [f"migration-source:sha256:{source_digest}"],
+                "evidence_refs": verified_refs or [f"migration-source:sha256:{source_digest}"],
                 "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             })
             params = {

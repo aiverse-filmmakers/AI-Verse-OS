@@ -16,6 +16,9 @@ capabilities:
   - id: grill-me
     scope: universal
     purpose: "Capture deeper knowledge while separating fact from exploration."
+  - id: migration-drop
+    scope: universal
+    purpose: "Automatically classify and safely migrate accumulated prior-assistant context into existing AI-Verse owners."
   - id: link
     scope: universal
     purpose: "Create durable routes to important sources without duplication."

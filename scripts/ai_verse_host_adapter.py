@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from uuid import uuid4
 
@@ -46,6 +47,11 @@ _HEX64 = re.compile(r"^[a-f0-9]{64}$")
 _MAX_SKILL_BYTES = 256 * 1024
 _MAX_REGISTRY_BYTES = 1024 * 1024
 _EXTENSION_REGISTRY = Path(".aiverse/extensions/registry.json")
+_MIGRATION_MAX_SOURCE_BYTES = 1024 * 1024
+_MIGRATION_MAX_PLAN_BYTES = 512 * 1024
+_MIGRATION_MAX_WORKSPACES = 32
+_MIGRATION_MAX_MEMORIES = 128
+_MIGRATION_MAX_DATA_ITEMS = 128
 _DEFAULT_SKILLS_ROOT = Path.home() / ".aiverse" / "skills"
 _DEFAULT_LOCAL_SKILLS_ROOT = Path.home() / ".aiverse" / "local-skills"
 _DATA_READ_OPERATIONS = {
@@ -1880,6 +1886,388 @@ class AIverseOSHost:
             },
         }
 
+    def _migration_receipts_root(self) -> Path:
+        operator = self.root / "operator"
+        if not operator.is_dir() or operator.is_symlink():
+            raise AdapterError("operator owner root is unavailable or unsafe")
+        inbox = operator / "inbox"
+        if inbox.exists():
+            if inbox.is_symlink() or not inbox.is_dir():
+                raise AdapterError("operator inbox is unsafe")
+        else:
+            inbox.mkdir(mode=0o700)
+        base = inbox / "migration-imports"
+        if base.exists():
+            if base.is_symlink() or not base.is_dir():
+                raise AdapterError("migration import receipt directory is unsafe")
+        else:
+            base.mkdir(mode=0o700)
+        if not _inside(base.resolve(), operator.resolve()):
+            raise AdapterError("migration import receipt directory escapes operator ownership")
+        return base
+
+    @staticmethod
+    def _migration_bounded_list(plan: Mapping[str, Any], key: str, limit: int) -> list[Any]:
+        value = plan.get(key, [])
+        if not isinstance(value, list) or len(value) > limit:
+            raise AdapterError(f"migration.import {key} must be an array with at most {limit} items")
+        return list(value)
+
+    def _migration_execute_subaction(
+        self,
+        *,
+        action_class: str,
+        scope: str,
+        operation: str,
+        parameters: Mapping[str, Any],
+        idempotency_key: str,
+        reason: str,
+        executor: Optional[Callable[[Mapping[str, Any], str, Mapping[str, Any]], Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        subrequest: Dict[str, Any] = {
+            "action_class": action_class,
+            "scope": self._validate_scope(scope),
+            "operation": operation,
+            "parameters": dict(parameters),
+            "idempotency_key": idempotency_key,
+            "in_scope": True,
+            "within_budget": True,
+            "reversible": action_class == "write_local_reversible",
+            "reason": reason,
+        }
+        subrequest["request_fingerprint"] = _fingerprint(subrequest)
+        authorization = self.authorize_action(subrequest)
+        if not isinstance(authorization, Mapping) or authorization.get("decision") != "allow":
+            return {
+                "status": "blocked",
+                "effect_occurred": False,
+                "result": {
+                    "reason": "owner authorization did not allow the migration subaction",
+                    "authorization": {
+                        "decision": authorization.get("decision") if isinstance(authorization, Mapping) else None,
+                    },
+                },
+            }
+        if executor is not None:
+            return executor(subrequest, scope, dict(parameters))
+        return self.request_action(subrequest)
+
+    @staticmethod
+    def _compact_migration_result(kind: str, index: int, result: Mapping[str, Any]) -> Dict[str, Any]:
+        compact: Dict[str, Any] = {
+            "index": index,
+            "status": result.get("status"),
+            "effect_occurred": result.get("effect_occurred") is True,
+        }
+        payload = result.get("result")
+        if not isinstance(payload, Mapping):
+            return compact
+        if kind == "workspace":
+            organized = payload.get("workspace_organization")
+            if isinstance(organized, Mapping):
+                compact["state"] = organized.get("state")
+                workspace = organized.get("workspace")
+                if isinstance(workspace, Mapping):
+                    compact["workspace_id"] = workspace.get("id")
+        elif kind == "memory":
+            captured = payload.get("memory_capture")
+            if isinstance(captured, Mapping):
+                compact["state"] = captured.get("state")
+                compact["memory_id"] = captured.get("memory_id")
+        elif kind == "data":
+            candidate = payload.get("data_candidate")
+            if isinstance(candidate, Mapping):
+                compact["state"] = candidate.get("state")
+            record = payload.get("record")
+            if isinstance(record, Mapping):
+                compact["record_state"] = record.get("state")
+        if isinstance(payload.get("reason"), str):
+            compact["reason"] = payload.get("reason")[:500]
+        return compact
+
+    def _request_migration_import(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if scope != "operator":
+            raise AdapterError("migration.import must begin at operator scope")
+        if not isinstance(parameters, Mapping) or set(parameters) != {"source", "plan"}:
+            raise AdapterError("migration.import parameters must contain exactly source and plan")
+
+        source = parameters.get("source")
+        plan = parameters.get("plan")
+        if not isinstance(source, Mapping) or not isinstance(plan, Mapping):
+            raise AdapterError("migration.import source and plan must be objects")
+        source_allowed = {"kind", "text", "label"}
+        if set(source) - source_allowed:
+            raise AdapterError("migration.import source contains unsupported fields")
+        source_kind = source.get("kind")
+        source_text = source.get("text")
+        source_label = source.get("label")
+        if not isinstance(source_kind, str) or not source_kind.strip() or len(source_kind.strip()) > 80:
+            raise AdapterError("migration.import source.kind is invalid")
+        if not isinstance(source_text, str) or not source_text.strip() or "\x00" in source_text:
+            raise AdapterError("migration.import source.text must be non-empty text")
+        source_bytes = source_text.encode("utf-8")
+        if len(source_bytes) > _MIGRATION_MAX_SOURCE_BYTES:
+            raise AdapterError(
+                f"migration.import source exceeds {_MIGRATION_MAX_SOURCE_BYTES} bytes; split it into bounded chunks"
+            )
+        if source_label is not None and (
+            not isinstance(source_label, str) or not source_label.strip() or len(source_label.strip()) > 240
+        ):
+            raise AdapterError("migration.import source.label is invalid when provided")
+
+        plan_allowed = {"workspaces", "memories", "data"}
+        extras = set(plan) - plan_allowed
+        if extras:
+            raise AdapterError(
+                "migration.import plan contains unsupported sections: " + ", ".join(sorted(extras))
+            )
+        try:
+            plan_bytes = json.dumps(
+                dict(plan),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise AdapterError(f"migration.import plan is not JSON-safe: {exc}") from exc
+        if len(plan_bytes) > _MIGRATION_MAX_PLAN_BYTES:
+            raise AdapterError(
+                f"migration.import plan exceeds {_MIGRATION_MAX_PLAN_BYTES} bytes; split it into bounded chunks"
+            )
+
+        workspaces = self._migration_bounded_list(
+            plan, "workspaces", _MIGRATION_MAX_WORKSPACES
+        )
+        memories = self._migration_bounded_list(
+            plan, "memories", _MIGRATION_MAX_MEMORIES
+        )
+        data_items = self._migration_bounded_list(
+            plan, "data", _MIGRATION_MAX_DATA_ITEMS
+        )
+
+        source_digest = hashlib.sha256(source_bytes).hexdigest()
+        plan_digest = hashlib.sha256(plan_bytes).hexdigest()
+        import_key = hashlib.sha256(
+            f"{source_digest}:{plan_digest}".encode("utf-8")
+        ).hexdigest()
+        receipts_root = self._migration_receipts_root()
+        receipt_path = receipts_root / f"{import_key}.json"
+        if receipt_path.exists():
+            if receipt_path.is_symlink() or not receipt_path.is_file():
+                raise AdapterError("existing migration import receipt is unsafe")
+            try:
+                existing = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise AdapterError(f"existing migration import receipt is invalid: {exc}") from exc
+            if (
+                not isinstance(existing, dict)
+                or existing.get("source_sha256") != source_digest
+                or existing.get("plan_sha256") != plan_digest
+            ):
+                raise AdapterError("migration import idempotency receipt does not match its source/plan")
+            return {
+                "status": "succeeded",
+                "effect_occurred": False,
+                "result": {"migration_import": {**existing, "replayed": True}},
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request),
+                    "scope": scope,
+                    "action_class": "write_local_reversible",
+                    "operation": "migration.import",
+                    "source_sha256": source_digest,
+                    "plan_sha256": plan_digest,
+                },
+            }
+
+        workspace_results: list[Dict[str, Any]] = []
+        memory_results: list[Dict[str, Any]] = []
+        data_results: list[Dict[str, Any]] = []
+        any_effect = False
+
+        for index, raw in enumerate(workspaces):
+            if not isinstance(raw, Mapping):
+                workspace_results.append({"index": index, "status": "rejected", "reason": "workspace plan item must be an object"})
+                continue
+            if "provenance" in raw:
+                workspace_results.append({"index": index, "status": "rejected", "reason": "workspace migration item may not supply trusted provenance"})
+                continue
+            params = dict(raw)
+            params["provenance"] = {
+                "trigger_ref": f"migration:sha256:{source_digest}",
+                "classifier": "migration-runtime",
+                "source": source_kind.strip(),
+            }
+            try:
+                sub = self._migration_execute_subaction(
+                    action_class="write_local_reversible",
+                    scope="operator",
+                    operation="workspace.ensure",
+                    parameters=params,
+                    idempotency_key=f"migration:{import_key}:workspace:{index}",
+                    reason="Create or evolve a clear substantial workspace found in an explicit migration drop.",
+                )
+                compact = self._compact_migration_result("workspace", index, sub)
+                any_effect = any_effect or compact["effect_occurred"]
+                workspace_results.append(compact)
+            except Exception as exc:
+                workspace_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+
+        for index, raw in enumerate(memories):
+            if not isinstance(raw, Mapping):
+                memory_results.append({"index": index, "status": "rejected", "reason": "memory plan item must be an object"})
+                continue
+            item = dict(raw)
+            item_scope = item.pop("scope", "operator")
+            try:
+                item_scope = self._validate_scope(item_scope)
+            except Exception as exc:
+                memory_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+                continue
+            forbidden = {"source", "evidence_refs", "effect_id", "workspace"}
+            supplied = forbidden.intersection(item)
+            if supplied:
+                memory_results.append({
+                    "index": index,
+                    "status": "rejected",
+                    "reason": "memory migration item supplied trusted fields: " + ", ".join(sorted(supplied)),
+                })
+                continue
+            item["source"] = f"migration-drop:{source_kind.strip()}:sha256:{source_digest}"
+            item["evidence_refs"] = [f"migration-source:sha256:{source_digest}"]
+            item["effect_id"] = f"migration:{import_key}:memory:{index}"
+            try:
+                sub = self._migration_execute_subaction(
+                    action_class="write_local_reversible",
+                    scope=item_scope,
+                    operation="memory.capture",
+                    parameters=item,
+                    idempotency_key=f"migration:{import_key}:memory:{index}",
+                    reason="Import a high-confidence durable historical item through the Memory owner.",
+                )
+                compact = self._compact_migration_result("memory", index, sub)
+                any_effect = any_effect or compact["effect_occurred"]
+                memory_results.append(compact)
+            except Exception as exc:
+                memory_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+
+        for index, raw in enumerate(data_items):
+            if not isinstance(raw, Mapping):
+                data_results.append({"index": index, "status": "rejected", "reason": "Data plan item must be an object"})
+                continue
+            if set(raw) != {"scope", "candidate"}:
+                data_results.append({"index": index, "status": "rejected", "reason": "Data migration item must contain exactly scope and candidate"})
+                continue
+            item_scope = raw.get("scope")
+            candidate = raw.get("candidate")
+            try:
+                item_scope = self._validate_scope(item_scope)
+                if not item_scope.startswith("workspace:"):
+                    raise AdapterError("Data migration items require workspace scope")
+            except Exception as exc:
+                data_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+                continue
+            if not isinstance(candidate, Mapping):
+                data_results.append({"index": index, "status": "rejected", "reason": "Data migration candidate must be an object"})
+                continue
+            candidate = dict(candidate)
+            forbidden = {
+                "candidate_id", "scope", "evidence_refs", "created_at", "task_evidence",
+                "actor", "authorization", "approval", "idempotency_key", "idempotencyKey",
+            }
+            supplied = forbidden.intersection(candidate)
+            if supplied:
+                data_results.append({
+                    "index": index,
+                    "status": "rejected",
+                    "reason": "Data migration candidate supplied trusted fields: " + ", ".join(sorted(supplied)),
+                })
+                continue
+            candidate.update({
+                "candidate_id": f"migration-data-{import_key[:24]}-{index}",
+                "scope": item_scope,
+                "evidence_refs": [f"migration-source:sha256:{source_digest}"],
+                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            })
+            params = {
+                "candidate": candidate,
+                "task_evidence": {"substantial_task": True},
+            }
+            try:
+                sub = self._migration_execute_subaction(
+                    action_class="write_local_reversible",
+                    scope=item_scope,
+                    operation="data.structured-truth",
+                    parameters=params,
+                    idempotency_key=f"migration:{import_key}:data:{index}",
+                    reason="Import clear current structured operational truth through Brain admission and the Data owner.",
+                    executor=lambda subrequest, sub_scope, subparams: self._request_data_structured_truth(
+                        subrequest,
+                        sub_scope,
+                        subparams,
+                        actor_id="ai-verse-migration-import",
+                    ),
+                )
+                compact = self._compact_migration_result("data", index, sub)
+                any_effect = any_effect or compact["effect_occurred"]
+                data_results.append(compact)
+            except Exception as exc:
+                data_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+
+        completed_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        receipt = {
+            "schema_version": "1.0",
+            "owner": "ai-verse-os",
+            "operation": "migration.import",
+            "source_kind": source_kind.strip(),
+            "source_label": source_label.strip() if isinstance(source_label, str) else None,
+            "source_sha256": source_digest,
+            "source_bytes": len(source_bytes),
+            "plan_sha256": plan_digest,
+            "import_key": import_key,
+            "completed_at": completed_at,
+            "workspaces": workspace_results,
+            "memories": memory_results,
+            "data": data_results,
+            "counts": {
+                "workspace_items": len(workspaces),
+                "memory_items": len(memories),
+                "data_items": len(data_items),
+                "effects": sum(
+                    1
+                    for row in [*workspace_results, *memory_results, *data_results]
+                    if row.get("effect_occurred") is True
+                ),
+            },
+            "raw_source_persisted": False,
+            "replayed": False,
+        }
+        temp_path = receipt_path.with_name(f".{receipt_path.name}.{uuid4().hex}.tmp")
+        temp_path.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temp_path.replace(receipt_path)
+
+        return {
+            "status": "succeeded",
+            "effect_occurred": any_effect,
+            "result": {"migration_import": receipt},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "migration.import",
+                "source_sha256": source_digest,
+                "plan_sha256": plan_digest,
+            },
+        }
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -1888,6 +2276,8 @@ class AIverseOSHost:
         operation = request.get("operation")
         parameters = request.get("parameters")
 
+        if action_class == "write_local_reversible" and operation == "migration.import":
+            return self._request_migration_import(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "workspace.ensure":
             return self._request_workspace_ensure(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.capture":
@@ -1914,7 +2304,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
+                        "migration.import, workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
                     ),
                 },
             }
@@ -2169,6 +2559,8 @@ class AIverseOSHost:
         request: Mapping[str, Any],
         scope: str,
         parameters: Any,
+        *,
+        actor_id: str = "ai-verse-gateway",
     ) -> Dict[str, Any]:
         if not scope.startswith("workspace:"):
             raise AdapterError("data.structured-truth requires workspace scope")
@@ -2241,7 +2633,9 @@ class AIverseOSHost:
         if not all(isinstance(value, str) and value for value in (space_id, entity, match_field)):
             raise AdapterError("Brain admitted Data identifiers are invalid")
 
-        actor = {"kind": "system", "id": "ai-verse-gateway"}
+        if not isinstance(actor_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{0,127}", actor_id):
+            raise AdapterError("Data structured-truth actor id is invalid")
+        actor = {"kind": "system", "id": actor_id}
         structure_payload = {
             "idempotencyKey": self._auto_data_key(candidate_id, "structure"),
             "space": dict(space),

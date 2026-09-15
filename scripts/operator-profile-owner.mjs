@@ -312,9 +312,8 @@ function evolveFile(file, boundary, label, incoming, parseManaged, renderManaged
   let nextManaged = renderManaged(merged);
   let next;
   if (managed) {
-    const before = managed.before.endsWith('\n') || managed.before === '' ? managed.before : managed.before + '\n';
-    const after = managed.after.startsWith('\n') || managed.after === '' ? managed.after : '\n' + managed.after;
-    next = before + nextManaged + after.replace(/^\n+/, '\n');
+    next = managed.before + nextManaged.replace(/\n$/, '') + managed.after;
+    if (!next.endsWith('\n')) next += '\n';
   } else if (text.trim()) {
     next = text.replace(/\s*$/, '\n\n') + nextManaged;
   } else {

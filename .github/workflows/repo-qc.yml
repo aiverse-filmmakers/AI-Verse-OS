@@ -44,6 +44,11 @@ jobs:
       - name: Test automatic workspace owner primitive
         run: node scripts/test-workspace-owner.mjs
 
+      - name: Test automatic migration-drop owner routing
+        run: |
+          python3 -m py_compile scripts/ai_verse_host_adapter.py scripts/migration-import.py
+          python3 scripts/test-migration-import.py
+
       - name: Test ownership-aware adapter synchronization
         shell: bash
         run: |

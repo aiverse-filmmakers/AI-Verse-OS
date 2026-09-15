@@ -46,8 +46,11 @@ jobs:
 
       - name: Test automatic migration-drop owner routing
         run: |
-          python3 -m py_compile scripts/ai_verse_host_adapter.py scripts/migration-import.py
+          python3 -m py_compile scripts/ai_verse_host_adapter.py scripts/migration-import.py scripts/test-semantic-migration-clarification.py
+          node --check scripts/operator-profile-owner.mjs
+          node scripts/test-operator-profile-owner.mjs
           python3 scripts/test-migration-import.py
+          python3 scripts/test-semantic-migration-clarification.py
 
       - name: Test ownership-aware adapter synchronization
         shell: bash

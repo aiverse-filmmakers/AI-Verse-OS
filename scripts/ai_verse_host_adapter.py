@@ -56,7 +56,12 @@ _MIGRATION_MAX_CLARIFICATIONS = 32
 _MIGRATION_MAX_RESOLUTIONS = 32
 _MIGRATION_MAX_PENDING_RESULTS = 64
 _MIGRATION_INTERNAL_QUESTION_TERMS = re.compile(
-    r"\b(?:workspace|memory|data|skill|automation|bot|connection|canonical|owner|scope)\b",
+    r"(?:\\bworkspace\\b|\\bcanonical(?:\\s+(?:owner|subsystem|store|storage|component))?\\b|"
+    r"\\b(?:memory|data|skill|automation|bot|connection)\\s+(?:owner|component|subsystem|store|storage)\\b|"
+    r"\\b(?:memory|data)\\s+(?:or|vs\\.?)\\s+(?:memory|data)\\b|"
+    r"\\bwhich\\s+(?:owner|component|subsystem)\\b|"
+    r"\\bshould\\s+(?:i|we)\\s+(?:create|make|use)\\s+(?:a\\s+)?(?:skill|automation|bot|connection)\\b|"
+    r"\\b(?:put|store|save|route)\\s+(?:this|it)\\s+(?:in|into|to)\\s+(?:memory|data|a\\s+skill|the\\s+workspace)\\b)",
     re.IGNORECASE,
 )
 _DEFAULT_SKILLS_ROOT = Path.home() / ".aiverse" / "skills"
@@ -2143,12 +2148,12 @@ class AIverseOSHost:
     ) -> Dict[str, Any]:
         if not isinstance(raw, Mapping):
             return {"index": index, "status": "rejected", "reason": "clarification item must be an object"}
-        allowed = {"topic", "kind", "question", "choices", "reason", "evidence_spans"}
+        allowed = {"topic", "kind", "question", "choices", "reason", "evidence_spans", "contains_sensitive", "privacy_ambiguous"}
         if set(raw) - allowed or not {"topic", "kind", "question", "reason", "evidence_spans"}.issubset(raw):
             return {
                 "index": index,
                 "status": "rejected",
-                "reason": "clarification requires topic, kind, question, reason and evidence_spans, with optional choices",
+                "reason": "clarification requires topic, kind, question, reason and evidence_spans, with optional choices/privacy flags",
             }
         topic = raw.get("topic")
         kind = raw.get("kind")
@@ -2177,6 +2182,14 @@ class AIverseOSHost:
                 return {"index": index, "status": "rejected", "reason": "clarification choices must be bounded strings"}
             if choice.strip() not in clean_choices:
                 clean_choices.append(choice.strip())
+        contains_sensitive = raw.get("contains_sensitive", False)
+        privacy_ambiguous = raw.get("privacy_ambiguous", False)
+        if not isinstance(contains_sensitive, bool) or not isinstance(privacy_ambiguous, bool):
+            return {
+                "index": index,
+                "status": "rejected",
+                "reason": "clarification privacy flags must be booleans",
+            }
         try:
             refs, evidence = self._migration_verified_spans(
                 source_text=source_text,
@@ -2184,7 +2197,7 @@ class AIverseOSHost:
                 spans=raw.get("evidence_spans"),
                 label="clarification evidence_spans",
                 require_one=True,
-                persist_text=True,
+                persist_text=not (contains_sensitive or privacy_ambiguous),
             )
         except Exception as exc:
             return {"index": index, "status": "rejected", "reason": str(exc)[:500]}
@@ -2212,6 +2225,7 @@ class AIverseOSHost:
             "reason": reason.strip(),
             "evidence_refs": refs,
             "evidence_spans": evidence,
+            "sensitive_evidence_redacted": bool(contains_sensitive or privacy_ambiguous),
         }
 
     def _migration_resolution(

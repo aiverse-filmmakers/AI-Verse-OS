@@ -240,9 +240,27 @@ class MigrationImportTests(unittest.TestCase):
         self.assertEqual(second["status"], "succeeded")
         self.assertFalse(second["effect_occurred"])
         self.assertTrue(second["result"]["migration_import"]["replayed"])
+        self.assertEqual(second["result"]["migration_import"]["replay_match"], "source-and-plan")
         self.assertEqual(len(calls["workspace"]), 1)
         self.assertEqual(len(calls["memory"]), 1)
         self.assertEqual(len(calls["data"]), 1)
+
+        reclassified = json.loads(json.dumps(payload))
+        reclassified["plan"]["memories"][0]["why"] = "Same source, harmless classifier-plan variation."
+        third = host.request_action(self.request(reclassified))
+        self.assertEqual(third["status"], "succeeded")
+        self.assertFalse(third["effect_occurred"])
+        replay = third["result"]["migration_import"]
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(replay["replay_match"], "source")
+        self.assertNotEqual(replay["reclassified_plan_sha256"], replay["plan_sha256"])
+        self.assertEqual(len(calls["workspace"]), 1)
+        self.assertEqual(len(calls["memory"]), 1)
+        self.assertEqual(len(calls["data"]), 1)
+        self.assertEqual(
+            len(list((root / "operator" / "inbox" / "migration-imports").glob("*.json"))),
+            1,
+        )
 
     def test_rejects_untrusted_data_evidence_and_unknown_plan_sections(self):
         temp, _root, host = self.make_host()

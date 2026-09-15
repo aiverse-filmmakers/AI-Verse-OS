@@ -1220,6 +1220,68 @@ class AIverseOSHost:
             },
         }
 
+    def _request_operator_profile_ensure(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if scope != "operator":
+            raise AdapterError("operator.profile.ensure requires operator scope")
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("operator.profile.ensure parameters must be an object")
+        allowed = {"identity", "preferences", "evidence", "provenance"}
+        extras = set(parameters) - allowed
+        missing = {"evidence"} - set(parameters)
+        if extras or missing:
+            raise AdapterError(
+                "operator.profile.ensure parameters may contain identity, preferences, provenance "
+                "and must contain evidence"
+            )
+
+        proc = subprocess.run(
+            [
+                "node",
+                str(self.operator_profile_owner_cli),
+                "ensure",
+                "--root",
+                str(self.root),
+            ],
+            input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            shell=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            raise AdapterError(f"OS operator profile owner failed: {detail}")
+        organized = _json_object(proc.stdout, "OS operator profile owner")
+        state = organized.get("state")
+        accepted = state in {
+            "created",
+            "evolved",
+            "existing",
+            "ignored-weak",
+            "needs-clarification",
+            "blocked-secret",
+        }
+        if not accepted:
+            raise AdapterError("OS operator profile owner returned an invalid state")
+        return {
+            "status": "succeeded" if state not in {"blocked-secret"} else "blocked",
+            "effect_occurred": bool(organized.get("changed")),
+            "result": {
+                "operator_profile": organized,
+            },
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "operator.profile.ensure",
+            },
+        }
+
     @staticmethod
     def _temporary_worker_budget(value: Any) -> Dict[str, Any]:
         if value is None:

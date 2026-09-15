@@ -56,12 +56,12 @@ _MIGRATION_MAX_CLARIFICATIONS = 32
 _MIGRATION_MAX_RESOLUTIONS = 32
 _MIGRATION_MAX_PENDING_RESULTS = 64
 _MIGRATION_INTERNAL_QUESTION_TERMS = re.compile(
-    r"(?:\\bworkspace\\b|\\bcanonical(?:\\s+(?:owner|subsystem|store|storage|component))?\\b|"
-    r"\\b(?:memory|data|skill|automation|bot|connection)\\s+(?:owner|component|subsystem|store|storage)\\b|"
-    r"\\b(?:memory|data)\\s+(?:or|vs\\.?)\\s+(?:memory|data)\\b|"
-    r"\\bwhich\\s+(?:owner|component|subsystem)\\b|"
-    r"\\bshould\\s+(?:i|we)\\s+(?:create|make|use)\\s+(?:a\\s+)?(?:skill|automation|bot|connection)\\b|"
-    r"\\b(?:put|store|save|route)\\s+(?:this|it)\\s+(?:in|into|to)\\s+(?:memory|data|a\\s+skill|the\\s+workspace)\\b)",
+    r"(?:\bworkspace\b|\bcanonical(?:\s+(?:owner|subsystem|store|storage|component))?\b|"
+    r"\b(?:memory|data|skill|automation|bot|connection)\s+(?:owner|component|subsystem|store|storage)\b|"
+    r"\b(?:memory|data)\s+(?:or|vs\.?)\s+(?:memory|data)\b|"
+    r"\bwhich\s+(?:owner|component|subsystem)\b|"
+    r"\bshould\s+(?:i|we)\s+(?:create|make|use)\s+(?:a\s+)?(?:skill|automation|bot|connection)\b|"
+    r"\b(?:put|store|save|route)\s+(?:this|it)\s+(?:in|into|to)\s+(?:memory|data|a\s+skill|the\s+workspace)\b)",
     re.IGNORECASE,
 )
 _DEFAULT_SKILLS_ROOT = Path.home() / ".aiverse" / "skills"

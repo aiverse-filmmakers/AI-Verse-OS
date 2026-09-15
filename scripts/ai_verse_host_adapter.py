@@ -2756,6 +2756,10 @@ class AIverseOSHost:
 
         if action_class == "write_local_reversible" and operation == "migration.import":
             return self._request_migration_import(request, scope, parameters)
+        if action_class == "read_local" and operation == "migration.pending":
+            return self._request_migration_pending(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "operator.profile.ensure":
+            return self._request_operator_profile_ensure(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "workspace.ensure":
             return self._request_workspace_ensure(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.capture":
@@ -2782,7 +2786,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "migration.import, workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
+                        "migration.import, migration.pending, operator.profile.ensure, workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
                     ),
                 },
             }

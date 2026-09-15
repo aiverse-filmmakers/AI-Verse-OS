@@ -186,7 +186,7 @@ Do not create a Memory row for every sentence.
 
 Use Data only for **current + structured + operational + repeated** truth.
 
-Each item contains `scope`, `candidate`, and optional exact `evidence_spans`. AI-Verse verifies source excerpts before producing trusted evidence references.
+Each item contains `scope`, `candidate`, and optional exact `evidence_spans`. AI-Verse verifies source excerpts before producing trusted evidence references. Re-importing the same unchanged initial context source must not duplicate owner writes merely because model classification wording or plan shape varies.
 
 Do not weaken Brain/Data admission just because migration is happening.
 
@@ -312,6 +312,6 @@ If clarification is needed, ask only the real-world questions whose answers matt
 - Memory remains historical and owner-gated;
 - unclear information that matters becomes resumable clarification instead of being silently discarded;
 - clarification asks about real-world meaning, never internal architecture;
-- exact replay remains idempotent;
+- an unchanged initial migration source remains idempotent even if a later classifier produces a harmlessly different plan; exact clarification-answer replay also remains idempotent;
 - owner refusal remains authoritative;
 - no second migration, profile, Memory, Data, or workspace owner is created.

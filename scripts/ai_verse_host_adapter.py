@@ -52,6 +52,13 @@ _MIGRATION_MAX_PLAN_BYTES = 512 * 1024
 _MIGRATION_MAX_WORKSPACES = 32
 _MIGRATION_MAX_MEMORIES = 128
 _MIGRATION_MAX_DATA_ITEMS = 128
+_MIGRATION_MAX_CLARIFICATIONS = 32
+_MIGRATION_MAX_RESOLUTIONS = 32
+_MIGRATION_MAX_PENDING_RESULTS = 64
+_MIGRATION_INTERNAL_QUESTION_TERMS = re.compile(
+    r"\\b(?:workspace|memory|data|skill|automation|bot|connection|canonical|owner|scope)\\b",
+    re.IGNORECASE,
+)
 _DEFAULT_SKILLS_ROOT = Path.home() / ".aiverse" / "skills"
 _DEFAULT_LOCAL_SKILLS_ROOT = Path.home() / ".aiverse" / "local-skills"
 _DATA_READ_OPERATIONS = {
@@ -219,6 +226,10 @@ class AIverseOSHost:
     @property
     def workspace_owner_cli(self) -> Path:
         return self.root / "scripts" / "workspace-owner.mjs"
+
+    @property
+    def operator_profile_owner_cli(self) -> Path:
+        return self.root / "scripts" / "operator-profile-owner.mjs"
 
     def _safe_repo_file(self, relative: Any, label: str) -> Path:
         if (

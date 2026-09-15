@@ -2440,7 +2440,7 @@ class AIverseOSHost:
             return {
                 "status": "succeeded",
                 "effect_occurred": False,
-                "result": {"migration_import": {**existing, "replayed": True}},
+                "result": {"migration_import": {**existing, "replayed": True, "replay_match": "source-and-plan"}},
                 "execution_binding": {
                     "request_fingerprint": _fingerprint(request),
                     "scope": scope,
@@ -2450,6 +2450,48 @@ class AIverseOSHost:
                     "plan_sha256": plan_digest,
                 },
             }
+
+        # A migration-sized source may be classified slightly differently by a
+        # model on a later pass. For initial context drops, source identity is
+        # stronger than classifier-plan variation: never re-run owner writes
+        # merely because the generated plan changed. Clarification-answer
+        # imports are exempt because the same short answer can legitimately
+        # resolve different pending questions.
+        if not resolution_items:
+            prior_source_receipts: list[tuple[float, Path, Dict[str, Any]]] = []
+            for prior_path in receipts_root.glob("*.json"):
+                if prior_path == receipt_path or prior_path.is_symlink() or not prior_path.is_file():
+                    continue
+                try:
+                    prior = self._migration_load_receipt(prior_path)
+                except Exception:
+                    continue
+                if prior.get("source_sha256") != source_digest:
+                    continue
+                prior_source_receipts.append((prior_path.stat().st_mtime, prior_path, prior))
+            if prior_source_receipts:
+                _mtime, _prior_path, prior = max(prior_source_receipts, key=lambda item: item[0])
+                return {
+                    "status": "succeeded",
+                    "effect_occurred": False,
+                    "result": {
+                        "migration_import": {
+                            **prior,
+                            "replayed": True,
+                            "replay_match": "source",
+                            "reclassified_plan_sha256": plan_digest,
+                        }
+                    },
+                    "execution_binding": {
+                        "request_fingerprint": _fingerprint(request),
+                        "scope": scope,
+                        "action_class": "write_local_reversible",
+                        "operation": "migration.import",
+                        "source_sha256": source_digest,
+                        "plan_sha256": plan_digest,
+                        "replayed_import_key": prior.get("import_key"),
+                    },
+                }
 
         profile_results: list[Dict[str, Any]] = []
         workspace_results: list[Dict[str, Any]] = []

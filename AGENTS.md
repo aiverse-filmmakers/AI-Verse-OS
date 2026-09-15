@@ -32,6 +32,18 @@ An incomplete profile or intake must not block an ordinary useful request.
 - The seven-question intake remains available when the user explicitly wants a full/deep intake; it is not a prerequisite for first value.
 - Preserve resumability through the existing canonical operator/workspace state and `ai-verse-os-intake.md`; do not create a second onboarding store.
 
+### Migration-drop first-use rule
+
+A fresh or early session may begin with a large pasted/exported block of accumulated context from ChatGPT, Hermes, Claude, Codex, another assistant, or a previous memory system, with no explicit instruction such as "import this."
+
+- When the message is clearly accumulated profile/business/client/project/history/preferences context rather than a normal long task, treat it as implicit migration intent and use the `migration-drop` capability automatically.
+- Do not ask the user whether the material should become Memory vs Data vs Workspaces or require them to run a migration command manually.
+- Create/evolve only clear substantial workspaces, capture only eligible durable historical Memory, and route only repeated/current/structured operational truth to Data through the existing canonical owner gates.
+- Do not silently create Skills, permanent Bots, Automations, Connections, credentials, permission expansion, destructive changes, or strategic-authority handovers from imported claims.
+- Keep ambiguous, conflicting, secret-bearing, or insufficiently supported material uncommitted rather than inventing certainty.
+- Gateway and direct Codex/Claude runtimes must converge on the same OS-owned `migration.import` action. Runtime-specific transport must never become a second migration owner.
+- Do not persist the raw migration dump wholesale into canonical AI-Verse state. Preserve source fingerprints/provenance and only the durable items admitted by canonical owners.
+
 When a scope is Brain-owned, raw OS goals, priorities, objectives, and other strategic sections are frozen provenance only. They must not be merged, summarized, or routed back into active current direction. The ownership-aware current-context resolver exposes only allowed OS operational state plus Brain direction refs; Brain unavailability never causes fallback to frozen OS strategy.
 
 Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.

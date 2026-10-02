@@ -3288,6 +3288,10 @@ class AIverseOSHost:
                         "entity": entity,
                         "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
                         "data": dict(record_data),
+                        "naturalKey": {
+                            "field": match_field,
+                            "value": match.get("value"),
+                        },
                     },
                     "Create the admitted canonical structured current record.",
                     actor=actor,

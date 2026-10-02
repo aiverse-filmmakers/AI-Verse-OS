@@ -1,0 +1,51 @@
+name: WSA-2026-053 Branch Patch
+
+on:
+  push:
+    branches:
+      - repair/wsa-2026-053-data-natural-key-adoption
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/wsa-2026-053-data-natural-key-adoption
+          fetch-depth: 0
+      - name: Adopt Data owner natural-key boundary
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/ai_verse_host_adapter.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''                        "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
+                        "data": dict(record_data),
+          '''
+          new = '''                        "idempotencyKey": self._auto_data_key(candidate_id, "record-create"),
+                        "data": dict(record_data),
+                        "naturalKey": {
+                            "field": match_field,
+                            "value": match.get("value"),
+                        },
+          '''
+          if old in text:
+              text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          elif '"naturalKey": {' not in text:
+              raise SystemExit("expected Data record-create payload was not found")
+          PY
+          if git diff --quiet -- scripts/ai_verse_host_adapter.py; then
+            echo "Adapter already contains the natural-key adoption."
+            exit 0
+          fi
+          git config user.name "AI-VERSE"
+          git config user.email "hello@bogdanpascal.com"
+          git add scripts/ai_verse_host_adapter.py
+          git commit -m "Route automatic Data creates through owner natural-key admission"
+          git push origin HEAD:repair/wsa-2026-053-data-natural-key-adoption

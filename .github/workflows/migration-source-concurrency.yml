@@ -1,0 +1,27 @@
+name: Migration Source Concurrency
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-concurrency:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile migration host and regression
+        run: python -m py_compile scripts/ai_verse_host_adapter.py scripts/test-migration-source-concurrency.py
+      - name: Prove source-level serialization and crash recovery
+        run: python scripts/test-migration-source-concurrency.py

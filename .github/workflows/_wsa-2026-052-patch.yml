@@ -5,7 +5,7 @@ on:
     branches:
       - repair/wsa-2026-052-source-concurrency
     paths:
-      - "scripts/_wsa_2026_052_patch.py"
+      - "scripts/_wsa_2026_052_patch2.py"
       - ".github/workflows/_wsa-2026-052-patch.yml"
 
 permissions:
@@ -19,15 +19,15 @@ jobs:
         with:
           ref: repair/wsa-2026-052-source-concurrency
           fetch-depth: 0
-      - name: Apply bounded WSA-2026-052 repair
+      - name: Apply bounded WSA-2026-052 repair refinement
         run: |
-          python scripts/_wsa_2026_052_patch.py
+          python scripts/_wsa_2026_052_patch2.py
           python -m py_compile scripts/ai_verse_host_adapter.py
-      - name: Commit repair
+      - name: Commit repair refinement
         run: |
           git config user.name "AI-VERSE"
           git config user.email "hello@bogdanpascal.com"
           git add scripts/ai_verse_host_adapter.py
           git diff --cached --exit-code && { echo "Patch produced no production change"; exit 1; }
-          git commit -m "Serialize semantic migration admission by source identity"
+          git commit -m "Make migration coordination directory creation race-safe"
           git push origin HEAD:repair/wsa-2026-052-source-concurrency

@@ -1976,17 +1976,21 @@ class AIverseOSHost:
         if not operator.is_dir() or operator.is_symlink():
             raise AdapterError("operator owner root is unavailable or unsafe")
         inbox = operator / "inbox"
-        if inbox.exists():
-            if inbox.is_symlink() or not inbox.is_dir():
-                raise AdapterError("operator inbox is unsafe")
-        else:
-            inbox.mkdir(mode=0o700)
+        if not inbox.exists():
+            try:
+                inbox.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+        if inbox.is_symlink() or not inbox.is_dir():
+            raise AdapterError("operator inbox is unsafe")
         base = inbox / "migration-imports"
-        if base.exists():
-            if base.is_symlink() or not base.is_dir():
-                raise AdapterError("migration import receipt directory is unsafe")
-        else:
-            base.mkdir(mode=0o700)
+        if not base.exists():
+            try:
+                base.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+        if base.is_symlink() or not base.is_dir():
+            raise AdapterError("migration import receipt directory is unsafe")
         if not _inside(base.resolve(), operator.resolve()):
             raise AdapterError("migration import receipt directory escapes operator ownership")
         return base
@@ -1996,11 +2000,13 @@ class AIverseOSHost:
             raise AdapterError("unsupported migration coordination root")
         receipts_root = self._migration_receipts_root()
         base = receipts_root / name
-        if base.exists():
-            if base.is_symlink() or not base.is_dir():
-                raise AdapterError(f"migration coordination directory is unsafe: {name}")
-        else:
-            base.mkdir(mode=0o700)
+        if not base.exists():
+            try:
+                base.mkdir(mode=0o700)
+            except FileExistsError:
+                pass
+        if base.is_symlink() or not base.is_dir():
+            raise AdapterError(f"migration coordination directory is unsafe: {name}")
         if not _inside(base.resolve(), receipts_root.resolve()):
             raise AdapterError("migration coordination directory escapes receipt ownership")
         return base

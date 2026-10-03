@@ -1,33 +1,29 @@
-name: Temporary WSA-2026-052 Repair Patch
+name: Temporary WSA-2026-052 Repair Validation
 
 on:
   push:
     branches:
       - repair/wsa-2026-052-source-concurrency
     paths:
-      - "scripts/_wsa_2026_052_patch2.py"
       - ".github/workflows/_wsa-2026-052-patch.yml"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          ref: repair/wsa-2026-052-source-concurrency
-          fetch-depth: 0
-      - name: Apply bounded WSA-2026-052 repair refinement
+          python-version: '3.12'
+      - name: Compile migration host and tests
         run: |
-          python scripts/_wsa_2026_052_patch2.py
-          python -m py_compile scripts/ai_verse_host_adapter.py
-      - name: Commit repair refinement
+          python -m py_compile scripts/ai_verse_host_adapter.py scripts/test-migration-import.py scripts/test-semantic-migration-clarification.py scripts/test-migration-source-concurrency.py
+      - name: Run existing migration regressions
         run: |
-          git config user.name "AI-VERSE"
-          git config user.email "hello@bogdanpascal.com"
-          git add scripts/ai_verse_host_adapter.py
-          git diff --cached --exit-code && { echo "Patch produced no production change"; exit 1; }
-          git commit -m "Make migration coordination directory creation race-safe"
-          git push origin HEAD:repair/wsa-2026-052-source-concurrency
+          python scripts/test-migration-import.py
+          python scripts/test-semantic-migration-clarification.py
+      - name: Run WSA-2026-052 concurrency regressions
+        run: python scripts/test-migration-source-concurrency.py

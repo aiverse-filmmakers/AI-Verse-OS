@@ -1,0 +1,33 @@
+name: Temporary WSA-2026-052 Repair Patch
+
+on:
+  push:
+    branches:
+      - repair/wsa-2026-052-source-concurrency
+    paths:
+      - "scripts/_wsa_2026_052_patch.py"
+      - ".github/workflows/_wsa-2026-052-patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: repair/wsa-2026-052-source-concurrency
+          fetch-depth: 0
+      - name: Apply bounded WSA-2026-052 repair
+        run: |
+          python scripts/_wsa_2026_052_patch.py
+          python -m py_compile scripts/ai_verse_host_adapter.py
+      - name: Commit repair
+        run: |
+          git config user.name "AI-VERSE"
+          git config user.email "hello@bogdanpascal.com"
+          git add scripts/ai_verse_host_adapter.py
+          git diff --cached --exit-code && { echo "Patch produced no production change"; exit 1; }
+          git commit -m "Serialize semantic migration admission by source identity"
+          git push origin HEAD:repair/wsa-2026-052-source-concurrency

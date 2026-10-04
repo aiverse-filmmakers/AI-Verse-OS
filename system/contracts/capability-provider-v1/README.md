@@ -4,13 +4,13 @@ Status: implementation specification, 2026-09-09. Contract ID: `aiverse-capabili
 
 This directory is the canonical cross-repository contract. AI-Verse-Skills consumes a pinned revision; it does not maintain a second editable specification. Breaking changes require a new contract major version. The provider contract version is independent of the OS architecture schema, Skills catalog schema, package version, and installation generation.
 
-This change specifies the next integration stage. It does not activate external discovery, add CLI commands, move packages, register Brain, or change current OS v2 routing. Existing installations continue to use their current manifest and adapters until a tested migration ships. Advertising this document is not advertising an implemented provider.
+The provider-v1 contract is implemented by the current OS resolver and installed Skills provider. External discovery, generation pinning, readiness assessment, and receipt-bound invocation are supported through the public host interface. This document remains the cross-repository contract; it does not grant permissions, register Brain, or replace owner lifecycle authority.
 
 ## 1. Ownership
 
 | Surface | Canonical owner | Consumer behavior |
 |---|---|---|
-| OS control capabilities | OS | Discover as `os:*`; currently `.claude/skills/`, future `system/capabilities/` after migration |
+| OS control capabilities | OS | Discover as `os:*` from canonical `system/capabilities/`; `.claude/skills/` and `.agents/skills/` are generated adapters |
 | Distributed reusable packages and installation manifest | Skills installer | Read from configured external root; default `~/.aiverse/skills/` |
 | Private reusable personal packages | User | Separate optional provider, default `~/.aiverse/local-skills/`; never overwritten by distribution updates |
 | Workspace packages | Workspace owner | Discover only within the authorized active workspace's `skills/` |
@@ -100,7 +100,7 @@ Before replacing the current registry, provide a legacy reader/migration for Mem
 
 The next extension registration implementation must keep local registrations outside upstream-tracked system files so OS updates remain usable. Do not advertise `extensions.brain` until initialization and all runtime write paths enforce the same registration contract.
 
-Canonical built-ins may later move to `system/capabilities/`; until then the current source remains authoritative. Shipped 3D Brain templates belong in system-owned template storage, separate from user-configured `apps/3d-brain/`. A system invocation capability may remain. Generated adapters have one canonical source and must not create a second editable methodology store.
+Canonical built-ins live in `system/capabilities/`. Runtime adapter trees are generated peers and must not become editable methodology stores. Shipped 3D Brain templates belong in system-owned template storage, separate from user-configured `apps/3d-brain/`. A system invocation capability may remain.
 
 ## 8. Brain and receipt boundary
 
@@ -112,7 +112,7 @@ Skills verification checks provide evidence. The host maps evidence to Brain cri
 
 ## 9. Required implementation acceptance cases
 
-These are release gates for the future implementation, not claims that current code passes:
+These are current implementation acceptance cases and release gates:
 
 1. OS without external Skills performs no external install/network/deep scan and retains system/workspace capabilities.
 2. Standalone Skills install/update/rollback/uninstall leaves OS Git state unchanged; OS update leaves Skills and personal packages unchanged.
@@ -129,4 +129,4 @@ These are release gates for the future implementation, not claims that current c
 
 ## 10. Delivery sequence
 
-First finalize this contract and its producer mapping. Next fix the separately identified Memory/Brain correctness defects before autonomous integration. Then implement Skills index publication plus OS discovery and one runtime path. Migrate built-in sources only after that works. Complete the Brain host adapter and direction ownership handover as a separate stage, followed by the four-component acceptance suite.
+The contract and producer mapping are finalized. The installed Skills index, OS discovery, generation pinning, readiness evaluation, and supported runtime receipt path are implemented and covered by repository QC and cross-repository acceptance. Future work extends owner integrations without creating a second OS capability source or weakening the existing boundaries.

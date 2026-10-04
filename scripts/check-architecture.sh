@@ -75,6 +75,14 @@ else
   err "skills/registry.yaml must name system/capabilities/ as canonical_materialization"
 fi
 
+if grep -Fq 'shared_skill_methodology: system/capabilities/' AI-VERSE.yaml \
+  && grep -Fq 'OS control capabilities | OS | Discover as `os:*` from canonical `system/capabilities/`' system/contracts/capability-provider-v1/README.md \
+  && grep -Fq 'Canonical built-ins live in `system/capabilities/`.' system/contracts/capability-provider-v1/README.md; then
+  ok "canonical capability source is consistent across architecture metadata and provider contract"
+else
+  err "AI-VERSE.yaml and provider-v1 contract must identify system/capabilities/ as canonical"
+fi
+
 if [[ -d system/capabilities && -d .claude/skills && -d .agents/skills ]]; then
   for source in system/capabilities/*; do
     [[ -d "$source" ]] || continue

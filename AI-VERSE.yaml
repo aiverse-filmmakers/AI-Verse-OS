@@ -63,7 +63,7 @@ source_of_truth:
   runtime_behavior: AGENTS.md
   architecture_and_paths: AI-VERSE.yaml
   architecture_intent: system/architecture/
-  shared_skill_methodology: .claude/skills/
+  shared_skill_methodology: system/capabilities/
   capability_registry: skills/registry.yaml
   resolved_current_context: scripts/current-context.mjs
   operator_facts: operator/profile/

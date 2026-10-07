@@ -11,6 +11,7 @@ const CAUSAL_RELATION_PRIORITY = new Map([
   ['addresses', 3],
   ['measures', 4],
 ]);
+const ORPHANABLE_KINDS = new Set(['initiative', 'current_work']);
 const MAX_TRAVERSAL_NODES = 128;
 
 function refKey(ref) {
@@ -70,13 +71,12 @@ function semanticCatalog(envelope) {
   return { bySelector, byRef };
 }
 
-function explainParentEdges(outgoing, node, catalog, scope) {
+function explainParentEdges(outgoing, node) {
   const nodeKey = refKey(node.canonical_ref);
   const edges = (outgoing.get(nodeKey) ?? []).filter((edge) => {
     if (!CAUSAL_RELATION_PRIORITY.has(edge.relation)) return false;
     if (edge.relation === 'measures' && node.semantic_kind !== 'kpi') return false;
-    if (edge.to_ref.scope !== scope) return false;
-    return Boolean(catalog.byRef.get(refKey(edge.to_ref)));
+    return true;
   });
   return edges.sort((a, b) => {
     const relation = CAUSAL_RELATION_PRIORITY.get(a.relation) - CAUSAL_RELATION_PRIORITY.get(b.relation);
@@ -91,25 +91,83 @@ function explainParentEdges(outgoing, node, catalog, scope) {
 
 function buildExplainPaths(start, outgoing, catalog, scope) {
   const paths = [];
+  const missingLinks = [];
+  const missingKeys = new Set();
 
-  function walk(node, selectors, relations, seenKeys, depth) {
-    if (depth > MAX_TRAVERSAL_NODES) throw new Error('Purpose trajectory path exceeded safety bound');
-    const parents = explainParentEdges(outgoing, node, catalog, scope);
-    if (!parents.length) {
+  function recordMissing(edge) {
+    const key = `${refKey(edge.from_ref)}\u0001${edge.relation}\u0001${refKey(edge.to_ref)}`;
+    if (missingKeys.has(key)) return;
+    missingKeys.add(key);
+    missingLinks.push({
+      reason: 'missing_parent_node',
+      relation: edge.relation,
+      from_ref: structuredClone(edge.from_ref),
+      to_ref: structuredClone(edge.to_ref),
+    });
+  }
+
+  function terminalPath(node, selectors, relations) {
+    if (ORPHANABLE_KINDS.has(node.semantic_kind) && relations.length === 0) {
       paths.push({
+        status: 'orphan',
+        termination_reason: 'trajectory_orphan',
+        linkage_state: 'orphan',
+        linkage_reason: 'no_valid_parent_relation',
         selectors: [...selectors],
         relations: [...relations],
         terminal_selector: selectors[selectors.length - 1],
       });
       return;
     }
+    paths.push({
+      status: 'complete',
+      termination_reason: 'trajectory_root',
+      selectors: [...selectors],
+      relations: [...relations],
+      terminal_selector: selectors[selectors.length - 1],
+    });
+  }
+
+  function walk(node, selectors, relations, seenKeys, depth) {
+    if (depth > MAX_TRAVERSAL_NODES) throw new Error('Purpose trajectory path exceeded safety bound');
+    const parents = explainParentEdges(outgoing, node);
+    if (!parents.length) {
+      terminalPath(node, selectors, relations);
+      return;
+    }
 
     let advanced = false;
     for (const edge of parents) {
       const targetKey = refKey(edge.to_ref);
-      if (seenKeys.has(targetKey)) continue;
+      if (edge.to_ref.scope !== scope) {
+        paths.push({
+          status: 'partial',
+          termination_reason: 'scope_boundary',
+          selectors: [...selectors],
+          relations: [...relations, edge.relation],
+          terminal_selector: selectors[selectors.length - 1],
+          terminal_ref: structuredClone(edge.to_ref),
+        });
+        advanced = true;
+        continue;
+      }
+
       const targetNode = catalog.byRef.get(targetKey);
-      if (!targetNode) continue;
+      if (!targetNode) {
+        recordMissing(edge);
+        paths.push({
+          status: 'partial',
+          termination_reason: 'missing_parent',
+          selectors: [...selectors],
+          relations: [...relations, edge.relation],
+          terminal_selector: selectors[selectors.length - 1],
+          terminal_ref: structuredClone(edge.to_ref),
+        });
+        advanced = true;
+        continue;
+      }
+
+      if (seenKeys.has(targetKey)) continue;
       const targetSelector = selectorFor(targetNode);
       if (!targetSelector) continue;
       advanced = true;
@@ -118,18 +176,15 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
       walk(targetNode, [...selectors, targetSelector], [...relations, edge.relation], nextSeen, depth + 1);
     }
 
-    if (!advanced) {
-      paths.push({
-        selectors: [...selectors],
-        relations: [...relations],
-        terminal_selector: selectors[selectors.length - 1],
-      });
-    }
+    if (!advanced) terminalPath(node, selectors, relations);
   }
 
   const startKey = refKey(start.canonical_ref);
   walk(start, [selectorFor(start)], [], new Set([startKey]), 0);
-  return paths.map((path, index) => ({ primary: index === 0, ...path }));
+  return {
+    paths: paths.map((path, index) => ({ primary: index === 0, ...path })),
+    missing_links: missingLinks,
+  };
 }
 
 export function parseTrajectorySelector(selector) {
@@ -201,6 +256,7 @@ export function traverseExplicitTrajectory(envelope, selector) {
     }
   }
 
+  const explanation = buildExplainPaths(start, outgoing, catalog, filtered.scope);
   return {
     schema_version: '1.0',
     scope: filtered.scope,
@@ -215,7 +271,8 @@ export function traverseExplicitTrajectory(envelope, selector) {
       edges,
       reached_refs: reachedRefs,
       terminal_refs: terminalRefs,
-      paths: buildExplainPaths(start, outgoing, catalog, filtered.scope),
+      paths: explanation.paths,
+      missing_links: explanation.missing_links,
     },
   };
 }

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { resolvePurposeScope } from './purpose-context-core.mjs';
+import { readPurposeCurrentContext, resolvePurposeScope } from './purpose-context-core.mjs';
 
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-context-'));
@@ -14,6 +14,15 @@ function makeRoot() {
   fs.mkdirSync(path.join(root, 'workspaces', 'client-a', 'context'), { recursive: true });
   fs.writeFileSync(path.join(root, 'workspaces', 'client-a', 'WORKSPACE.yaml'), 'schema_version: "2.0"\nid: "client-a"\n', 'utf8');
   return root;
+}
+
+function setBrainOwner(root, scope, refs = ['brain:intent:goal-1']) {
+  const marker = path.join(root, '.aiverse', 'direction', 'ownership.json');
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, JSON.stringify({
+    schema_version: 1,
+    scopes: { [scope]: { owner: 'brain', state: 'active', handover_id: 'purpose-test', brain_refs: refs } },
+  }, null, 2));
 }
 
 const root = makeRoot();
@@ -48,7 +57,24 @@ try {
     if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
   }
 
-  process.stdout.write('Purpose Context scope resolution: PASS\n');
+  fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), [
+    '# Current Operator Context', '',
+    '## Current priorities', '', '- OS STRATEGIC PRIORITY', '',
+    '## Pending decisions', '', '- operational decision', '',
+  ].join('\n'));
+  const osRead = readPurposeCurrentContext(root, 'operator');
+  assert.equal(osRead.current.direction_owner, 'os');
+  assert.match(osRead.current.current_context, /OS STRATEGIC PRIORITY/);
+  assert.match(osRead.current.current_context, /operational decision/);
+
+  setBrainOwner(root, 'operator');
+  const brainRead = readPurposeCurrentContext(root, 'operator');
+  assert.equal(brainRead.current.direction_owner, 'brain');
+  assert.doesNotMatch(brainRead.current.current_context, /OS STRATEGIC PRIORITY/);
+  assert.match(brainRead.current.current_context, /operational decision/);
+  assert.deepEqual(brainRead.current.direction_refs, ['brain:intent:goal-1']);
+
+  process.stdout.write('Purpose Context scope/current-context boundary: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

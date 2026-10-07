@@ -4,6 +4,8 @@ import path from 'node:path';
 import { readCurrentContext } from './current-context.mjs';
 import { validateDirectionScope } from './direction-owner-core.mjs';
 
+const PURPOSE_SCHEMA_VERSION = '1.0';
+
 function samePath(a, b) {
   return path.relative(a, b) === '' && path.relative(b, a) === '';
 }
@@ -15,6 +17,93 @@ function requirePhysicalDirectory(target, expected, label) {
   if (!samePath(real, expected)) throw new Error(`${label} is not its expected physical slot`);
   if (!fs.statSync(real).isDirectory()) throw new Error(`${label} is not a directory`);
   return real;
+}
+
+function parseSections(text) {
+  const result = new Map();
+  let heading = null;
+  let lines = [];
+  const flush = () => {
+    if (heading !== null) result.set(heading.toLowerCase().replace(/\s+/g, ' ').trim(), lines.join('\n').trim());
+  };
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    if (match) {
+      flush();
+      heading = match[1].trim();
+      lines = [];
+    } else if (heading !== null) {
+      lines.push(line);
+    }
+  }
+  flush();
+  return result;
+}
+
+function sectionItems(sections, names, kind) {
+  const items = [];
+  for (const name of names) {
+    const value = sections.get(name);
+    if (!value) continue;
+    const bullets = value.split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => /^[-*]\s+\S/.test(line))
+      .map((line) => line.replace(/^[-*]\s+/, '').trim());
+    if (bullets.length) {
+      for (const statement of bullets) items.push({ kind, statement });
+    } else {
+      items.push({ kind, statement: value });
+    }
+  }
+  return items;
+}
+
+function readOsProjection(resolved, current) {
+  const sections = parseSections(current.current_context);
+  const projection = {};
+
+  if (resolved.scope_kind === 'operator') {
+    const priorities = sectionItems(sections, ['current priorities', 'priorities'], 'priority');
+    if (priorities.length) projection.priorities = priorities;
+  } else {
+    const goals = sectionItems(sections, ['objective'], 'workspace_objective');
+    if (goals.length) projection.goals = goals;
+  }
+
+  const constraints = sectionItems(sections, ['current constraints', 'constraints', 'constraints / approvals'], 'constraint');
+  if (constraints.length) projection.constraints = constraints;
+  const currentState = sectionItems(sections, ['current state', 'current facts'], 'current_state');
+  if (currentState.length) projection.current_state = currentState;
+  const currentWork = sectionItems(sections, ['next useful actions', 'active workspaces'], 'current_work');
+  if (currentWork.length) projection.current_work = currentWork;
+  return projection;
+}
+
+function readBrainProjection(snapshot) {
+  const projection = {};
+  const intents = snapshot?.strategic_objects?.intents ?? [];
+  const gaps = snapshot?.strategic_objects?.gaps ?? [];
+  const initiatives = snapshot?.strategic_objects?.initiatives ?? [];
+  const bucket = (key, item) => {
+    if (!projection[key]) projection[key] = [];
+    projection[key].push(item);
+  };
+
+  for (const item of intents) {
+    if (item.semantic_kind === 'problem') bucket('problems', item);
+    else if (item.semantic_kind === 'mission') {
+      projection.purpose ??= { missions: [], desired_outcomes: [] };
+      projection.purpose.missions.push(item);
+    } else if (item.semantic_kind === 'desired_outcome') {
+      projection.purpose ??= { missions: [], desired_outcomes: [] };
+      projection.purpose.desired_outcomes.push(item);
+    } else if (item.semantic_kind === 'goal') bucket('goals', item);
+    else if (item.semantic_kind === 'strategy') bucket('strategies', item);
+  }
+  for (const item of gaps) bucket('challenges', item);
+  for (const item of initiatives) bucket('initiatives', item);
+  if ((snapshot?.relationships ?? []).length) projection.trajectory = [...snapshot.relationships];
+  return projection;
 }
 
 export function resolvePurposeScope(root, scope = 'operator') {
@@ -74,10 +163,7 @@ export function readPurposeCurrentContext(root, scope = 'operator') {
   if (!['os', 'brain'].includes(current.direction_owner)) {
     throw new Error(`ownership-aware current context returned an invalid direction owner for ${resolved.scope}`);
   }
-  return {
-    resolved,
-    current,
-  };
+  return { resolved, current };
 }
 
 export function readPurposeStrategicDirection(root, scope = 'operator', options = {}) {
@@ -130,4 +216,56 @@ export function readPurposeStrategicDirection(root, scope = 'operator', options 
       snapshot,
     },
   };
+}
+
+export function composePurposeContext(root, scope = 'operator', options = {}) {
+  const observedAt = options.now ?? new Date().toISOString();
+  const read = readPurposeStrategicDirection(root, scope, options);
+  const { resolved, current, strategic } = read;
+  const semantic = strategic.owner === 'ai-verse-brain' && strategic.snapshot
+    ? readBrainProjection(strategic.snapshot)
+    : readOsProjection(resolved, current);
+
+  const ownerReads = [{
+    owner: 'ai-verse-os',
+    operation: 'current-context.read',
+    scope: resolved.scope,
+    status: 'ok',
+    observed_at: observedAt,
+    freshness: { state: 'unknown', as_of: observedAt },
+    canonical_refs: [],
+  }];
+  if (strategic.owner === 'ai-verse-brain') {
+    ownerReads.push({
+      owner: 'ai-verse-brain',
+      operation: 'purpose-snapshot.read',
+      scope: resolved.scope,
+      status: strategic.status,
+      observed_at: observedAt,
+      freshness: { state: strategic.status === 'unavailable' ? 'unavailable' : 'unknown', as_of: observedAt },
+      canonical_refs: [],
+    });
+  }
+
+  const envelope = {
+    schema_version: PURPOSE_SCHEMA_VERSION,
+    scope: resolved.scope,
+    scope_kind: resolved.scope_kind,
+    identity: resolved.identity,
+    ...semantic,
+    provenance: {
+      projection_owner: 'ai-verse-os',
+      generated_at: observedAt,
+      owner_reads: ownerReads,
+    },
+  };
+  if (strategic.status !== 'ok') {
+    envelope.section_states = {
+      strategic_direction: {
+        state: strategic.status,
+        reason: strategic.reason ?? 'owner_read_not_ok',
+      },
+    };
+  }
+  return envelope;
 }

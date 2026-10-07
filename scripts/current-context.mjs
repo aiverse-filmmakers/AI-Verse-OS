@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   DIRECTION_SCHEMA_VERSION,
   directionOwnerState,
@@ -163,7 +164,7 @@ function renderBrainOwned(scope, operational, refs, view) {
   return `${lines.join('\n')}\n`;
 }
 
-function readCurrentContext(root, scope) {
+export function readCurrentContext(root, scope) {
   validateDirectionScope(scope);
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) throw new Error(`AI-Verse OS root not found: ${root}`);
   const paths = scopePaths(root, scope);
@@ -221,10 +222,16 @@ function parse(argv) {
   return { command, root: path.resolve(root), scope };
 }
 
-const { command, root, scope } = parse(process.argv.slice(2));
-if (command !== 'read') fail(`unknown command: ${command}`, 2);
-try {
-  process.stdout.write(`${JSON.stringify(readCurrentContext(root, scope), null, 2)}\n`);
-} catch (error) {
-  fail(error.message, 4);
+function runCli() {
+  const { command, root, scope } = parse(process.argv.slice(2));
+  if (command !== 'read') fail(`unknown command: ${command}`, 2);
+  try {
+    process.stdout.write(`${JSON.stringify(readCurrentContext(root, scope), null, 2)}\n`);
+  } catch (error) {
+    fail(error.message, 4);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  runCli();
 }

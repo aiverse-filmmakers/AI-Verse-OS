@@ -36,6 +36,8 @@ jobs:
         run: node scripts/test-purpose-context-relationships.mjs
       - name: Test Purpose Context workspace boundary attacks
         run: node scripts/test-purpose-context-workspace-boundary.mjs
+      - name: Test Purpose Context explicit explain traversal
+        run: node scripts/test-purpose-context-explain.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -51,6 +53,7 @@ jobs:
           test -f system/architecture/purpose-context.md
           test -f system/schemas/purpose-context.schema.json
           test -f scripts/purpose-context.mjs
+          test -f scripts/purpose-context-explain.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

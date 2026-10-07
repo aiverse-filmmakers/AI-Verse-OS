@@ -20,6 +20,8 @@ jobs:
         run: node scripts/test-direction-owner.mjs
       - name: Test ownership-aware active current context
         run: node scripts/test-current-context.mjs
+      - name: Test Purpose Context ownership-aware current context
+        run: node scripts/test-purpose-context.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |

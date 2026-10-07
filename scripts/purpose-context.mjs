@@ -3,6 +3,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { explainPurposeContext } from './purpose-context-explain.mjs';
 import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
 
 function fail(message, code = 4) {
@@ -17,6 +18,7 @@ function parse(argv) {
   let scope = 'operator';
   let maxBytes;
   let profile = 'auto';
+  let ref;
   const relevantDomains = [];
 
   while (args.length) {
@@ -37,28 +39,42 @@ function parse(argv) {
       const value = args.shift();
       if (!value) fail('--relevant-domain requires a value', 2);
       relevantDomains.push(value);
+    } else if (token === '--ref') {
+      ref = args.shift() || fail('--ref requires an exact semantic ref such as initiative:<id>', 2);
     } else {
       fail(`unknown option: ${token}`, 2);
     }
   }
 
-  return { command, root: path.resolve(root), scope, maxBytes, profile, relevantDomains };
+  return { command, root: path.resolve(root), scope, maxBytes, profile, relevantDomains, ref };
 }
 
-export function readPurposeContextCli(options) {
-  return composeProfiledPurposeContext(options.root, options.scope, {
+function projectionOptions(options) {
+  return {
     maxBytes: options.maxBytes,
     profile: options.profile,
     relevantDomains: options.relevantDomains,
-  });
+  };
+}
+
+export function readPurposeContextCli(options) {
+  return composeProfiledPurposeContext(options.root, options.scope, projectionOptions(options));
+}
+
+export function explainPurposeContextCli(options) {
+  if (!options.ref) throw new Error('explain requires --ref');
+  return explainPurposeContext(options.root, options.scope, options.ref, projectionOptions(options));
 }
 
 function runCli() {
   const options = parse(process.argv.slice(2));
-  if (options.command !== 'read') fail(`unknown command: ${options.command}`, 2);
+  if (!['read', 'explain'].includes(options.command)) fail(`unknown command: ${options.command}`, 2);
 
   try {
-    process.stdout.write(`${JSON.stringify(readPurposeContextCli(options), null, 2)}\n`);
+    const result = options.command === 'read'
+      ? readPurposeContextCli(options)
+      : explainPurposeContextCli(options);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } catch (error) {
     fail(error.message, 4);
   }

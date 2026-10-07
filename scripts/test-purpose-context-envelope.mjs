@@ -47,6 +47,11 @@ try {
   assert.equal(osEnvelope.provenance.projection_owner, 'ai-verse-os');
   assert.equal(osEnvelope.provenance.generated_at, now);
   assert.equal(osEnvelope.provenance.owner_reads[0].operation, 'current-context.read');
+  const osRef = { owner: 'ai-verse-os', scope: 'workspace:film', kind: 'current-context', id: 'active' };
+  assert.deepEqual(osEnvelope.provenance.owner_reads[0].canonical_refs, [osRef]);
+  assert.deepEqual(osEnvelope.goals[0].source_refs, [osRef]);
+  assert.deepEqual(osEnvelope.current_state[0].source_refs, [osRef]);
+  assert.doesNotMatch(JSON.stringify(osEnvelope.provenance), /CURRENT\.md|workspaces\/film/);
 
   fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), '## Current priorities\n\n- STALE OS PRIORITY\n\n## Current state\n\n- operational fact\n');
   brainOwner(root, 'operator');
@@ -64,7 +69,7 @@ try {
           gaps: [{ id: 'gap-1', kind: 'gap', semantic_kind: 'challenge', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'gap', id: 'gap-1', version: '1' }, payload: { interpretation: 'Agent loses big picture' } }],
           initiatives: [{ id: 'init-1', kind: 'initiative', semantic_kind: 'initiative', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }, payload: { outcome: 'Purpose Context' } }],
         },
-        relationships: [{ relation: 'serves', from_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }, to_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '3' } }],
+        relationships: [{ relation: 'serves', from_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }, to_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '3' }, source_refs: [{ owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }] }],
         relationship_rejections: [],
       };
     },
@@ -76,9 +81,13 @@ try {
   assert.equal(brainEnvelope.initiatives[0].id, 'init-1');
   assert.equal(brainEnvelope.trajectory[0].relation, 'serves');
   assert.equal(brainEnvelope.provenance.owner_reads.length, 2);
+  assert.deepEqual(brainEnvelope.purpose.missions[0].canonical_ref, { owner: 'ai-verse-brain', scope: 'operator', kind: 'intent', id: 'mission-1', version: '3' });
+  const brainRefs = brainEnvelope.provenance.owner_reads[1].canonical_refs;
+  assert.ok(brainRefs.some((ref) => ref.id === 'mission-1' && ref.version === '3'));
+  assert.ok(brainRefs.some((ref) => ref.id === 'init-1' && ref.version === '1'));
   assert.doesNotMatch(JSON.stringify(brainEnvelope), /STALE OS PRIORITY/);
 
-  process.stdout.write('Purpose Context v1 envelope composition: PASS\n');
+  process.stdout.write('Purpose Context v1 envelope/ref preservation: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

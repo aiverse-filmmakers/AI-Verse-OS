@@ -21,19 +21,35 @@ Supported scopes are exactly:
 
 Scope resolution uses canonical OS validation and physical workspace boundaries. Cross-workspace scanning is not part of v1.
 
+## Profiles
+
+Workspace projection profiles are runtime read behavior, not persisted workspace authority or configuration.
+
+- accepted caller requests are `auto`, `basic`, and `rich`;
+- operator scope resolves to `operator_default` and does not accept workspace `basic`/`rich` labels;
+- workspace `auto` begins at `workspace_basic` and resolves to `workspace_rich` only when a rich-only domain is both owner-backed and relevant/requested;
+- workspace type, name, age, perceived importance, free-text purpose, file count, and unused byte budget cannot select rich mode by themselves;
+- `basic` suppresses rich-only narratives, KPIs, and risks while retaining required truth-state/provenance diagnostics;
+- `rich` only broadens the eligible read set and cannot fabricate unavailable data or bypass owner authority;
+- profile selection may be reported under `provenance.profile` as non-authoritative diagnostics.
+
+Slice 2.3 explicitly froze that v1 does **not** add or read a `purpose_context` profile/configuration block in `WORKSPACE.yaml`. Caller profile flags and deterministic auto-resolution are the only v1 selection inputs. Unknown workspace metadata cannot silently enable, disable, or enrich Purpose Context.
+
 ## Public surfaces
 
 Library:
 
 ```js
 composePurposeContext(root, scope, options)
+composeProfiledPurposeContext(root, scope, options)
 ```
 
 CLI:
 
 ```bash
 node scripts/purpose-context.mjs read --scope operator
-node scripts/purpose-context.mjs read --scope workspace:ai-verse
+node scripts/purpose-context.mjs read --scope workspace:ai-verse --profile auto
+node scripts/purpose-context.mjs read --scope workspace:ai-verse --profile rich --relevant-domain kpis
 ```
 
 The CLI is read-only. It creates no Purpose state or cache. If Brain owns direction and no Brain public reader is available in the calling runtime, the projection fails closed with explicit unavailable strategic-direction state rather than reading Brain internals or falling back to stale OS strategy.

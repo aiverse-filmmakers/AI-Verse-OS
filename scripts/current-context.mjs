@@ -164,6 +164,10 @@ function renderBrainOwned(scope, operational, refs, view) {
   return `${lines.join('\n')}\n`;
 }
 
+function currentContextRef(scope) {
+  return { owner: 'ai-verse-os', scope, kind: 'current-context', id: 'active' };
+}
+
 export function readCurrentContext(root, scope) {
   validateDirectionScope(scope);
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) throw new Error(`AI-Verse OS root not found: ${root}`);
@@ -172,6 +176,7 @@ export function readCurrentContext(root, scope) {
   const current = safeOptionalFile(paths.current, paths.boundary, `${scope} current context`);
   const raw = current ? fs.readFileSync(current, 'utf8') : '';
   const source = current ? path.relative(root, current).split(path.sep).join('/') : null;
+  const canonicalRef = currentContextRef(scope);
 
   if (state.owner === 'os') {
     return {
@@ -181,6 +186,7 @@ export function readCurrentContext(root, scope) {
       direction_owner: 'os',
       strategy_status: 'os-canonical',
       current_context: raw,
+      canonical_ref: canonicalRef,
       source,
       direction_view: null,
       direction_view_status: 'not-applicable',
@@ -199,6 +205,7 @@ export function readCurrentContext(root, scope) {
     direction_owner: 'brain',
     strategy_status: refs.length || view.status === 'available' ? 'brain-canonical' : 'unavailable',
     current_context: renderBrainOwned(scope, operational, refs, view),
+    canonical_ref: canonicalRef,
     source,
     direction_view: view.path,
     direction_view_status: view.status,

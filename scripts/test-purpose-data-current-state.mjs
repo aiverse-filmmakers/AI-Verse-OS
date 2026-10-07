@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
+import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { projectTransientDataCurrentValues } from './purpose-data-current-value-boundary.mjs';
 
 function fixture() {
@@ -156,6 +157,43 @@ try {
     reason: 'data_public_reader_unavailable',
   });
   assert.equal(noReader.provenance.owner_reads.find((item) => item.owner === 'ai-verse-data').status, 'unavailable');
+
+  const previouslyGenerated = composeProfiledPurposeContext(root, 'workspace:film', {
+    now,
+    readPurposeDataCurrentState(request) {
+      return {
+        status: 'ok',
+        scope: request.scope,
+        bindings: [{ purpose_ref: purposeRef, current: projected(refs[1], 77) }],
+      };
+    },
+  });
+  assert.equal(previouslyGenerated.current_state.find((item) => item.kind === 'data_current_state').value, 77);
+
+  const outageReapplication = applyPurposeDataCurrentState(previouslyGenerated, {
+    now: '2026-10-07T16:10:00.000Z',
+    readPurposeDataCurrentState(request) {
+      return { status: 'unavailable', scope: request.scope, reason: 'data_owner_offline' };
+    },
+  });
+  assert.equal(outageReapplication.current_state.some((item) => item.kind === 'data_current_state'), false, 'previously generated Data value survived owner outage');
+  assert.equal(outageReapplication.current_state.some((item) => item.statement === 'edit in progress'), true, 'non-Data owner state was removed');
+  assert.deepEqual(outageReapplication.section_states.data_current_state, {
+    state: 'unavailable',
+    reason: 'data_owner_offline',
+  });
+  const outageReads = outageReapplication.provenance.owner_reads.filter((item) => item.owner === 'ai-verse-data');
+  assert.equal(outageReads.length, 1, 'stale Data owner-read provenance survived reapplication');
+  assert.equal(outageReads[0].status, 'unavailable');
+
+  const missingReaderReapplication = applyPurposeDataCurrentState(previouslyGenerated, {
+    now: '2026-10-07T16:11:00.000Z',
+  });
+  assert.equal(missingReaderReapplication.current_state.some((item) => item.kind === 'data_current_state'), false, 'previously generated Data value survived missing reader');
+  assert.deepEqual(missingReaderReapplication.section_states.data_current_state, {
+    state: 'unavailable',
+    reason: 'data_public_reader_unavailable',
+  });
 
   assert.throws(() => composeProfiledPurposeContext(root, 'workspace:film', {
     now,

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { readCurrentContext } from './current-context.mjs';
 import { validateDirectionScope } from './direction-owner-core.mjs';
 
 function samePath(a, b) {
@@ -61,5 +62,20 @@ export function resolvePurposeScope(root, scope = 'operator') {
     scope_kind: 'workspace',
     identity: { kind: 'workspace', id },
     boundary: workspace,
+  };
+}
+
+export function readPurposeCurrentContext(root, scope = 'operator') {
+  const resolved = resolvePurposeScope(root, scope);
+  const current = readCurrentContext(path.resolve(root), resolved.scope);
+  if (!current || current.scope !== resolved.scope) {
+    throw new Error(`ownership-aware current context returned the wrong scope for ${resolved.scope}`);
+  }
+  if (!['os', 'brain'].includes(current.direction_owner)) {
+    throw new Error(`ownership-aware current context returned an invalid direction owner for ${resolved.scope}`);
+  }
+  return {
+    resolved,
+    current,
   };
 }

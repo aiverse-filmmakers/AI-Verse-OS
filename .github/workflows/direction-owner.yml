@@ -44,6 +44,8 @@ jobs:
         run: node scripts/test-purpose-data-current-state.mjs
       - name: Test Purpose Data exact-source descent
         run: node scripts/test-purpose-data-source-descent.mjs
+      - name: Test Purpose Memory historical evidence boundary
+        run: node scripts/test-purpose-memory-history-boundary.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -62,6 +64,7 @@ jobs:
           test -f scripts/purpose-context-explain.mjs
           test -f scripts/purpose-data-current-value-boundary.mjs
           test -f scripts/purpose-data-current-state.mjs
+          test -f scripts/purpose-memory-history-boundary.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

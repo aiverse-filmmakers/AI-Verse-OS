@@ -89,6 +89,22 @@ function explainParentEdges(outgoing, node) {
   });
 }
 
+function hopForEdge(edge, catalog) {
+  const fromNode = catalog.byRef.get(refKey(edge.from_ref));
+  const toNode = catalog.byRef.get(refKey(edge.to_ref));
+  const hop = {
+    relation: edge.relation,
+    from_ref: structuredClone(edge.from_ref),
+    to_ref: structuredClone(edge.to_ref),
+    source_refs: [...(edge.source_refs ?? [])].sort(compareRefs).map((ref) => structuredClone(ref)),
+  };
+  const fromSelector = selectorFor(fromNode);
+  const toSelector = selectorFor(toNode);
+  if (fromSelector) hop.from_selector = fromSelector;
+  if (toSelector) hop.to_selector = toSelector;
+  return hop;
+}
+
 function buildExplainPaths(start, outgoing, catalog, scope) {
   const paths = [];
   const missingLinks = [];
@@ -103,10 +119,11 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
       relation: edge.relation,
       from_ref: structuredClone(edge.from_ref),
       to_ref: structuredClone(edge.to_ref),
+      source_refs: [...(edge.source_refs ?? [])].sort(compareRefs).map((ref) => structuredClone(ref)),
     });
   }
 
-  function terminalPath(node, selectors, relations) {
+  function terminalPath(node, selectors, relations, hops) {
     if (ORPHANABLE_KINDS.has(node.semantic_kind) && relations.length === 0) {
       paths.push({
         status: 'orphan',
@@ -115,6 +132,7 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
         linkage_reason: 'no_valid_parent_relation',
         selectors: [...selectors],
         relations: [...relations],
+        hops: structuredClone(hops),
         terminal_selector: selectors[selectors.length - 1],
       });
       return;
@@ -124,27 +142,30 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
       termination_reason: 'trajectory_root',
       selectors: [...selectors],
       relations: [...relations],
+      hops: structuredClone(hops),
       terminal_selector: selectors[selectors.length - 1],
     });
   }
 
-  function walk(node, selectors, relations, seenKeys, depth) {
+  function walk(node, selectors, relations, hops, seenKeys, depth) {
     if (depth > MAX_TRAVERSAL_NODES) throw new Error('Purpose trajectory path exceeded safety bound');
     const parents = explainParentEdges(outgoing, node);
     if (!parents.length) {
-      terminalPath(node, selectors, relations);
+      terminalPath(node, selectors, relations, hops);
       return;
     }
 
     let advanced = false;
     for (const edge of parents) {
       const targetKey = refKey(edge.to_ref);
+      const hop = hopForEdge(edge, catalog);
       if (edge.to_ref.scope !== scope) {
         paths.push({
           status: 'partial',
           termination_reason: 'scope_boundary',
           selectors: [...selectors],
           relations: [...relations, edge.relation],
+          hops: [...hops, hop],
           terminal_selector: selectors[selectors.length - 1],
           terminal_ref: structuredClone(edge.to_ref),
         });
@@ -160,6 +181,7 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
           termination_reason: 'missing_parent',
           selectors: [...selectors],
           relations: [...relations, edge.relation],
+          hops: [...hops, hop],
           terminal_selector: selectors[selectors.length - 1],
           terminal_ref: structuredClone(edge.to_ref),
         });
@@ -173,14 +195,14 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
       advanced = true;
       const nextSeen = new Set(seenKeys);
       nextSeen.add(targetKey);
-      walk(targetNode, [...selectors, targetSelector], [...relations, edge.relation], nextSeen, depth + 1);
+      walk(targetNode, [...selectors, targetSelector], [...relations, edge.relation], [...hops, hop], nextSeen, depth + 1);
     }
 
-    if (!advanced) terminalPath(node, selectors, relations);
+    if (!advanced) terminalPath(node, selectors, relations, hops);
   }
 
   const startKey = refKey(start.canonical_ref);
-  walk(start, [selectorFor(start)], [], new Set([startKey]), 0);
+  walk(start, [selectorFor(start)], [], [], new Set([startKey]), 0);
   return {
     paths: paths.map((path, index) => ({ primary: index === 0, ...path })),
     missing_links: missingLinks,

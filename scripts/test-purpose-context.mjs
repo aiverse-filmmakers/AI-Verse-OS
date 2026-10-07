@@ -5,7 +5,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readPurposeCurrentContext, resolvePurposeScope } from './purpose-context-core.mjs';
+import {
+  readPurposeCurrentContext,
+  readPurposeStrategicDirection,
+  resolvePurposeScope,
+} from './purpose-context-core.mjs';
 
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-context-'));
@@ -62,19 +66,83 @@ try {
     '## Current priorities', '', '- OS STRATEGIC PRIORITY', '',
     '## Pending decisions', '', '- operational decision', '',
   ].join('\n'));
+
   const osRead = readPurposeCurrentContext(root, 'operator');
   assert.equal(osRead.current.direction_owner, 'os');
   assert.match(osRead.current.current_context, /OS STRATEGIC PRIORITY/);
   assert.match(osRead.current.current_context, /operational decision/);
 
+  let brainCalls = 0;
+  const osStrategic = readPurposeStrategicDirection(root, 'operator', {
+    readBrainPurposeSnapshot() {
+      brainCalls += 1;
+      throw new Error('Brain reader must not be called while OS owns direction');
+    },
+  });
+  assert.equal(osStrategic.strategic.owner, 'ai-verse-os');
+  assert.equal(osStrategic.strategic.owner_path, 'current-context');
+  assert.match(osStrategic.strategic.current_context, /OS STRATEGIC PRIORITY/);
+  assert.equal(brainCalls, 0);
+
   setBrainOwner(root, 'operator');
+  const views = path.join(root, '.aiverse', 'direction', 'views');
+  fs.mkdirSync(views, { recursive: true });
+  fs.writeFileSync(path.join(views, 'operator.md'), '# generated stale view\n\nNEVER CANONICAL\n');
+
   const brainRead = readPurposeCurrentContext(root, 'operator');
   assert.equal(brainRead.current.direction_owner, 'brain');
   assert.doesNotMatch(brainRead.current.current_context, /OS STRATEGIC PRIORITY/);
   assert.match(brainRead.current.current_context, /operational decision/);
   assert.deepEqual(brainRead.current.direction_refs, ['brain:intent:goal-1']);
 
-  process.stdout.write('Purpose Context scope/current-context boundary: PASS\n');
+  const brainStrategic = readPurposeStrategicDirection(root, 'operator', {
+    readBrainPurposeSnapshot(scope) {
+      brainCalls += 1;
+      assert.equal(scope, 'operator');
+      return {
+        schema_version: '1.0',
+        scope,
+        direction_owner: 'brain',
+        status: 'ok',
+        read_states: {},
+        strategic_objects: {
+          intents: [{
+            id: 'mission-1',
+            kind: 'intent',
+            semantic_kind: 'mission',
+            scope,
+            status: 'ACTIVE',
+            revision: 4,
+            canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '4' },
+            payload: { subtype: 'mission', statement: 'BRAIN CANONICAL MISSION' },
+          }],
+          gaps: [],
+          initiatives: [],
+        },
+        relationships: [],
+        relationship_rejections: [],
+      };
+    },
+  });
+  assert.equal(brainStrategic.strategic.owner, 'ai-verse-brain');
+  assert.equal(brainStrategic.strategic.owner_path, 'brain-purpose-snapshot');
+  assert.equal(brainStrategic.strategic.snapshot.strategic_objects.intents[0].payload.statement, 'BRAIN CANONICAL MISSION');
+  assert.equal(brainCalls, 1);
+  assert.doesNotMatch(JSON.stringify(brainStrategic.strategic.snapshot), /OS STRATEGIC PRIORITY|NEVER CANONICAL/);
+
+  const unavailable = readPurposeStrategicDirection(root, 'operator');
+  assert.equal(unavailable.strategic.status, 'unavailable');
+  assert.equal(unavailable.strategic.reason, 'brain_public_reader_unavailable');
+  assert.equal(unavailable.strategic.snapshot, null);
+
+  assert.throws(
+    () => readPurposeStrategicDirection(root, 'operator', {
+      readBrainPurposeSnapshot: () => ({ scope: 'workspace:other', direction_owner: 'brain', status: 'ok' }),
+    }),
+    /violated declared owner\/scope contract/,
+  );
+
+  process.stdout.write('Purpose Context owner-bound reads: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

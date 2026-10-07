@@ -19,6 +19,75 @@ function requirePhysicalDirectory(target, expected, label) {
   return real;
 }
 
+function compareText(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function canonicalRefTuple(ref) {
+  if (!ref || typeof ref !== 'object') return ['', '', '', '', ''];
+  return [
+    ref.owner ?? '',
+    ref.scope ?? '',
+    ref.kind ?? '',
+    ref.id ?? '',
+    ref.version ?? '',
+  ].map((value) => String(value));
+}
+
+function compareCanonicalRefs(a, b) {
+  const left = canonicalRefTuple(a);
+  const right = canonicalRefTuple(b);
+  for (let index = 0; index < left.length; index += 1) {
+    const result = compareText(left[index], right[index]);
+    if (result !== 0) return result;
+  }
+  return 0;
+}
+
+function ownerOrderHint(item) {
+  for (const source of [item, item?.payload]) {
+    if (!source || typeof source !== 'object') continue;
+    for (const key of ['order', 'rank', 'priority']) {
+      const value = source[key];
+      if (typeof value === 'number' && Number.isFinite(value)) return { type: 'number', value };
+      if (typeof value === 'string' && value.trim()) return { type: 'string', value: value.trim() };
+    }
+  }
+  return null;
+}
+
+function compareStrategicItems(a, b) {
+  const aHint = ownerOrderHint(a);
+  const bHint = ownerOrderHint(b);
+  if (aHint || bHint) {
+    if (!aHint) return 1;
+    if (!bHint) return -1;
+    if (aHint.type === 'number' && bHint.type === 'number' && aHint.value !== bHint.value) return aHint.value - bHint.value;
+    const hintType = compareText(aHint.type, bHint.type);
+    if (hintType !== 0) return hintType;
+    const hintValue = compareText(aHint.value, bHint.value);
+    if (hintValue !== 0) return hintValue;
+  }
+
+  const refOrder = compareCanonicalRefs(a?.canonical_ref, b?.canonical_ref);
+  if (refOrder !== 0) return refOrder;
+  return compareText(a?.id ?? a?.generated_id, b?.id ?? b?.generated_id);
+}
+
+function compareTrajectoryEdges(a, b) {
+  const from = compareCanonicalRefs(a?.from_ref, b?.from_ref);
+  if (from !== 0) return from;
+  const relation = compareText(a?.relation, b?.relation);
+  if (relation !== 0) return relation;
+  const to = compareCanonicalRefs(a?.to_ref, b?.to_ref);
+  if (to !== 0) return to;
+  const aEvidence = [...(a?.source_refs ?? [])].sort(compareCanonicalRefs).map(canonicalRefTuple).flat().join('\u0000');
+  const bEvidence = [...(b?.source_refs ?? [])].sort(compareCanonicalRefs).map(canonicalRefTuple).flat().join('\u0000');
+  return compareText(aEvidence, bEvidence);
+}
+
 function parseSections(text) {
   const result = new Map();
   let heading = null;
@@ -81,9 +150,9 @@ function readOsProjection(resolved, current) {
 
 function readBrainProjection(snapshot) {
   const projection = {};
-  const intents = snapshot?.strategic_objects?.intents ?? [];
-  const gaps = snapshot?.strategic_objects?.gaps ?? [];
-  const initiatives = snapshot?.strategic_objects?.initiatives ?? [];
+  const intents = [...(snapshot?.strategic_objects?.intents ?? [])].sort(compareStrategicItems);
+  const gaps = [...(snapshot?.strategic_objects?.gaps ?? [])].sort(compareStrategicItems);
+  const initiatives = [...(snapshot?.strategic_objects?.initiatives ?? [])].sort(compareStrategicItems);
   const bucket = (key, item) => {
     if (!projection[key]) projection[key] = [];
     projection[key].push(item);
@@ -102,7 +171,7 @@ function readBrainProjection(snapshot) {
   }
   for (const item of gaps) bucket('challenges', item);
   for (const item of initiatives) bucket('initiatives', item);
-  if ((snapshot?.relationships ?? []).length) projection.trajectory = [...snapshot.relationships];
+  if ((snapshot?.relationships ?? []).length) projection.trajectory = [...snapshot.relationships].sort(compareTrajectoryEdges);
   return projection;
 }
 
@@ -130,7 +199,7 @@ function collectBrainRefs(snapshot) {
     add(edge?.to_ref);
     for (const ref of edge?.source_refs ?? []) add(ref);
   }
-  return refs;
+  return refs.sort(compareCanonicalRefs);
 }
 
 export function resolvePurposeScope(root, scope = 'operator') {

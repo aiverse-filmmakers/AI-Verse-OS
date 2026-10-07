@@ -1,4 +1,5 @@
 import { composePurposeContext as composeBasePurposeContext } from './purpose-context-core.mjs';
+import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 
 const DEFAULT_MAX_BYTES = 16384;
 const PROFILE_REQUESTS = new Set(['auto', 'basic', 'rich']);
@@ -159,5 +160,10 @@ export function composeProfiledPurposeContext(root, scope = 'operator', options 
     now: options.now,
     readBrainPurposeSnapshot: options.readBrainPurposeSnapshot,
   });
-  return applyPurposeProfile(envelope, options);
+  const withDataCurrentState = applyPurposeDataCurrentState(envelope, {
+    maxBytes: options.maxBytes,
+    now: options.now,
+    readPurposeDataCurrentState: options.readPurposeDataCurrentState,
+  });
+  return applyPurposeProfile(withDataCurrentState, options);
 }

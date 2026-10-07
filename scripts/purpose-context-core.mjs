@@ -474,9 +474,14 @@ export function composePurposeContext(root, scope = 'operator', options = {}) {
   const observedAt = options.now ?? new Date().toISOString();
   const read = readPurposeStrategicDirection(root, scope, options);
   const { resolved, current, strategic } = read;
-  const semantic = strategic.owner === 'ai-verse-brain' && strategic.snapshot
-    ? readBrainProjection(strategic.snapshot)
-    : readOsProjection(resolved, current);
+  let semantic = {};
+  if (strategic.owner === 'ai-verse-brain') {
+    if (strategic.snapshot && ['ok', 'partial'].includes(strategic.status)) {
+      semantic = readBrainProjection(strategic.snapshot);
+    }
+  } else {
+    semantic = readOsProjection(resolved, current);
+  }
 
   const ownerReads = [{
     owner: 'ai-verse-os',

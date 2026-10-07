@@ -11,28 +11,43 @@ import {
   resolvePurposeProfile,
 } from './purpose-context-profile.mjs';
 
+function writeWorkspace(root, id, currentLines, extraManifest = []) {
+  fs.mkdirSync(path.join(root, 'workspaces', id, 'context'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'workspaces', id, 'WORKSPACE.yaml'), [
+    'schema_version: "2.0"',
+    `id: "${id}"`,
+    `name: "${id}"`,
+    'type: "product"',
+    'status: "active"',
+    `purpose: "Purpose for ${id}"`,
+    ...extraManifest,
+  ].join('\n') + '\n', 'utf8');
+  fs.writeFileSync(path.join(root, 'workspaces', id, 'context', 'CURRENT.md'), currentLines.join('\n'), 'utf8');
+}
+
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-profiles-'));
   fs.writeFileSync(path.join(root, 'AI-VERSE.yaml'), 'schema_version: "2.0"\n', 'utf8');
   fs.mkdirSync(path.join(root, 'operator', 'context'), { recursive: true });
-  fs.mkdirSync(path.join(root, 'workspaces', 'client-a', 'context'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'workspaces', 'client-a', 'WORKSPACE.yaml'), [
-    'schema_version: "2.0"',
-    'id: "client-a"',
-    'name: "Client A"',
-    'type: "product"',
-    'status: "active"',
-    'purpose: "Ship the product"',
-    'purpose_context:',
-    '  profile: rich',
-    '  enabled: true',
-  ].join('\n') + '\n', 'utf8');
-  fs.writeFileSync(path.join(root, 'workspaces', 'client-a', 'context', 'CURRENT.md'), [
+
+  writeWorkspace(root, 'client-a', [
     '# Current Workspace Context', '',
     '## Objective', '', '- Ship the product', '',
     '## Current facts', '', '- Owner-backed current fact', '',
     '## Next useful actions', '', '- Finish the release', '',
-  ].join('\n'), 'utf8');
+  ], [
+    'purpose_context:',
+    '  profile: rich',
+    '  enabled: true',
+  ]);
+
+  writeWorkspace(root, 'client-b', [
+    '# Current Workspace Context', '',
+    '## Objective', '', '- NEVER_LEAK_CLIENT_B_OBJECTIVE', '',
+    '## Current facts', '', '- NEVER_LEAK_CLIENT_B_FACT', '',
+    '## Next useful actions', '', '- NEVER_LEAK_CLIENT_B_ACTION', '',
+  ]);
+
   return root;
 }
 
@@ -102,6 +117,21 @@ try {
     now: '2026-10-07T00:00:00Z',
   });
   assert.equal(explicitRich.provenance.profile.resolved, 'workspace_rich');
+
+  // Reading client-a must never enumerate or ingest sibling client-b state.
+  // The assertion is performed over the complete rich projection to catch leaks
+  // through semantics, current state, provenance, or diagnostics.
+  const serializedA = JSON.stringify(explicitRich);
+  assert.equal(serializedA.includes('NEVER_LEAK_CLIENT_B'), false);
+  assert.equal(serializedA.includes('workspace:client-b'), false);
+  assert.equal(serializedA.includes('client-b'), false);
+
+  const projectionB = composeProfiledPurposeContext(root, 'workspace:client-b', {
+    profile: 'rich',
+    now: '2026-10-07T00:00:00Z',
+  });
+  assert.equal(JSON.stringify(projectionB).includes('NEVER_LEAK_CLIENT_B_FACT'), true);
+  assert.equal(JSON.stringify(projectionB).includes('Ship the product'), false);
 
   process.stdout.write('Purpose Context workspace profiles: PASS\n');
 } finally {

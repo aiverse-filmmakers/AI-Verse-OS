@@ -79,3 +79,55 @@ export function readPurposeCurrentContext(root, scope = 'operator') {
     current,
   };
 }
+
+export function readPurposeStrategicDirection(root, scope = 'operator', options = {}) {
+  const { resolved, current } = readPurposeCurrentContext(root, scope);
+
+  if (current.direction_owner === 'os') {
+    return {
+      resolved,
+      current,
+      strategic: {
+        owner: 'ai-verse-os',
+        status: 'ok',
+        owner_path: 'current-context',
+        scope: resolved.scope,
+        current_context: current.current_context,
+        canonical_refs: [],
+      },
+    };
+  }
+
+  const readBrainPurposeSnapshot = options.readBrainPurposeSnapshot;
+  if (typeof readBrainPurposeSnapshot !== 'function') {
+    return {
+      resolved,
+      current,
+      strategic: {
+        owner: 'ai-verse-brain',
+        status: 'unavailable',
+        reason: 'brain_public_reader_unavailable',
+        owner_path: 'brain-purpose-snapshot',
+        scope: resolved.scope,
+        snapshot: null,
+      },
+    };
+  }
+
+  const snapshot = readBrainPurposeSnapshot(resolved.scope);
+  if (!snapshot || snapshot.scope !== resolved.scope || snapshot.direction_owner !== 'brain') {
+    throw new Error(`Brain Purpose snapshot violated declared owner/scope contract for ${resolved.scope}`);
+  }
+  return {
+    resolved,
+    current,
+    strategic: {
+      owner: 'ai-verse-brain',
+      status: snapshot.status ?? 'unavailable',
+      reason: snapshot.reason ?? null,
+      owner_path: 'brain-purpose-snapshot',
+      scope: resolved.scope,
+      snapshot,
+    },
+  };
+}

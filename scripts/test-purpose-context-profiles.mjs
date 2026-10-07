@@ -23,6 +23,9 @@ function makeRoot() {
     'type: "product"',
     'status: "active"',
     'purpose: "Ship the product"',
+    'purpose_context:',
+    '  profile: rich',
+    '  enabled: true',
   ].join('\n') + '\n', 'utf8');
   fs.writeFileSync(path.join(root, 'workspaces', 'client-a', 'context', 'CURRENT.md'), [
     '# Current Workspace Context', '',
@@ -87,6 +90,12 @@ try {
   assert.equal(projection.provenance.profile.requested, 'auto');
   assert.equal(projection.provenance.profile.resolved, 'workspace_basic');
   assert.deepEqual(projection.provenance.profile.reasons, ['workspace_default_basic']);
+
+  // Slice 2.3 explicitly froze no persisted Purpose config in WORKSPACE.yaml.
+  // Even a misleading unknown block cannot opt the workspace into rich mode.
+  assert.equal('narratives' in projection, false);
+  assert.equal('kpis' in projection, false);
+  assert.equal('risks' in projection, false);
 
   const explicitRich = composeProfiledPurposeContext(root, 'workspace:client-a', {
     profile: 'rich',

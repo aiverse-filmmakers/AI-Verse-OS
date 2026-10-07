@@ -32,6 +32,8 @@ jobs:
         run: node scripts/test-purpose-context-rebuild.mjs
       - name: Test Purpose Context workspace profile behavior
         run: node scripts/test-purpose-context-profiles.mjs
+      - name: Test Purpose Context explicit scope relationships
+        run: node scripts/test-purpose-context-relationships.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |

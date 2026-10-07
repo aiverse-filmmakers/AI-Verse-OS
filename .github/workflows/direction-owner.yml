@@ -26,6 +26,8 @@ jobs:
         run: node scripts/test-purpose-context-envelope.mjs
       - name: Test Purpose Context v1 no-cache behavior
         run: node scripts/test-purpose-context-no-cache.mjs
+      - name: Test Purpose Context v1 fail-closed owner behavior
+        run: node scripts/test-purpose-context-fail-closed.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |

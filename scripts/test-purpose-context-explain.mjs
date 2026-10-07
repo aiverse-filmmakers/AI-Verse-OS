@@ -8,11 +8,13 @@ const ref = (scope, kind, id, version = '1') => ({
   owner: 'ai-verse-brain', scope, kind, id, version,
 });
 const scope = 'workspace:client-a';
+const currentWork = ref(scope, 'current-work', 'work-a');
 const initiative = ref(scope, 'initiative', 'init-a');
 const unrelatedInitiative = ref(scope, 'initiative', 'init-x');
 const strategy = ref(scope, 'intent', 'strategy-a');
 const goal = ref(scope, 'intent', 'goal-a');
 const mission = ref(scope, 'intent', 'mission-a');
+const problem = ref(scope, 'intent', 'problem-a');
 const externalGoal = ref('workspace:client-b', 'intent', 'external-goal');
 
 const envelope = {
@@ -20,6 +22,7 @@ const envelope = {
   scope,
   scope_kind: 'workspace',
   identity: { kind: 'workspace', id: 'client-a' },
+  problems: [{ id: 'problem-a', semantic_kind: 'problem', canonical_ref: problem }],
   purpose: {
     missions: [{ id: 'mission-a', semantic_kind: 'mission', canonical_ref: mission }],
     desired_outcomes: [],
@@ -30,11 +33,14 @@ const envelope = {
     { id: 'init-a', semantic_kind: 'initiative', canonical_ref: initiative },
     { id: 'init-x', semantic_kind: 'initiative', canonical_ref: unrelatedInitiative },
   ],
+  current_work: [{ id: 'work-a', semantic_kind: 'current_work', canonical_ref: currentWork }],
   trajectory: [
+    { relation: 'executes', from_ref: currentWork, to_ref: initiative, source_refs: [currentWork] },
     { relation: 'executes', from_ref: initiative, to_ref: strategy, source_refs: [initiative] },
     { relation: 'serves', from_ref: initiative, to_ref: externalGoal, source_refs: [initiative] },
     { relation: 'advances', from_ref: strategy, to_ref: goal, source_refs: [strategy] },
     { relation: 'serves', from_ref: goal, to_ref: mission, source_refs: [goal] },
+    { relation: 'addresses', from_ref: mission, to_ref: problem, source_refs: [mission] },
     { relation: 'advances', from_ref: unrelatedInitiative, to_ref: goal, source_refs: [unrelatedInitiative] },
     { relation: 'imagines', from_ref: initiative, to_ref: goal, source_refs: [initiative] },
     { relation: 'serves', from_ref: externalGoal, to_ref: goal, source_refs: [externalGoal] },
@@ -59,7 +65,27 @@ assert.deepEqual(result.traversal.edges.map((edge) => [edge.relation, edge.from_
   ['serves', 'init-a', 'external-goal'],
   ['advances', 'strategy-a', 'goal-a'],
   ['serves', 'goal-a', 'mission-a'],
+  ['addresses', 'mission-a', 'problem-a'],
 ]);
+
+// Task 2: explain exposes deterministic causal paths toward the strategic root.
+assert.deepEqual(result.traversal.paths, [{
+  primary: true,
+  selectors: ['initiative:init-a', 'strategy:strategy-a', 'goal:goal-a', 'mission:mission-a', 'problem:problem-a'],
+  relations: ['executes', 'advances', 'serves', 'addresses'],
+  terminal_selector: 'problem:problem-a',
+}]);
+
+const workResult = traverseExplicitTrajectory(envelope, 'current_work:work-a');
+assert.deepEqual(workResult.traversal.paths[0].selectors, [
+  'current_work:work-a',
+  'initiative:init-a',
+  'strategy:strategy-a',
+  'goal:goal-a',
+  'mission:mission-a',
+  'problem:problem-a',
+]);
+assert.deepEqual(workResult.traversal.paths[0].relations, ['executes', 'executes', 'advances', 'serves', 'addresses']);
 
 // Unrelated, unsupported, and incoming sibling-source edges are never traversed.
 const serialized = JSON.stringify(result);

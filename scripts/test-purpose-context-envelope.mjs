@@ -25,6 +25,39 @@ function brainOwner(root, scope) {
   }));
 }
 
+function brainSnapshot(scope, reverse = false) {
+  const intents = [
+    { id: 'problem-b', kind: 'intent', semantic_kind: 'problem', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'problem-b', version: '1' }, payload: { subtype: 'problem', statement: 'Second problem' } },
+    { id: 'mission-1', kind: 'intent', semantic_kind: 'mission', scope, status: 'ACTIVE', revision: 3, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '3' }, payload: { subtype: 'mission', statement: 'Build personal AI OS' } },
+    { id: 'strategy-1', kind: 'intent', semantic_kind: 'strategy', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'strategy-1', version: '1' }, payload: { subtype: 'strategy', statement: 'Use owner-backed projections' } },
+    { id: 'problem-a', kind: 'intent', semantic_kind: 'problem', scope, status: 'ACTIVE', revision: 2, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'problem-a', version: '2' }, payload: { subtype: 'problem', statement: 'Context fragmentation' } },
+  ];
+  const gaps = [
+    { id: 'gap-b', kind: 'gap', semantic_kind: 'challenge', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'gap', id: 'gap-b', version: '1' }, payload: { interpretation: 'Second gap' } },
+    { id: 'gap-a', kind: 'gap', semantic_kind: 'challenge', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'gap', id: 'gap-a', version: '1' }, payload: { interpretation: 'Agent loses big picture' } },
+  ];
+  const initiatives = [
+    { id: 'init-b', kind: 'initiative', semantic_kind: 'initiative', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-b', version: '1' }, payload: { outcome: 'Second initiative' } },
+    { id: 'init-a', kind: 'initiative', semantic_kind: 'initiative', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-a', version: '1' }, payload: { outcome: 'Purpose Context' } },
+  ];
+  const relationships = [
+    { relation: 'serves', from_ref: initiatives[0].canonical_ref, to_ref: intents[1].canonical_ref, source_refs: [initiatives[0].canonical_ref] },
+    { relation: 'serves', from_ref: initiatives[1].canonical_ref, to_ref: intents[1].canonical_ref, source_refs: [initiatives[1].canonical_ref] },
+  ];
+  if (reverse) {
+    intents.reverse();
+    gaps.reverse();
+    initiatives.reverse();
+    relationships.reverse();
+  }
+  return {
+    schema_version: '1.0', scope, direction_owner: 'brain', status: 'ok', read_states: {},
+    strategic_objects: { intents, gaps, initiatives },
+    relationships,
+    relationship_rejections: [],
+  };
+}
+
 const now = '2026-10-07T07:20:00.000Z';
 const root = fixture();
 try {
@@ -58,36 +91,32 @@ try {
   const brainEnvelope = composePurposeContext(root, 'operator', {
     now,
     readBrainPurposeSnapshot(scope) {
-      return {
-        schema_version: '1.0', scope, direction_owner: 'brain', status: 'ok', read_states: {},
-        strategic_objects: {
-          intents: [
-            { id: 'problem-1', kind: 'intent', semantic_kind: 'problem', scope, status: 'ACTIVE', revision: 2, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'problem-1', version: '2' }, payload: { subtype: 'problem', statement: 'Context fragmentation' } },
-            { id: 'mission-1', kind: 'intent', semantic_kind: 'mission', scope, status: 'ACTIVE', revision: 3, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '3' }, payload: { subtype: 'mission', statement: 'Build personal AI OS' } },
-            { id: 'strategy-1', kind: 'intent', semantic_kind: 'strategy', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'strategy-1', version: '1' }, payload: { subtype: 'strategy', statement: 'Use owner-backed projections' } },
-          ],
-          gaps: [{ id: 'gap-1', kind: 'gap', semantic_kind: 'challenge', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'gap', id: 'gap-1', version: '1' }, payload: { interpretation: 'Agent loses big picture' } }],
-          initiatives: [{ id: 'init-1', kind: 'initiative', semantic_kind: 'initiative', scope, status: 'ACTIVE', revision: 1, canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }, payload: { outcome: 'Purpose Context' } }],
-        },
-        relationships: [{ relation: 'serves', from_ref: { owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }, to_ref: { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'mission-1', version: '3' }, source_refs: [{ owner: 'ai-verse-brain', scope, kind: 'initiative', id: 'init-1', version: '1' }] }],
-        relationship_rejections: [],
-      };
+      return brainSnapshot(scope, false);
     },
   });
-  assert.equal(brainEnvelope.problems[0].payload.statement, 'Context fragmentation');
+  assert.deepEqual(brainEnvelope.problems.map((item) => item.id), ['problem-a', 'problem-b']);
   assert.equal(brainEnvelope.purpose.missions[0].payload.statement, 'Build personal AI OS');
   assert.equal(brainEnvelope.strategies[0].payload.statement, 'Use owner-backed projections');
-  assert.equal(brainEnvelope.challenges[0].id, 'gap-1');
-  assert.equal(brainEnvelope.initiatives[0].id, 'init-1');
-  assert.equal(brainEnvelope.trajectory[0].relation, 'serves');
+  assert.deepEqual(brainEnvelope.challenges.map((item) => item.id), ['gap-a', 'gap-b']);
+  assert.deepEqual(brainEnvelope.initiatives.map((item) => item.id), ['init-a', 'init-b']);
+  assert.deepEqual(brainEnvelope.trajectory.map((edge) => edge.from_ref.id), ['init-a', 'init-b']);
   assert.equal(brainEnvelope.provenance.owner_reads.length, 2);
   assert.deepEqual(brainEnvelope.purpose.missions[0].canonical_ref, { owner: 'ai-verse-brain', scope: 'operator', kind: 'intent', id: 'mission-1', version: '3' });
-  const brainRefs = brainEnvelope.provenance.owner_reads[1].canonical_refs;
-  assert.ok(brainRefs.some((ref) => ref.id === 'mission-1' && ref.version === '3'));
-  assert.ok(brainRefs.some((ref) => ref.id === 'init-1' && ref.version === '1'));
   assert.doesNotMatch(JSON.stringify(brainEnvelope), /STALE OS PRIORITY/);
 
-  process.stdout.write('Purpose Context v1 envelope/ref preservation: PASS\n');
+  const reversedEnvelope = composePurposeContext(root, 'operator', {
+    now,
+    readBrainPurposeSnapshot(scope) {
+      return brainSnapshot(scope, true);
+    },
+  });
+  assert.deepEqual(reversedEnvelope.problems, brainEnvelope.problems);
+  assert.deepEqual(reversedEnvelope.challenges, brainEnvelope.challenges);
+  assert.deepEqual(reversedEnvelope.initiatives, brainEnvelope.initiatives);
+  assert.deepEqual(reversedEnvelope.trajectory, brainEnvelope.trajectory);
+  assert.deepEqual(reversedEnvelope.provenance.owner_reads[1].canonical_refs, brainEnvelope.provenance.owner_reads[1].canonical_refs);
+
+  process.stdout.write('Purpose Context v1 envelope/ref preservation/deterministic ordering: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

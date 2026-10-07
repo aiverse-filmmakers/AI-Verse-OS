@@ -71,6 +71,7 @@ assert.deepEqual(result.traversal.edges.map((edge) => [edge.relation, edge.from_
   ['serves', 'goal-a', 'mission-a'],
   ['addresses', 'mission-a', 'problem-a'],
 ]);
+assert.deepEqual(result.traversal.cycle_rejections, []);
 
 // Task 2: deterministic causal lineage reaches only owner-backed strategic roots.
 const completePath = result.traversal.paths[0];
@@ -186,6 +187,66 @@ for (const path of [completePath, boundaryPath, missingResult.traversal.paths[0]
     assert.ok(hop.source_refs.length > 0);
   }
 }
+
+// Task 5: structural SCC edges are rejected before authoritative traversal.
+const cycleA = ref(scope, 'intent', 'cycle-a');
+const cycleB = ref(scope, 'intent', 'cycle-b');
+const cycleEnvelope = {
+  schema_version: '1.0',
+  scope,
+  scope_kind: 'workspace',
+  identity: { kind: 'workspace', id: 'client-a' },
+  strategies: [
+    { id: 'cycle-a', semantic_kind: 'strategy', canonical_ref: cycleA },
+    { id: 'cycle-b', semantic_kind: 'strategy', canonical_ref: cycleB },
+  ],
+  trajectory: [
+    { relation: 'advances', from_ref: cycleA, to_ref: cycleB, source_refs: [cycleA] },
+    { relation: 'advances', from_ref: cycleB, to_ref: cycleA, source_refs: [cycleB] },
+  ],
+  provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-07T00:00:00Z', owner_reads: [] },
+};
+const cycleResult = traverseExplicitTrajectory(cycleEnvelope, 'strategy:cycle-a');
+assert.deepEqual(cycleResult.traversal.edges, []);
+assert.deepEqual(cycleResult.traversal.reached_refs, []);
+assert.equal(cycleResult.traversal.cycle_rejections.length, 2);
+assert.deepEqual(cycleResult.traversal.cycle_rejections.map((edge) => [edge.reason, edge.from_ref.id, edge.to_ref.id]), [
+  ['structural_cycle', 'cycle-a', 'cycle-b'],
+  ['structural_cycle', 'cycle-b', 'cycle-a'],
+]);
+assert.equal(cycleResult.traversal.paths.length, 1);
+assert.equal(cycleResult.traversal.paths[0].status, 'partial');
+assert.equal(cycleResult.traversal.paths[0].termination_reason, 'cycle_rejected');
+assert.deepEqual(cycleResult.traversal.paths[0].terminal_ref, cycleB);
+assert.deepEqual(cycleResult.traversal.paths[0].hops, [{
+  relation: 'advances',
+  from_ref: cycleA,
+  to_ref: cycleB,
+  source_refs: [cycleA],
+  from_selector: 'strategy:cycle-a',
+  to_selector: 'strategy:cycle-b',
+}]);
+
+// Valid same-kind supersession cycles are also removed from the structural graph,
+// while supersedes remains contextual rather than a normal causal parent.
+const oldGoal = ref(scope, 'intent', 'goal-old');
+const newGoal = ref(scope, 'intent', 'goal-new');
+const supersessionCycle = {
+  schema_version: '1.0', scope, scope_kind: 'workspace', identity: { kind: 'workspace', id: 'client-a' },
+  goals: [
+    { id: 'goal-old', semantic_kind: 'goal', canonical_ref: oldGoal },
+    { id: 'goal-new', semantic_kind: 'goal', canonical_ref: newGoal },
+  ],
+  trajectory: [
+    { relation: 'supersedes', from_ref: oldGoal, to_ref: newGoal, source_refs: [oldGoal] },
+    { relation: 'supersedes', from_ref: newGoal, to_ref: oldGoal, source_refs: [newGoal] },
+  ],
+  provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-07T00:00:00Z', owner_reads: [] },
+};
+const supersessionResult = traverseExplicitTrajectory(supersessionCycle, 'goal:goal-old');
+assert.deepEqual(supersessionResult.traversal.edges, []);
+assert.equal(supersessionResult.traversal.cycle_rejections.length, 2);
+assert.equal(supersessionResult.traversal.paths[0].termination_reason, 'trajectory_root');
 
 // Unrelated, unsupported, and incoming sibling-source edges are never traversed.
 const serialized = JSON.stringify(result);

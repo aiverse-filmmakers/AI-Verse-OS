@@ -46,6 +46,8 @@ jobs:
         run: node scripts/test-purpose-data-source-descent.mjs
       - name: Test Purpose Memory historical evidence boundary
         run: node scripts/test-purpose-memory-history-boundary.mjs
+      - name: Test Purpose Memory explicit bounded read gate
+        run: node scripts/test-purpose-memory-history-read.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -65,6 +67,7 @@ jobs:
           test -f scripts/purpose-data-current-value-boundary.mjs
           test -f scripts/purpose-data-current-state.mjs
           test -f scripts/purpose-memory-history-boundary.mjs
+          test -f scripts/purpose-memory-history-read.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

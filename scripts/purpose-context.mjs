@@ -3,7 +3,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { composePurposeContext } from './purpose-context-core.mjs';
+import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
 
 function fail(message, code = 4) {
   process.stderr.write(`purpose-context: ${message}\n`);
@@ -16,6 +16,8 @@ function parse(argv) {
   let root = process.cwd();
   let scope = 'operator';
   let maxBytes;
+  let profile = 'auto';
+  const relevantDomains = [];
 
   while (args.length) {
     const token = args.shift();
@@ -29,17 +31,25 @@ function parse(argv) {
       const raw = args.shift();
       if (!raw || !/^\d+$/.test(raw)) fail('--max-bytes requires an integer', 2);
       maxBytes = Number(raw);
+    } else if (token === '--profile') {
+      profile = args.shift() || fail('--profile requires auto, basic, or rich', 2);
+    } else if (token === '--relevant-domain') {
+      const value = args.shift();
+      if (!value) fail('--relevant-domain requires a value', 2);
+      relevantDomains.push(value);
     } else {
       fail(`unknown option: ${token}`, 2);
     }
   }
 
-  return { command, root: path.resolve(root), scope, maxBytes };
+  return { command, root: path.resolve(root), scope, maxBytes, profile, relevantDomains };
 }
 
 export function readPurposeContextCli(options) {
-  return composePurposeContext(options.root, options.scope, {
+  return composeProfiledPurposeContext(options.root, options.scope, {
     maxBytes: options.maxBytes,
+    profile: options.profile,
+    relevantDomains: options.relevantDomains,
   });
 }
 

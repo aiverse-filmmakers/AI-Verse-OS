@@ -10,7 +10,21 @@ Purpose Context is not a canonical store. It does not own mission, goals, strate
 - Strategic semantics come only from the declared strategic direction owner.
 - When OS owns direction, the projection uses the ownership-aware OS current-context read.
 - When Brain owns direction, callers must supply Brain's public Purpose snapshot read. OS must never parse Brain private storage or substitute frozen OS strategy when that read is unavailable.
-- Later Data and Memory composition must continue to use public owner reads and preserve their provenance.
+- Data-owned current values remain canonical in Data. Purpose may carry only transient scalar/status projections with exact Data refs, owner timestamps, and provenance. Neither OS nor Brain may persist or promote copied Data rows as canonical Purpose/current-state truth.
+- Memory composition must continue to use public owner reads and preserve provenance.
+
+### Data current-value boundary
+
+Phase 5.1 freezes the following ownership rule before full current-state composition:
+
+- canonical current measured values remain owned by `ai-verse-data`;
+- OS may accept only bounded transient `value`, `stale`, or `missing` projections from the Data Purpose read surface;
+- every retained current value keeps its exact `ai-verse-data` source ref;
+- `0`, `false`, and `null` are legitimate present values and are never converted to missing state by truthiness;
+- freshness evidence comes from the canonical Data record timestamp, not projection/query execution time;
+- raw Data rows and row metadata such as `data`, `createdAt`, `updatedAt`, `createdBy`, `updatedBy`, or deletion metadata must not cross the Purpose boundary;
+- transient Data projections must not be written into OS current-context files, Brain strategic objects, Purpose caches, or any other canonical store;
+- full Purpose current-state composition and Data outage behavior remain Slice 5.2 work.
 
 ## Scope
 

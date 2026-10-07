@@ -40,7 +40,7 @@ function parseSections(text) {
   return result;
 }
 
-function sectionItems(sections, names, kind) {
+function sectionItems(sections, names, kind, sourceRef) {
   const items = [];
   for (const name of names) {
     const value = sections.get(name);
@@ -49,10 +49,9 @@ function sectionItems(sections, names, kind) {
       .map((line) => line.trim())
       .filter((line) => /^[-*]\s+\S/.test(line))
       .map((line) => line.replace(/^[-*]\s+/, '').trim());
-    if (bullets.length) {
-      for (const statement of bullets) items.push({ kind, statement });
-    } else {
-      items.push({ kind, statement: value });
+    const statements = bullets.length ? bullets : [value];
+    for (const statement of statements) {
+      items.push({ kind, statement, source_refs: sourceRef ? [sourceRef] : [] });
     }
   }
   return items;
@@ -61,20 +60,21 @@ function sectionItems(sections, names, kind) {
 function readOsProjection(resolved, current) {
   const sections = parseSections(current.current_context);
   const projection = {};
+  const ref = current.canonical_ref ?? null;
 
   if (resolved.scope_kind === 'operator') {
-    const priorities = sectionItems(sections, ['current priorities', 'priorities'], 'priority');
+    const priorities = sectionItems(sections, ['current priorities', 'priorities'], 'priority', ref);
     if (priorities.length) projection.priorities = priorities;
   } else {
-    const goals = sectionItems(sections, ['objective'], 'workspace_objective');
+    const goals = sectionItems(sections, ['objective'], 'workspace_objective', ref);
     if (goals.length) projection.goals = goals;
   }
 
-  const constraints = sectionItems(sections, ['current constraints', 'constraints', 'constraints / approvals'], 'constraint');
+  const constraints = sectionItems(sections, ['current constraints', 'constraints', 'constraints / approvals'], 'constraint', ref);
   if (constraints.length) projection.constraints = constraints;
-  const currentState = sectionItems(sections, ['current state', 'current facts'], 'current_state');
+  const currentState = sectionItems(sections, ['current state', 'current facts'], 'current_state', ref);
   if (currentState.length) projection.current_state = currentState;
-  const currentWork = sectionItems(sections, ['next useful actions', 'active workspaces'], 'current_work');
+  const currentWork = sectionItems(sections, ['next useful actions', 'active workspaces'], 'current_work', ref);
   if (currentWork.length) projection.current_work = currentWork;
   return projection;
 }
@@ -104,6 +104,33 @@ function readBrainProjection(snapshot) {
   for (const item of initiatives) bucket('initiatives', item);
   if ((snapshot?.relationships ?? []).length) projection.trajectory = [...snapshot.relationships];
   return projection;
+}
+
+function canonicalRefKey(ref) {
+  if (!ref || typeof ref !== 'object') return null;
+  const { owner, scope, kind, id } = ref;
+  if (![owner, scope, kind, id].every((value) => typeof value === 'string' && value)) return null;
+  return [owner, scope, kind, id, typeof ref.version === 'string' ? ref.version : ''].join('\u0000');
+}
+
+function collectBrainRefs(snapshot) {
+  const refs = [];
+  const seen = new Set();
+  const add = (ref) => {
+    const key = canonicalRefKey(ref);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    refs.push({ ...ref });
+  };
+  for (const group of Object.values(snapshot?.strategic_objects ?? {})) {
+    for (const item of Array.isArray(group) ? group : []) add(item?.canonical_ref);
+  }
+  for (const edge of snapshot?.relationships ?? []) {
+    add(edge?.from_ref);
+    add(edge?.to_ref);
+    for (const ref of edge?.source_refs ?? []) add(ref);
+  }
+  return refs;
 }
 
 export function resolvePurposeScope(root, scope = 'operator') {
@@ -179,7 +206,7 @@ export function readPurposeStrategicDirection(root, scope = 'operator', options 
         owner_path: 'current-context',
         scope: resolved.scope,
         current_context: current.current_context,
-        canonical_refs: [],
+        canonical_refs: current.canonical_ref ? [current.canonical_ref] : [],
       },
     };
   }
@@ -233,7 +260,7 @@ export function composePurposeContext(root, scope = 'operator', options = {}) {
     status: 'ok',
     observed_at: observedAt,
     freshness: { state: 'unknown', as_of: observedAt },
-    canonical_refs: [],
+    canonical_refs: current.canonical_ref ? [{ ...current.canonical_ref }] : [],
   }];
   if (strategic.owner === 'ai-verse-brain') {
     ownerReads.push({
@@ -243,7 +270,7 @@ export function composePurposeContext(root, scope = 'operator', options = {}) {
       status: strategic.status,
       observed_at: observedAt,
       freshness: { state: strategic.status === 'unavailable' ? 'unavailable' : 'unknown', as_of: observedAt },
-      canonical_refs: [],
+      canonical_refs: strategic.snapshot ? collectBrainRefs(strategic.snapshot) : [],
     });
   }
 

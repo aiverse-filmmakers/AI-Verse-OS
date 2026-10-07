@@ -10,9 +10,12 @@ const ref = (scope, kind, id, version = '1') => ({
 const scope = 'workspace:client-a';
 const currentWork = ref(scope, 'current-work', 'work-a');
 const initiative = ref(scope, 'initiative', 'init-a');
+const missingInitiative = ref(scope, 'initiative', 'init-missing');
+const orphanInitiative = ref(scope, 'initiative', 'init-orphan');
 const unrelatedInitiative = ref(scope, 'initiative', 'init-x');
 const strategy = ref(scope, 'intent', 'strategy-a');
 const goal = ref(scope, 'intent', 'goal-a');
+const missingGoal = ref(scope, 'intent', 'goal-missing');
 const mission = ref(scope, 'intent', 'mission-a');
 const problem = ref(scope, 'intent', 'problem-a');
 const externalGoal = ref('workspace:client-b', 'intent', 'external-goal');
@@ -31,6 +34,8 @@ const envelope = {
   strategies: [{ id: 'strategy-a', semantic_kind: 'strategy', canonical_ref: strategy }],
   initiatives: [
     { id: 'init-a', semantic_kind: 'initiative', canonical_ref: initiative },
+    { id: 'init-missing', semantic_kind: 'initiative', canonical_ref: missingInitiative },
+    { id: 'init-orphan', semantic_kind: 'initiative', canonical_ref: orphanInitiative },
     { id: 'init-x', semantic_kind: 'initiative', canonical_ref: unrelatedInitiative },
   ],
   current_work: [{ id: 'work-a', semantic_kind: 'current_work', canonical_ref: currentWork }],
@@ -41,6 +46,7 @@ const envelope = {
     { relation: 'advances', from_ref: strategy, to_ref: goal, source_refs: [strategy] },
     { relation: 'serves', from_ref: goal, to_ref: mission, source_refs: [goal] },
     { relation: 'addresses', from_ref: mission, to_ref: problem, source_refs: [mission] },
+    { relation: 'serves', from_ref: missingInitiative, to_ref: missingGoal, source_refs: [missingInitiative] },
     { relation: 'advances', from_ref: unrelatedInitiative, to_ref: goal, source_refs: [unrelatedInitiative] },
     { relation: 'imagines', from_ref: initiative, to_ref: goal, source_refs: [initiative] },
     { relation: 'serves', from_ref: externalGoal, to_ref: goal, source_refs: [externalGoal] },
@@ -69,12 +75,18 @@ assert.deepEqual(result.traversal.edges.map((edge) => [edge.relation, edge.from_
 ]);
 
 // Task 2: explain exposes deterministic causal paths toward the strategic root.
-assert.deepEqual(result.traversal.paths, [{
+assert.deepEqual(result.traversal.paths[0], {
   primary: true,
+  status: 'complete',
+  termination_reason: 'trajectory_root',
   selectors: ['initiative:init-a', 'strategy:strategy-a', 'goal:goal-a', 'mission:mission-a', 'problem:problem-a'],
   relations: ['executes', 'advances', 'serves', 'addresses'],
   terminal_selector: 'problem:problem-a',
-}]);
+});
+assert.equal(result.traversal.paths[1].primary, false);
+assert.equal(result.traversal.paths[1].status, 'partial');
+assert.equal(result.traversal.paths[1].termination_reason, 'scope_boundary');
+assert.deepEqual(result.traversal.paths[1].terminal_ref, externalGoal);
 
 const workResult = traverseExplicitTrajectory(envelope, 'current_work:work-a');
 assert.deepEqual(workResult.traversal.paths[0].selectors, [
@@ -86,6 +98,34 @@ assert.deepEqual(workResult.traversal.paths[0].selectors, [
   'problem:problem-a',
 ]);
 assert.deepEqual(workResult.traversal.paths[0].relations, ['executes', 'executes', 'advances', 'serves', 'addresses']);
+
+// Task 3: missing links and orphans are visible and never repaired by inference.
+const missingResult = traverseExplicitTrajectory(envelope, 'initiative:init-missing');
+assert.equal(missingResult.traversal.paths.length, 1);
+assert.equal(missingResult.traversal.paths[0].status, 'partial');
+assert.equal(missingResult.traversal.paths[0].termination_reason, 'missing_parent');
+assert.equal(missingResult.traversal.paths[0].terminal_selector, 'initiative:init-missing');
+assert.deepEqual(missingResult.traversal.paths[0].terminal_ref, missingGoal);
+assert.deepEqual(missingResult.traversal.missing_links, [{
+  reason: 'missing_parent_node',
+  relation: 'serves',
+  from_ref: missingInitiative,
+  to_ref: missingGoal,
+}]);
+assert.equal(JSON.stringify(missingResult).includes('goal:goal-missing'), false);
+
+const orphanResult = traverseExplicitTrajectory(envelope, 'initiative:init-orphan');
+assert.deepEqual(orphanResult.traversal.paths, [{
+  primary: true,
+  status: 'orphan',
+  termination_reason: 'trajectory_orphan',
+  linkage_state: 'orphan',
+  linkage_reason: 'no_valid_parent_relation',
+  selectors: ['initiative:init-orphan'],
+  relations: [],
+  terminal_selector: 'initiative:init-orphan',
+}]);
+assert.deepEqual(orphanResult.traversal.missing_links, []);
 
 // Unrelated, unsupported, and incoming sibling-source edges are never traversed.
 const serialized = JSON.stringify(result);

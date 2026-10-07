@@ -64,8 +64,6 @@ assert.equal(result.selector, 'initiative:init-a');
 assert.equal(result.start.semantic_kind, 'initiative');
 assert.deepEqual(result.start.canonical_ref, initiative);
 
-// Storage kind differs from semantic kind for Brain intent subtypes. Exact selector
-// resolution uses semantic identity, then traversal uses the full canonical ref tuple.
 assert.deepEqual(result.traversal.edges.map((edge) => [edge.relation, edge.from_ref.id, edge.to_ref.id]), [
   ['executes', 'init-a', 'strategy-a'],
   ['serves', 'init-a', 'external-goal'],
@@ -74,19 +72,22 @@ assert.deepEqual(result.traversal.edges.map((edge) => [edge.relation, edge.from_
   ['addresses', 'mission-a', 'problem-a'],
 ]);
 
-// Task 2: explain exposes deterministic causal paths toward the strategic root.
-assert.deepEqual(result.traversal.paths[0], {
-  primary: true,
-  status: 'complete',
-  termination_reason: 'trajectory_root',
-  selectors: ['initiative:init-a', 'strategy:strategy-a', 'goal:goal-a', 'mission:mission-a', 'problem:problem-a'],
-  relations: ['executes', 'advances', 'serves', 'addresses'],
-  terminal_selector: 'problem:problem-a',
-});
-assert.equal(result.traversal.paths[1].primary, false);
-assert.equal(result.traversal.paths[1].status, 'partial');
-assert.equal(result.traversal.paths[1].termination_reason, 'scope_boundary');
-assert.deepEqual(result.traversal.paths[1].terminal_ref, externalGoal);
+// Task 2: deterministic causal lineage reaches only owner-backed strategic roots.
+const completePath = result.traversal.paths[0];
+assert.equal(completePath.primary, true);
+assert.equal(completePath.status, 'complete');
+assert.equal(completePath.termination_reason, 'trajectory_root');
+assert.deepEqual(completePath.selectors, [
+  'initiative:init-a', 'strategy:strategy-a', 'goal:goal-a', 'mission:mission-a', 'problem:problem-a',
+]);
+assert.deepEqual(completePath.relations, ['executes', 'advances', 'serves', 'addresses']);
+assert.equal(completePath.terminal_selector, 'problem:problem-a');
+
+const boundaryPath = result.traversal.paths[1];
+assert.equal(boundaryPath.primary, false);
+assert.equal(boundaryPath.status, 'partial');
+assert.equal(boundaryPath.termination_reason, 'scope_boundary');
+assert.deepEqual(boundaryPath.terminal_ref, externalGoal);
 
 const workResult = traverseExplicitTrajectory(envelope, 'current_work:work-a');
 assert.deepEqual(workResult.traversal.paths[0].selectors, [
@@ -99,7 +100,7 @@ assert.deepEqual(workResult.traversal.paths[0].selectors, [
 ]);
 assert.deepEqual(workResult.traversal.paths[0].relations, ['executes', 'executes', 'advances', 'serves', 'addresses']);
 
-// Task 3: missing links and orphans are visible and never repaired by inference.
+// Task 3: missing links and orphans remain visible and are never repaired by inference.
 const missingResult = traverseExplicitTrajectory(envelope, 'initiative:init-missing');
 assert.equal(missingResult.traversal.paths.length, 1);
 assert.equal(missingResult.traversal.paths[0].status, 'partial');
@@ -111,6 +112,7 @@ assert.deepEqual(missingResult.traversal.missing_links, [{
   relation: 'serves',
   from_ref: missingInitiative,
   to_ref: missingGoal,
+  source_refs: [missingInitiative],
 }]);
 assert.equal(JSON.stringify(missingResult).includes('goal:goal-missing'), false);
 
@@ -123,9 +125,67 @@ assert.deepEqual(orphanResult.traversal.paths, [{
   linkage_reason: 'no_valid_parent_relation',
   selectors: ['initiative:init-orphan'],
   relations: [],
+  hops: [],
   terminal_selector: 'initiative:init-orphan',
 }]);
 assert.deepEqual(orphanResult.traversal.missing_links, []);
+
+// Task 4: every explain hop preserves exact owner refs and authoritative source refs.
+assert.deepEqual(completePath.hops, [
+  {
+    relation: 'executes',
+    from_ref: initiative,
+    to_ref: strategy,
+    source_refs: [initiative],
+    from_selector: 'initiative:init-a',
+    to_selector: 'strategy:strategy-a',
+  },
+  {
+    relation: 'advances',
+    from_ref: strategy,
+    to_ref: goal,
+    source_refs: [strategy],
+    from_selector: 'strategy:strategy-a',
+    to_selector: 'goal:goal-a',
+  },
+  {
+    relation: 'serves',
+    from_ref: goal,
+    to_ref: mission,
+    source_refs: [goal],
+    from_selector: 'goal:goal-a',
+    to_selector: 'mission:mission-a',
+  },
+  {
+    relation: 'addresses',
+    from_ref: mission,
+    to_ref: problem,
+    source_refs: [mission],
+    from_selector: 'mission:mission-a',
+    to_selector: 'problem:problem-a',
+  },
+]);
+assert.deepEqual(boundaryPath.hops, [{
+  relation: 'serves',
+  from_ref: initiative,
+  to_ref: externalGoal,
+  source_refs: [initiative],
+  from_selector: 'initiative:init-a',
+}]);
+assert.deepEqual(missingResult.traversal.paths[0].hops, [{
+  relation: 'serves',
+  from_ref: missingInitiative,
+  to_ref: missingGoal,
+  source_refs: [missingInitiative],
+  from_selector: 'initiative:init-missing',
+}]);
+for (const path of [completePath, boundaryPath, missingResult.traversal.paths[0]]) {
+  for (const hop of path.hops) {
+    assert.equal(typeof hop.from_ref.owner, 'string');
+    assert.equal(typeof hop.to_ref.owner, 'string');
+    assert.ok(hop.source_refs.length > 0);
+  }
+}
 
 // Unrelated, unsupported, and incoming sibling-source edges are never traversed.
 const serialized = JSON.stringify(result);

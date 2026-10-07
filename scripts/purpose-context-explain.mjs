@@ -11,6 +11,7 @@ const CAUSAL_RELATION_PRIORITY = new Map([
   ['addresses', 3],
   ['measures', 4],
 ]);
+const STRUCTURAL_RELATIONS = new Set(['serves', 'advances', 'executes', 'supersedes']);
 const ORPHANABLE_KINDS = new Set(['initiative', 'current_work']);
 const MAX_TRAVERSAL_NODES = 128;
 
@@ -71,6 +72,111 @@ function semanticCatalog(envelope) {
   return { bySelector, byRef };
 }
 
+function edgeSort(a, b) {
+  const relation = compareText(a.relation, b.relation);
+  if (relation !== 0) return relation;
+  const from = compareRefs(a.from_ref, b.from_ref);
+  if (from !== 0) return from;
+  const to = compareRefs(a.to_ref, b.to_ref);
+  if (to !== 0) return to;
+  const aEvidence = (a.source_refs ?? []).map(refKey).sort().join('\u0001');
+  const bEvidence = (b.source_refs ?? []).map(refKey).sort().join('\u0001');
+  return compareText(aEvidence, bEvidence);
+}
+
+function rejectStructuralCycles(edges, catalog, scope) {
+  const structural = edges.filter((edge) => {
+    if (!STRUCTURAL_RELATIONS.has(edge.relation)) return false;
+    if (edge.from_ref?.scope !== scope || edge.to_ref?.scope !== scope) return false;
+    return catalog.byRef.has(refKey(edge.from_ref)) && catalog.byRef.has(refKey(edge.to_ref));
+  });
+
+  const adjacency = new Map();
+  const nodes = new Set();
+  for (const edge of structural) {
+    const from = refKey(edge.from_ref);
+    const to = refKey(edge.to_ref);
+    nodes.add(from);
+    nodes.add(to);
+    const targets = adjacency.get(from) ?? new Set();
+    targets.add(to);
+    adjacency.set(from, targets);
+  }
+
+  let index = 0;
+  const indices = new Map();
+  const lowLinks = new Map();
+  const stack = [];
+  const onStack = new Set();
+  const components = [];
+
+  function strongConnect(node) {
+    indices.set(node, index);
+    lowLinks.set(node, index);
+    index += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    const targets = [...(adjacency.get(node) ?? [])].sort(compareText);
+    for (const target of targets) {
+      if (!indices.has(target)) {
+        strongConnect(target);
+        lowLinks.set(node, Math.min(lowLinks.get(node), lowLinks.get(target)));
+      } else if (onStack.has(target)) {
+        lowLinks.set(node, Math.min(lowLinks.get(node), indices.get(target)));
+      }
+    }
+
+    if (lowLinks.get(node) === indices.get(node)) {
+      const component = [];
+      while (stack.length) {
+        const member = stack.pop();
+        onStack.delete(member);
+        component.push(member);
+        if (member === node) break;
+      }
+      component.sort(compareText);
+      components.push(component);
+    }
+  }
+
+  for (const node of [...nodes].sort(compareText)) {
+    if (!indices.has(node)) strongConnect(node);
+  }
+
+  const cyclicComponentByNode = new Map();
+  for (const component of components) {
+    if (component.length <= 1) continue;
+    const componentId = component.join('\u0002');
+    for (const node of component) cyclicComponentByNode.set(node, componentId);
+  }
+
+  const rejectedKeys = new Set();
+  const rejections = [];
+  for (const edge of structural) {
+    const from = refKey(edge.from_ref);
+    const to = refKey(edge.to_ref);
+    const componentId = cyclicComponentByNode.get(from);
+    if (!componentId || componentId !== cyclicComponentByNode.get(to)) continue;
+    const key = `${from}\u0001${edge.relation}\u0001${to}\u0001${(edge.source_refs ?? []).map(refKey).sort().join('|')}`;
+    rejectedKeys.add(key);
+    rejections.push({
+      reason: 'structural_cycle',
+      relation: edge.relation,
+      from_ref: structuredClone(edge.from_ref),
+      to_ref: structuredClone(edge.to_ref),
+      source_refs: [...(edge.source_refs ?? [])].sort(compareRefs).map((ref) => structuredClone(ref)),
+    });
+  }
+  rejections.sort(edgeSort);
+
+  const retained = edges.filter((edge) => {
+    const key = `${refKey(edge.from_ref)}\u0001${edge.relation}\u0001${refKey(edge.to_ref)}\u0001${(edge.source_refs ?? []).map(refKey).sort().join('|')}`;
+    return !rejectedKeys.has(key);
+  });
+  return { retained, rejections };
+}
+
 function explainParentEdges(outgoing, node) {
   const nodeKey = refKey(node.canonical_ref);
   const edges = (outgoing.get(nodeKey) ?? []).filter((edge) => {
@@ -89,6 +195,16 @@ function explainParentEdges(outgoing, node) {
   });
 }
 
+function explainCycleEdges(cycleOutgoing, node) {
+  return (cycleOutgoing.get(refKey(node.canonical_ref)) ?? [])
+    .filter((edge) => CAUSAL_RELATION_PRIORITY.has(edge.relation))
+    .sort((a, b) => {
+      const relation = CAUSAL_RELATION_PRIORITY.get(a.relation) - CAUSAL_RELATION_PRIORITY.get(b.relation);
+      if (relation !== 0) return relation;
+      return edgeSort(a, b);
+    });
+}
+
 function hopForEdge(edge, catalog) {
   const fromNode = catalog.byRef.get(refKey(edge.from_ref));
   const toNode = catalog.byRef.get(refKey(edge.to_ref));
@@ -105,7 +221,7 @@ function hopForEdge(edge, catalog) {
   return hop;
 }
 
-function buildExplainPaths(start, outgoing, catalog, scope) {
+function buildExplainPaths(start, outgoing, cycleOutgoing, catalog, scope) {
   const paths = [];
   const missingLinks = [];
   const missingKeys = new Set();
@@ -150,7 +266,8 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
   function walk(node, selectors, relations, hops, seenKeys, depth) {
     if (depth > MAX_TRAVERSAL_NODES) throw new Error('Purpose trajectory path exceeded safety bound');
     const parents = explainParentEdges(outgoing, node);
-    if (!parents.length) {
+    const cycleParents = explainCycleEdges(cycleOutgoing, node);
+    if (!parents.length && !cycleParents.length) {
       terminalPath(node, selectors, relations, hops);
       return;
     }
@@ -189,13 +306,39 @@ function buildExplainPaths(start, outgoing, catalog, scope) {
         continue;
       }
 
-      if (seenKeys.has(targetKey)) continue;
+      if (seenKeys.has(targetKey)) {
+        paths.push({
+          status: 'partial',
+          termination_reason: 'cycle_rejected',
+          selectors: [...selectors],
+          relations: [...relations, edge.relation],
+          hops: [...hops, hop],
+          terminal_selector: selectors[selectors.length - 1],
+          terminal_ref: structuredClone(edge.to_ref),
+        });
+        advanced = true;
+        continue;
+      }
       const targetSelector = selectorFor(targetNode);
       if (!targetSelector) continue;
       advanced = true;
       const nextSeen = new Set(seenKeys);
       nextSeen.add(targetKey);
       walk(targetNode, [...selectors, targetSelector], [...relations, edge.relation], [...hops, hop], nextSeen, depth + 1);
+    }
+
+    for (const edge of cycleParents) {
+      const hop = hopForEdge(edge, catalog);
+      paths.push({
+        status: 'partial',
+        termination_reason: 'cycle_rejected',
+        selectors: [...selectors],
+        relations: [...relations, edge.relation],
+        hops: [...hops, hop],
+        terminal_selector: selectors[selectors.length - 1],
+        terminal_ref: structuredClone(edge.to_ref),
+      });
+      advanced = true;
     }
 
     if (!advanced) terminalPath(node, selectors, relations, hops);
@@ -230,13 +373,21 @@ export function traverseExplicitTrajectory(envelope, selector) {
   const start = catalog.bySelector.get(parsed.selector);
   if (!start) throw new Error(`Purpose trajectory node not found: ${parsed.selector}`);
 
+  const cycleResult = rejectStructuralCycles(filtered.trajectory ?? [], catalog, filtered.scope);
   const outgoing = new Map();
-  for (const edge of filtered.trajectory ?? []) {
+  for (const edge of cycleResult.retained) {
     const key = refKey(edge.from_ref);
     if (!key) continue;
     const bucket = outgoing.get(key) ?? [];
     bucket.push(edge);
     outgoing.set(key, bucket);
+  }
+  const cycleOutgoing = new Map();
+  for (const edge of cycleResult.rejections) {
+    const key = refKey(edge.from_ref);
+    const bucket = cycleOutgoing.get(key) ?? [];
+    bucket.push(edge);
+    cycleOutgoing.set(key, bucket);
   }
 
   const queue = [start.canonical_ref];
@@ -278,7 +429,7 @@ export function traverseExplicitTrajectory(envelope, selector) {
     }
   }
 
-  const explanation = buildExplainPaths(start, outgoing, catalog, filtered.scope);
+  const explanation = buildExplainPaths(start, outgoing, cycleOutgoing, catalog, filtered.scope);
   return {
     schema_version: '1.0',
     scope: filtered.scope,
@@ -295,6 +446,7 @@ export function traverseExplicitTrajectory(envelope, selector) {
       terminal_refs: terminalRefs,
       paths: explanation.paths,
       missing_links: explanation.missing_links,
+      cycle_rejections: structuredClone(cycleResult.rejections),
     },
   };
 }

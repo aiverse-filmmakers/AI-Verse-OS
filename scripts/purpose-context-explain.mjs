@@ -4,6 +4,13 @@ const SEMANTIC_KINDS = new Set([
   'problem', 'mission', 'desired_outcome', 'goal', 'challenge', 'strategy',
   'initiative', 'kpi', 'risk', 'current_work', 'material_change',
 ]);
+const CAUSAL_RELATION_PRIORITY = new Map([
+  ['executes', 0],
+  ['serves', 1],
+  ['advances', 2],
+  ['addresses', 3],
+  ['measures', 4],
+]);
 const MAX_TRAVERSAL_NODES = 128;
 
 function refKey(ref) {
@@ -12,6 +19,16 @@ function refKey(ref) {
   if (![owner, scope, kind, id].every((value) => typeof value === 'string' && value.length > 0)) return null;
   if (typeof ref.version !== 'undefined' && typeof ref.version !== 'string') return null;
   return [owner, scope, kind, id, ref.version ?? ''].join('\u0000');
+}
+
+function compareText(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareRefs(a, b) {
+  return compareText(refKey(a), refKey(b));
 }
 
 function selectorFor(node) {
@@ -53,6 +70,68 @@ function semanticCatalog(envelope) {
   return { bySelector, byRef };
 }
 
+function explainParentEdges(outgoing, node, catalog, scope) {
+  const nodeKey = refKey(node.canonical_ref);
+  const edges = (outgoing.get(nodeKey) ?? []).filter((edge) => {
+    if (!CAUSAL_RELATION_PRIORITY.has(edge.relation)) return false;
+    if (edge.relation === 'measures' && node.semantic_kind !== 'kpi') return false;
+    if (edge.to_ref.scope !== scope) return false;
+    return Boolean(catalog.byRef.get(refKey(edge.to_ref)));
+  });
+  return edges.sort((a, b) => {
+    const relation = CAUSAL_RELATION_PRIORITY.get(a.relation) - CAUSAL_RELATION_PRIORITY.get(b.relation);
+    if (relation !== 0) return relation;
+    const target = compareRefs(a.to_ref, b.to_ref);
+    if (target !== 0) return target;
+    const aEvidence = (a.source_refs ?? []).map(refKey).sort().join('\u0001');
+    const bEvidence = (b.source_refs ?? []).map(refKey).sort().join('\u0001');
+    return compareText(aEvidence, bEvidence);
+  });
+}
+
+function buildExplainPaths(start, outgoing, catalog, scope) {
+  const paths = [];
+
+  function walk(node, selectors, relations, seenKeys, depth) {
+    if (depth > MAX_TRAVERSAL_NODES) throw new Error('Purpose trajectory path exceeded safety bound');
+    const parents = explainParentEdges(outgoing, node, catalog, scope);
+    if (!parents.length) {
+      paths.push({
+        selectors: [...selectors],
+        relations: [...relations],
+        terminal_selector: selectors[selectors.length - 1],
+      });
+      return;
+    }
+
+    let advanced = false;
+    for (const edge of parents) {
+      const targetKey = refKey(edge.to_ref);
+      if (seenKeys.has(targetKey)) continue;
+      const targetNode = catalog.byRef.get(targetKey);
+      if (!targetNode) continue;
+      const targetSelector = selectorFor(targetNode);
+      if (!targetSelector) continue;
+      advanced = true;
+      const nextSeen = new Set(seenKeys);
+      nextSeen.add(targetKey);
+      walk(targetNode, [...selectors, targetSelector], [...relations, edge.relation], nextSeen, depth + 1);
+    }
+
+    if (!advanced) {
+      paths.push({
+        selectors: [...selectors],
+        relations: [...relations],
+        terminal_selector: selectors[selectors.length - 1],
+      });
+    }
+  }
+
+  const startKey = refKey(start.canonical_ref);
+  walk(start, [selectorFor(start)], [], new Set([startKey]), 0);
+  return paths.map((path, index) => ({ primary: index === 0, ...path }));
+}
+
 export function parseTrajectorySelector(selector) {
   if (typeof selector !== 'string') throw new Error('Purpose trajectory --ref is required');
   const separator = selector.indexOf(':');
@@ -83,7 +162,6 @@ export function traverseExplicitTrajectory(envelope, selector) {
     outgoing.set(key, bucket);
   }
 
-  const startKey = refKey(start.canonical_ref);
   const queue = [start.canonical_ref];
   const visited = new Set();
   const emittedEdges = new Set();
@@ -137,6 +215,7 @@ export function traverseExplicitTrajectory(envelope, selector) {
       edges,
       reached_refs: reachedRefs,
       terminal_refs: terminalRefs,
+      paths: buildExplainPaths(start, outgoing, catalog, filtered.scope),
     },
   };
 }

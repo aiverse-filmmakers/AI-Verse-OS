@@ -38,6 +38,8 @@ jobs:
         run: node scripts/test-purpose-context-workspace-boundary.mjs
       - name: Test Purpose Context explicit explain traversal
         run: node scripts/test-purpose-context-explain.mjs
+      - name: Test Purpose Data current-value source ownership boundary
+        run: node scripts/test-purpose-data-current-value-boundary.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -54,6 +56,7 @@ jobs:
           test -f system/schemas/purpose-context.schema.json
           test -f scripts/purpose-context.mjs
           test -f scripts/purpose-context-explain.mjs
+          test -f scripts/purpose-data-current-value-boundary.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

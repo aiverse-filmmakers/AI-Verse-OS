@@ -28,6 +28,8 @@ jobs:
         run: node scripts/test-purpose-context-no-cache.mjs
       - name: Test Purpose Context v1 fail-closed owner behavior
         run: node scripts/test-purpose-context-fail-closed.mjs
+      - name: Test Purpose Context v1 delete/rebuild/restart stability
+        run: node scripts/test-purpose-context-rebuild.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -40,6 +42,9 @@ jobs:
           grep -Fq 'current_context_resolver: scripts/current-context.mjs' AI-VERSE.yaml
           grep -Fq '.aiverse/direction/' .gitignore
           test -f system/architecture/direction-ownership.md
+          test -f system/architecture/purpose-context.md
+          test -f system/schemas/purpose-context.schema.json
+          test -f scripts/purpose-context.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

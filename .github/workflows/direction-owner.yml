@@ -30,6 +30,8 @@ jobs:
         run: node scripts/test-purpose-context-fail-closed.mjs
       - name: Test Purpose Context v1 delete/rebuild/restart stability
         run: node scripts/test-purpose-context-rebuild.mjs
+      - name: Test Purpose Context workspace profile behavior
+        run: node scripts/test-purpose-context-profiles.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |

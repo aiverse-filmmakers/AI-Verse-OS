@@ -116,7 +116,23 @@ try {
   assert.deepEqual(reversedEnvelope.trajectory, brainEnvelope.trajectory);
   assert.deepEqual(reversedEnvelope.provenance.owner_reads[1].canonical_refs, brainEnvelope.provenance.owner_reads[1].canonical_refs);
 
-  process.stdout.write('Purpose Context v1 envelope/ref preservation/deterministic ordering: PASS\n');
+  const manyStateLines = Array.from({ length: 120 }, (_, index) => `- state ${String(index).padStart(3, '0')} ${'x'.repeat(80)}`);
+  fs.rmSync(path.join(root, '.aiverse'), { recursive: true, force: true });
+  fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), [
+    '## Current priorities', '', '- keep purpose bounded', '',
+    '## Current state', '', ...manyStateLines,
+  ].join('\n'));
+  const bounded = composePurposeContext(root, 'operator', { now, maxBytes: 4096 });
+  const boundedBytes = Buffer.byteLength(JSON.stringify(bounded), 'utf8');
+  assert.ok(boundedBytes <= 4096, `bounded projection was ${boundedBytes} bytes`);
+  assert.equal(bounded.provenance.budget.max_bytes, 4096);
+  assert.equal(bounded.provenance.budget.final_bytes, boundedBytes);
+  assert.equal(bounded.provenance.budget.truncated, true);
+  assert.ok(bounded.provenance.budget.omissions.some((entry) => entry.section === 'current_state' && entry.omitted_count > 0));
+  assert.throws(() => composePurposeContext(root, 'operator', { now, maxBytes: 4095 }), /between 4096 and 65536/);
+  assert.throws(() => composePurposeContext(root, 'operator', { now, maxBytes: 65537 }), /between 4096 and 65536/);
+
+  process.stdout.write('Purpose Context v1 envelope/ref/order/budget: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

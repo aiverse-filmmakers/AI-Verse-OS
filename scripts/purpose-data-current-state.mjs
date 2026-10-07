@@ -1,5 +1,6 @@
 const MAX_BINDINGS = 32;
 const DEFAULT_MAX_BYTES = 16_384;
+const DATA_RESULT_STATES = new Set(['ok', 'partial', 'unavailable']);
 
 function invalid(message) {
   const error = new Error(message);
@@ -105,7 +106,7 @@ function serializedBytes(value) {
   return Buffer.byteLength(JSON.stringify(value), 'utf8');
 }
 
-function addBudgetOmission(envelope, maxBytes, count) {
+function addBudgetOmission(envelope, maxBytes, section, count) {
   if (count < 1) return;
   envelope.provenance ??= {};
   envelope.provenance.budget ??= {
@@ -117,9 +118,9 @@ function addBudgetOmission(envelope, maxBytes, count) {
   envelope.provenance.budget.max_bytes = maxBytes;
   envelope.provenance.budget.truncated = true;
   const omissions = envelope.provenance.budget.omissions ??= [];
-  let entry = omissions.find((item) => item.section === 'current_state' && item.reason === 'byte_budget');
+  let entry = omissions.find((item) => item.section === section && item.reason === 'byte_budget');
   if (!entry) {
-    entry = { section: 'current_state', reason: 'byte_budget', omitted_count: 0 };
+    entry = { section, reason: 'byte_budget', omitted_count: 0 };
     omissions.push(entry);
   }
   entry.omitted_count += count;
@@ -136,22 +137,46 @@ function stabilizeBudget(envelope) {
   return serializedBytes(envelope);
 }
 
-function enforceAddedDataBudget(envelope, dataItems, maxBytes) {
-  let omitted = 0;
+function enforceAddedDataBudget(envelope, dataItems, diagnostics, maxBytes) {
+  let omittedValues = 0;
+  let omittedDiagnostics = 0;
   let size = serializedBytes(envelope);
   while (size > maxBytes && dataItems.length) {
     const item = dataItems.pop();
     const index = envelope.current_state?.lastIndexOf(item) ?? -1;
     if (index >= 0) envelope.current_state.splice(index, 1);
-    omitted += 1;
+    omittedValues += 1;
     size = serializedBytes(envelope);
   }
-  if (omitted) {
-    addBudgetOmission(envelope, maxBytes, omitted);
-    size = stabilizeBudget(envelope);
+  while (size > maxBytes && diagnostics.length) {
+    diagnostics.pop();
+    omittedDiagnostics += 1;
+    size = serializedBytes(envelope);
   }
+  addBudgetOmission(envelope, maxBytes, 'current_state', omittedValues);
+  addBudgetOmission(envelope, maxBytes, 'section_states.data_current_state', omittedDiagnostics);
+  if (omittedValues || omittedDiagnostics) size = stabilizeBudget(envelope);
   if (size > maxBytes) invalid(`Purpose Data current-state projection exceeds byte budget ${maxBytes}`);
   return envelope;
+}
+
+function ensureDataOwnerRead(output, observedAt, status, freshnessState) {
+  output.provenance ??= { projection_owner: 'ai-verse-os', generated_at: observedAt, owner_reads: [] };
+  output.provenance.owner_reads ??= [];
+  output.provenance.owner_reads.push({
+    owner: 'ai-verse-data',
+    operation: 'purpose-current-state.read',
+    scope: output.scope,
+    status,
+    observed_at: observedAt,
+    freshness: { state: freshnessState },
+    canonical_refs: [],
+  });
+}
+
+function setDataSectionState(output, state) {
+  output.section_states ??= {};
+  output.section_states.data_current_state = state;
 }
 
 export function applyPurposeDataCurrentState(envelope, options = {}) {
@@ -159,8 +184,16 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
     invalid('Purpose Context envelope is required');
   }
   const output = structuredClone(envelope);
+  const observedAt = options.now ?? output.provenance?.generated_at ?? new Date().toISOString();
   const reader = options.readPurposeDataCurrentState;
-  if (typeof reader !== 'function') return output;
+
+  if (typeof reader !== 'function') {
+    if (output.scope_kind === 'workspace') {
+      ensureDataOwnerRead(output, observedAt, 'unavailable', 'unavailable');
+      setDataSectionState(output, { state: 'unavailable', reason: 'data_public_reader_unavailable' });
+    }
+    return output;
+  }
 
   const relevantRefs = collectPurposeRefs(output);
   const purposeRefs = [...relevantRefs.values()].sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
@@ -170,7 +203,17 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
   }));
   if (!result || typeof result !== 'object' || Array.isArray(result)) invalid('Data Purpose reader returned an invalid result');
   if (result.scope !== output.scope) invalid(`Data Purpose reader returned the wrong scope for ${output.scope}`);
-  if (result.status !== 'ok') return output;
+  if (!DATA_RESULT_STATES.has(result.status)) invalid('Data Purpose reader status must be ok, partial, or unavailable');
+
+  if (result.status === 'unavailable') {
+    ensureDataOwnerRead(output, observedAt, 'unavailable', 'unavailable');
+    setDataSectionState(output, {
+      state: 'unavailable',
+      reason: typeof result.reason === 'string' && result.reason ? result.reason : 'data_owner_unavailable',
+    });
+    return output;
+  }
+
   if (!Array.isArray(result.bindings)) invalid('Data Purpose reader bindings must be an array');
   if (result.bindings.length > MAX_BINDINGS) invalid(`Data Purpose reader supports at most ${MAX_BINDINGS} bindings`);
   if (output.scope_kind === 'operator' && result.bindings.length > 0) {
@@ -179,6 +222,7 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
 
   const workspaceId = output.scope_kind === 'workspace' ? output.identity?.id : null;
   const dataItems = [];
+  const diagnostics = [];
   const seen = new Set();
   for (const [index, binding] of [...result.bindings].sort(compareBindings).entries()) {
     if (!binding || typeof binding !== 'object' || Array.isArray(binding)) invalid(`bindings[${index}] must be an object`);
@@ -189,23 +233,51 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
     if (current.projection !== 'transient' || current.source_owner !== 'ai-verse-data') {
       invalid(`bindings[${index}].current must remain a transient ai-verse-data projection`);
     }
-    if (current.state !== 'value') continue;
+    if (!['value', 'stale', 'missing'].includes(current.state)) {
+      invalid(`bindings[${index}].current state must be value, stale, or missing`);
+    }
+    const sourceRef = copyDataRef(current.source_ref, `bindings[${index}].current.source_ref`);
+    const dedupeKey = `${purposeKey}\u0000${dataRefKey(sourceRef)}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const purposeRef = copyCanonicalRef(binding.purpose_ref, `bindings[${index}].purpose_ref`);
+
+    if (current.state === 'missing') {
+      if (!['record', 'field'].includes(current.missing)) invalid(`bindings[${index}].current missing kind is invalid`);
+      diagnostics.push({
+        state: 'missing',
+        purpose_ref: purposeRef,
+        source_owner: 'ai-verse-data',
+        source_ref: sourceRef,
+        missing: current.missing,
+      });
+      continue;
+    }
+
     if (!Object.prototype.hasOwnProperty.call(current, 'value') || !isPrimitive(current.value)) {
       invalid(`bindings[${index}].current value must be a JSON primitive`);
     }
     if (typeof current.source_updated_at !== 'string' || !Number.isFinite(Date.parse(current.source_updated_at))) {
       invalid(`bindings[${index}].current source_updated_at must be an owner timestamp`);
     }
-    const sourceRef = copyDataRef(current.source_ref, `bindings[${index}].current.source_ref`);
     const sourceProvenance = copySourceProvenance(current.provenance, workspaceId, `bindings[${index}].current`);
-    const dedupeKey = `${purposeKey}\u0000${dataRefKey(sourceRef)}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
+
+    if (current.state === 'stale') {
+      diagnostics.push({
+        state: 'stale',
+        purpose_ref: purposeRef,
+        source_owner: 'ai-verse-data',
+        source_ref: sourceRef,
+        source_updated_at: current.source_updated_at,
+      });
+      continue;
+    }
+
     dataItems.push({
       kind: 'data_current_state',
       state: 'value',
       value: current.value,
-      purpose_ref: copyCanonicalRef(binding.purpose_ref, `bindings[${index}].purpose_ref`),
+      purpose_ref: purposeRef,
       source_owner: 'ai-verse-data',
       source_ref: sourceRef,
       source_updated_at: current.source_updated_at,
@@ -217,17 +289,15 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
     output.current_state ??= [];
     output.current_state.push(...dataItems);
   }
-  output.provenance ??= { projection_owner: 'ai-verse-os', generated_at: options.now ?? new Date().toISOString(), owner_reads: [] };
-  output.provenance.owner_reads ??= [];
-  output.provenance.owner_reads.push({
-    owner: 'ai-verse-data',
-    operation: 'purpose-current-state.read',
-    scope: output.scope,
-    status: 'ok',
-    observed_at: options.now ?? output.provenance.generated_at ?? new Date().toISOString(),
-    freshness: { state: 'owner_timestamped' },
-    canonical_refs: [],
-  });
 
-  return enforceAddedDataBudget(output, dataItems, options.maxBytes ?? DEFAULT_MAX_BYTES);
+  const effectivePartial = result.status === 'partial' || diagnostics.length > 0;
+  ensureDataOwnerRead(output, observedAt, effectivePartial ? 'partial' : 'ok', effectivePartial ? 'mixed' : 'owner_timestamped');
+  if (effectivePartial) {
+    const state = { state: 'partial' };
+    if (typeof result.reason === 'string' && result.reason) state.reason = result.reason;
+    if (diagnostics.length) state.diagnostics = diagnostics;
+    setDataSectionState(output, state);
+  }
+
+  return enforceAddedDataBudget(output, dataItems, diagnostics, options.maxBytes ?? DEFAULT_MAX_BYTES);
 }

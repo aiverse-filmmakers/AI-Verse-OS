@@ -179,11 +179,28 @@ function setDataSectionState(output, state) {
   output.section_states.data_current_state = state;
 }
 
+function clearPriorDataProjection(output) {
+  if (Array.isArray(output.current_state)) {
+    output.current_state = output.current_state.filter((item) => !(
+      item && typeof item === 'object' && !Array.isArray(item) && item.kind === 'data_current_state'
+    ));
+  }
+  if (output.section_states && typeof output.section_states === 'object' && !Array.isArray(output.section_states)) {
+    delete output.section_states.data_current_state;
+  }
+  if (Array.isArray(output.provenance?.owner_reads)) {
+    output.provenance.owner_reads = output.provenance.owner_reads.filter((item) => !(
+      item?.owner === 'ai-verse-data' && item?.operation === 'purpose-current-state.read'
+    ));
+  }
+}
+
 export function applyPurposeDataCurrentState(envelope, options = {}) {
   if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
     invalid('Purpose Context envelope is required');
   }
   const output = structuredClone(envelope);
+  clearPriorDataProjection(output);
   const observedAt = options.now ?? output.provenance?.generated_at ?? new Date().toISOString();
   const reader = options.readPurposeDataCurrentState;
 

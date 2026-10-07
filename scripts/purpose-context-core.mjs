@@ -5,6 +5,30 @@ import { readCurrentContext } from './current-context.mjs';
 import { validateDirectionScope } from './direction-owner-core.mjs';
 
 const PURPOSE_SCHEMA_VERSION = '1.0';
+const PURPOSE_DEFAULT_MAX_BYTES = 16384;
+const PURPOSE_MIN_MAX_BYTES = 4096;
+const PURPOSE_MAX_MAX_BYTES = 65536;
+const PURPOSE_SECTION_CAP = 64;
+const PURPOSE_PURPOSE_CAP = 32;
+const PURPOSE_TRAJECTORY_CAP = 128;
+const PURPOSE_PRUNE_ORDER = [
+  'recent_material_changes',
+  'risks',
+  'kpis',
+  'narratives',
+  'current_state',
+  'current_work',
+  'constraints',
+  'priorities',
+  'challenges',
+  'initiatives',
+  'strategies',
+  'problems',
+  'goals',
+  'purpose.desired_outcomes',
+  'purpose.missions',
+  'trajectory',
+];
 
 function samePath(a, b) {
   return path.relative(a, b) === '' && path.relative(b, a) === '';
@@ -202,6 +226,137 @@ function collectBrainRefs(snapshot) {
   return refs.sort(compareCanonicalRefs);
 }
 
+function validateMaxBytes(value) {
+  const maxBytes = value ?? PURPOSE_DEFAULT_MAX_BYTES;
+  if (!Number.isInteger(maxBytes) || maxBytes < PURPOSE_MIN_MAX_BYTES || maxBytes > PURPOSE_MAX_MAX_BYTES) {
+    throw new Error(`Purpose Context maxBytes must be an integer between ${PURPOSE_MIN_MAX_BYTES} and ${PURPOSE_MAX_MAX_BYTES}`);
+  }
+  return maxBytes;
+}
+
+function serializedBytes(value) {
+  return Buffer.byteLength(JSON.stringify(value), 'utf8');
+}
+
+function addOmission(omissions, section, reason, count = 1) {
+  if (count <= 0) return;
+  const existing = omissions.find((entry) => entry.section === section && entry.reason === reason);
+  if (existing) existing.omitted_count += count;
+  else omissions.push({ section, reason, omitted_count: count });
+}
+
+function capArray(container, key, limit, omissions, section) {
+  const list = container?.[key];
+  if (!Array.isArray(list) || list.length <= limit) return;
+  const omitted = list.length - limit;
+  list.splice(limit);
+  addOmission(omissions, section, 'section_cap', omitted);
+}
+
+function applySectionCaps(envelope, omissions) {
+  for (const key of ['problems', 'narratives', 'goals', 'priorities', 'challenges', 'strategies', 'initiatives', 'constraints', 'kpis', 'risks', 'current_state', 'current_work', 'recent_material_changes']) {
+    capArray(envelope, key, PURPOSE_SECTION_CAP, omissions, key);
+  }
+  if (envelope.purpose && typeof envelope.purpose === 'object') {
+    capArray(envelope.purpose, 'missions', PURPOSE_PURPOSE_CAP, omissions, 'purpose.missions');
+    capArray(envelope.purpose, 'desired_outcomes', PURPOSE_PURPOSE_CAP, omissions, 'purpose.desired_outcomes');
+  }
+  capArray(envelope, 'trajectory', PURPOSE_TRAJECTORY_CAP, omissions, 'trajectory');
+}
+
+function listAtPath(envelope, pathName) {
+  if (pathName.startsWith('purpose.')) {
+    const key = pathName.slice('purpose.'.length);
+    return Array.isArray(envelope.purpose?.[key]) ? envelope.purpose[key] : null;
+  }
+  return Array.isArray(envelope[pathName]) ? envelope[pathName] : null;
+}
+
+function collectRetainedCanonicalRefKeys(envelope) {
+  const keys = new Set();
+  const visit = (value, insideProvenance = false) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, insideProvenance);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    if (!insideProvenance) {
+      const ownKey = canonicalRefKey(value);
+      if (ownKey) keys.add(ownKey);
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'provenance') continue;
+      visit(child, insideProvenance || key === 'provenance');
+    }
+  };
+  for (const [key, value] of Object.entries(envelope)) {
+    if (key !== 'provenance') visit(value, false);
+  }
+  return keys;
+}
+
+function syncRetainedOwnerRefs(envelope) {
+  const retained = collectRetainedCanonicalRefKeys(envelope);
+  for (const ownerRead of envelope.provenance?.owner_reads ?? []) {
+    if (ownerRead.owner !== 'ai-verse-brain') continue;
+    ownerRead.canonical_refs = (ownerRead.canonical_refs ?? []).filter((ref) => retained.has(canonicalRefKey(ref)));
+  }
+}
+
+function stabilizeBudgetBytes(envelope) {
+  let previous = -1;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const size = serializedBytes(envelope);
+    if (envelope.provenance?.budget) envelope.provenance.budget.final_bytes = size;
+    const next = serializedBytes(envelope);
+    if (next === size || next === previous) return next;
+    previous = size;
+  }
+  return serializedBytes(envelope);
+}
+
+function enforceBudget(envelope, maxBytes) {
+  const omissions = [];
+  applySectionCaps(envelope, omissions);
+  syncRetainedOwnerRefs(envelope);
+
+  let size = serializedBytes(envelope);
+  if (omissions.length || size > maxBytes) {
+    envelope.provenance.budget = {
+      max_bytes: maxBytes,
+      final_bytes: 0,
+      truncated: true,
+      omissions,
+    };
+    size = stabilizeBudgetBytes(envelope);
+  }
+
+  while (size > maxBytes) {
+    let pruned = false;
+    for (const section of PURPOSE_PRUNE_ORDER) {
+      const list = listAtPath(envelope, section);
+      if (!list?.length) continue;
+      list.pop();
+      addOmission(omissions, section, 'byte_budget', 1);
+      syncRetainedOwnerRefs(envelope);
+      size = stabilizeBudgetBytes(envelope);
+      pruned = true;
+      break;
+    }
+    if (!pruned) {
+      throw new Error(`Purpose Context minimum exceeds byte budget ${maxBytes}`);
+    }
+  }
+
+  if (envelope.provenance.budget) {
+    envelope.provenance.budget.truncated = omissions.length > 0;
+    size = stabilizeBudgetBytes(envelope);
+    if (size > maxBytes) throw new Error(`Purpose Context minimum exceeds byte budget ${maxBytes}`);
+  }
+  return envelope;
+}
+
 export function resolvePurposeScope(root, scope = 'operator') {
   const base = path.resolve(root);
   validateDirectionScope(scope);
@@ -315,6 +470,7 @@ export function readPurposeStrategicDirection(root, scope = 'operator', options 
 }
 
 export function composePurposeContext(root, scope = 'operator', options = {}) {
+  const maxBytes = validateMaxBytes(options.maxBytes);
   const observedAt = options.now ?? new Date().toISOString();
   const read = readPurposeStrategicDirection(root, scope, options);
   const { resolved, current, strategic } = read;
@@ -363,5 +519,5 @@ export function composePurposeContext(root, scope = 'operator', options = {}) {
       },
     };
   }
-  return envelope;
+  return enforceBudget(envelope, maxBytes);
 }

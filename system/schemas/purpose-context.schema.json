@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ai-verse.local/schemas/purpose-context.schema.json",
+  "title": "AI-Verse Purpose Context v1",
+  "type": "object",
+  "required": ["schema_version", "scope", "scope_kind", "identity", "provenance"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "scope": {
+      "type": "string",
+      "anyOf": [
+        { "const": "operator" },
+        { "pattern": "^workspace:[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$" }
+      ]
+    },
+    "scope_kind": { "enum": ["operator", "workspace"] },
+    "identity": {
+      "type": "object",
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["operator", "workspace"] },
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 }
+      },
+      "additionalProperties": false
+    },
+    "purpose": {
+      "type": "object",
+      "properties": {
+        "missions": { "$ref": "#/$defs/objectList" },
+        "desired_outcomes": { "$ref": "#/$defs/objectList" }
+      },
+      "additionalProperties": true
+    },
+    "problems": { "$ref": "#/$defs/objectList" },
+    "narratives": { "$ref": "#/$defs/objectList" },
+    "goals": { "$ref": "#/$defs/objectList" },
+    "priorities": { "$ref": "#/$defs/objectList" },
+    "challenges": { "$ref": "#/$defs/objectList" },
+    "strategies": { "$ref": "#/$defs/objectList" },
+    "initiatives": { "$ref": "#/$defs/objectList" },
+    "constraints": { "$ref": "#/$defs/objectList" },
+    "kpis": { "$ref": "#/$defs/objectList" },
+    "risks": { "$ref": "#/$defs/objectList" },
+    "current_state": { "$ref": "#/$defs/objectList" },
+    "current_work": { "$ref": "#/$defs/objectList" },
+    "recent_material_changes": { "$ref": "#/$defs/objectList" },
+    "trajectory": { "$ref": "#/$defs/objectList" },
+    "section_states": { "type": "object" },
+    "provenance": {
+      "type": "object",
+      "required": ["projection_owner", "generated_at", "owner_reads"],
+      "properties": {
+        "projection_owner": { "const": "ai-verse-os" },
+        "generated_at": { "type": "string", "minLength": 1 },
+        "owner_reads": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["owner", "operation", "scope", "status", "observed_at", "freshness", "canonical_refs"],
+            "properties": {
+              "owner": { "type": "string", "minLength": 1 },
+              "operation": { "type": "string", "minLength": 1 },
+              "scope": { "type": "string", "minLength": 1 },
+              "status": { "type": "string", "minLength": 1 },
+              "observed_at": { "type": "string", "minLength": 1 },
+              "freshness": { "type": "object" },
+              "canonical_refs": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/canonicalRef" }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "budget": {
+          "type": "object",
+          "required": ["max_bytes", "final_bytes", "truncated", "omissions"],
+          "properties": {
+            "max_bytes": { "type": "integer", "minimum": 4096, "maximum": 65536 },
+            "final_bytes": { "type": "integer", "minimum": 0 },
+            "truncated": { "type": "boolean" },
+            "omissions": { "type": "array", "items": { "type": "object" } }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "objectList": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "canonicalRef": {
+      "type": "object",
+      "required": ["owner", "scope", "kind", "id"],
+      "properties": {
+        "owner": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

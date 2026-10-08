@@ -13,6 +13,12 @@ Purpose Context is not a canonical store. It does not own mission, goals, strate
 - Data-owned current values remain canonical in Data. Purpose may carry only transient scalar/status projections with exact Data refs, owner timestamps, and provenance. Neither OS nor Brain may persist or promote copied Data rows as canonical Purpose/current-state truth.
 - Memory composition must continue to use public owner reads and preserve provenance.
 
+### Initiative operational status boundary
+
+Brain's canonical initiative object already owns the current initiative lifecycle status when Brain owns strategic direction. The public Brain Purpose snapshot carries that status on each current initiative, and OS projects the same owner-backed object under `initiatives` without translating or copying the status into a second domain.
+
+Purpose must not create `initiative_operational_status`, `project_operational_status`, or a Dashboard/OS status store that can drift from Brain. When a distinct project/initiative operational owner is introduced in the future, it must enter through an explicit owner contract rather than being inferred from generic Data rows or current-context prose.
+
 ### Data current-value boundary
 
 Phase 5.1 freezes the following ownership rule before full current-state composition:
@@ -43,7 +49,7 @@ Workspace projection profiles are runtime read behavior, not persisted workspace
 - operator scope resolves to `operator_default` and does not accept workspace `basic`/`rich` labels;
 - workspace `auto` begins at `workspace_basic` and resolves to `workspace_rich` only when a rich-only domain is both owner-backed and relevant/requested;
 - workspace type, name, age, perceived importance, free-text purpose, file count, and unused byte budget cannot select rich mode by themselves;
-- `basic` suppresses rich-only narratives, KPIs, and risks while retaining required truth-state/provenance diagnostics;
+- `basic` suppresses rich-only narratives, KPIs, and optional owner-backed domains while retaining required truth-state/provenance diagnostics;
 - `rich` only broadens the eligible read set and cannot fabricate unavailable data or bypass owner authority;
 - profile selection may be reported under `provenance.profile` as non-authoritative diagnostics.
 

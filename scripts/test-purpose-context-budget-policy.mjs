@@ -13,6 +13,7 @@ const expected = [
   'team_resources',
   'customers',
   'infrastructure',
+  'budget_cost',
   'risks',
   'kpis',
   'narratives',
@@ -52,6 +53,10 @@ assert.ok(
 assert.ok(
   purposeTruncationRank('infrastructure') < purposeTruncationRank('purpose.missions'),
   'optional infrastructure context must be discarded before mission',
+);
+assert.ok(
+  purposeTruncationRank('budget_cost') < purposeTruncationRank('purpose.missions'),
+  'optional budget/cost context must be discarded before mission',
 );
 assert.ok(
   purposeTruncationRank('narratives') < purposeTruncationRank('purpose.missions'),

@@ -9,6 +9,7 @@ import {
   applyPurposeProfile,
   composeProfiledPurposeContext,
   resolvePurposeProfile,
+  sanitizeOwnerBackedOptionalDomains,
 } from './purpose-context-profile.mjs';
 
 function writeWorkspace(root, id, currentLines, extraManifest = []) {
@@ -59,7 +60,11 @@ const shell = {
   goals: [{ id: 'goal-1' }],
   narratives: [{ id: 'narrative-1' }],
   kpis: [{ id: 'kpi-1' }],
-  risks: [{ id: 'risk-1' }],
+  risks: [{
+    id: 'risk-1',
+    statement: 'Owner-backed risk',
+    canonical_ref: { owner: 'ai-verse-brain', scope: 'workspace:client-a', kind: 'risk', id: 'risk-1', version: '7' },
+  }],
   current_state: [{ id: 'state-1' }],
   provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-07T00:00:00Z', owner_reads: [] },
 };
@@ -69,6 +74,9 @@ assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, []), {
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['kpis']), {
   requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_kpi_binding_present'],
+});
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['risks']), {
+  requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_risk_domain_present'],
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'basic', shell, ['kpis']), {
   requested: 'basic', resolved: 'workspace_basic', reasons: ['explicit_profile_request'],
@@ -82,6 +90,22 @@ assert.deepEqual(resolvePurposeProfile('operator', 'auto', { scope_kind: 'operat
 assert.throws(() => resolvePurposeProfile('workspace', 'enterprise', shell, []), /unsupported Purpose Context profile/);
 assert.throws(() => resolvePurposeProfile('operator', 'rich', { scope_kind: 'operator' }, []), /apply only to workspace scopes/);
 
+const unbackedRisks = structuredClone(shell);
+unbackedRisks.risks = [{ id: 'invented-risk', statement: 'No canonical backing' }];
+assert.equal('risks' in sanitizeOwnerBackedOptionalDomains(unbackedRisks), false);
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', unbackedRisks, ['risks']), {
+  requested: 'auto', resolved: 'workspace_basic', reasons: ['workspace_default_basic'],
+});
+const crossScopeRisks = structuredClone(shell);
+crossScopeRisks.risks = [{
+  id: 'cross-scope-risk',
+  source_refs: [{ owner: 'ai-verse-brain', scope: 'workspace:client-b', kind: 'risk', id: 'risk-b' }],
+}];
+assert.equal('risks' in sanitizeOwnerBackedOptionalDomains(crossScopeRisks), false);
+const malformedRiskRefs = structuredClone(shell);
+malformedRiskRefs.risks = [{ id: 'bad-risk', source_refs: [{ owner: 'ai-verse-brain', scope: 'workspace:client-a' }] }];
+assert.equal('risks' in sanitizeOwnerBackedOptionalDomains(malformedRiskRefs), false);
+
 const basic = applyPurposeProfile(shell, { profile: 'basic' });
 assert.equal(basic.provenance.profile.resolved, 'workspace_basic');
 assert.equal('narratives' in basic, false);
@@ -94,6 +118,9 @@ const rich = applyPurposeProfile(shell, { profile: 'rich' });
 assert.equal(rich.provenance.profile.resolved, 'workspace_rich');
 assert.deepEqual(rich.kpis, shell.kpis);
 assert.deepEqual(rich.risks, shell.risks);
+const explicitRichUnbacked = applyPurposeProfile(unbackedRisks, { profile: 'rich' });
+assert.equal(explicitRichUnbacked.provenance.profile.resolved, 'workspace_rich');
+assert.equal('risks' in explicitRichUnbacked, false);
 
 const root = makeRoot();
 try {
@@ -117,6 +144,8 @@ try {
     now: '2026-10-07T00:00:00Z',
   });
   assert.equal(explicitRich.provenance.profile.resolved, 'workspace_rich');
+  // No current canonical owner exposes risks, so rich mode omits them cleanly.
+  assert.equal('risks' in explicitRich, false);
 
   // Reading client-a must never enumerate or ingest sibling client-b state.
   // The assertion is performed over the complete rich projection to catch leaks

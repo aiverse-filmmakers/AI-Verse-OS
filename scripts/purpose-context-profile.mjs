@@ -7,6 +7,7 @@ const PROFILE_REQUESTS = new Set(['auto', 'basic', 'rich']);
 const RELATION_TOKENS = new Set([
   'addresses', 'serves', 'advances', 'blocks', 'executes', 'measures', 'affects', 'supersedes',
 ]);
+const OPTIONAL_OWNER_BACKED_DOMAINS = new Set(['risks']);
 const RICH_DOMAIN_KEYS = new Map([
   ['narratives', 'relevant_narrative_domain_present'],
   ['kpis', 'relevant_kpi_binding_present'],
@@ -33,6 +34,33 @@ function canonicalRefKey(ref) {
   if (!canonicalScope(scope)) return null;
   if (typeof ref.version !== 'undefined' && typeof ref.version !== 'string') return null;
   return [owner, scope, kind, id, ref.version ?? ''].join('\u0000');
+}
+
+function exactScopeOwnerEvidence(item, scope) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+  const directRef = canonicalRefKey(item) ? item : item.canonical_ref;
+  if (canonicalRefKey(directRef) && directRef.scope === scope) return true;
+  if (!Array.isArray(item.source_refs) || item.source_refs.length === 0) return false;
+  if (item.source_refs.some((ref) => !canonicalRefKey(ref))) return false;
+  return item.source_refs.some((ref) => ref.scope === scope);
+}
+
+export function sanitizeOwnerBackedOptionalDomains(envelope) {
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    throw new Error('Purpose Context envelope is required');
+  }
+  const output = structuredClone(envelope);
+  for (const domain of OPTIONAL_OWNER_BACKED_DOMAINS) {
+    if (!(domain in output)) continue;
+    if (!Array.isArray(output[domain])) {
+      delete output[domain];
+      continue;
+    }
+    const retained = output[domain].filter((item) => exactScopeOwnerEvidence(item, output.scope));
+    if (retained.length > 0) output[domain] = retained;
+    else delete output[domain];
+  }
+  return output;
 }
 
 function syncRetainedBrainRefs(envelope) {
@@ -92,6 +120,10 @@ function normalizeRelevantDomains(value) {
 }
 
 function hasOwnerBackedDomain(envelope, domain) {
+  if (OPTIONAL_OWNER_BACKED_DOMAINS.has(domain)) {
+    const sanitized = sanitizeOwnerBackedOptionalDomains(envelope);
+    return Array.isArray(sanitized[domain]) && sanitized[domain].length > 0;
+  }
   const value = envelope?.[domain];
   if (Array.isArray(value)) return value.length > 0;
   if (value && typeof value === 'object') return Object.keys(value).length > 0;
@@ -129,7 +161,8 @@ export function resolvePurposeProfile(scopeKind, requested = 'auto', envelope = 
 
 export function applyPurposeProfile(envelope, options = {}) {
   if (!envelope || typeof envelope !== 'object') throw new Error('Purpose Context envelope is required');
-  const filtered = filterExplicitScopeRelationships(envelope).envelope;
+  const ownerBacked = sanitizeOwnerBackedOptionalDomains(envelope);
+  const filtered = filterExplicitScopeRelationships(ownerBacked).envelope;
   const profile = resolvePurposeProfile(
     filtered.scope_kind,
     options.profile ?? 'auto',

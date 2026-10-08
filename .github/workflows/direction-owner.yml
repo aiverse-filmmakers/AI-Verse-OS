@@ -48,6 +48,8 @@ jobs:
         run: node scripts/test-purpose-memory-history-boundary.mjs
       - name: Test Purpose Memory explicit bounded read gate
         run: node scripts/test-purpose-memory-history-read.mjs
+      - name: Test Purpose material-change classifier
+        run: node scripts/test-purpose-material-change-classifier.mjs
       - name: Verify strategic writers and readers carry the ownership gates
         shell: bash
         run: |
@@ -68,6 +70,7 @@ jobs:
           test -f scripts/purpose-data-current-state.mjs
           test -f scripts/purpose-memory-history-boundary.mjs
           test -f scripts/purpose-memory-history-read.mjs
+          test -f scripts/purpose-material-change-classifier.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

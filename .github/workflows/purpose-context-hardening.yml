@@ -1,0 +1,29 @@
+name: Purpose Context Hardening
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/purpose-*.mjs'
+      - 'scripts/test-purpose-context-hardening.mjs'
+      - '.github/workflows/purpose-context-hardening.yml'
+      - 'system/architecture/purpose-context.md'
+      - 'system/schemas/purpose-context.schema.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hardening:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run Purpose Context hardening proofs
+        run: node scripts/test-purpose-context-hardening.mjs

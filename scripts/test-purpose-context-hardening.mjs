@@ -145,4 +145,35 @@ function fileSnapshot(root) {
   }
 }
 
-process.stdout.write('Purpose Context hardening through Task 11.1.3: PASS\n');
+// Slice 11.1 Task 4: a stale generated projection/cache can never overrule a fresh canonical owner read.
+{
+  const root = makeRoot();
+  try {
+    const owner = path.join(root, 'operator', 'context', 'CURRENT.md');
+    const initial = run(root);
+    assert.equal(initial.current_state[0].statement, 'canonical owner state');
+
+    const cacheRoot = path.join(root, '.generated-purpose-cache');
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    fs.writeFileSync(path.join(cacheRoot, 'purpose-view.json'), JSON.stringify({
+      scope: 'operator',
+      provenance: { projection_owner: 'ai-verse-os', generated_at: '2000-01-01T00:00:00.000Z' },
+      current_state: [{ statement: 'STALE CACHE MUST LOSE' }],
+    }), 'utf8');
+
+    fs.writeFileSync(owner, [
+      '## Current priorities', '', '- protect canonical owner truth', '',
+      '## Current state', '', '- fresh canonical owner state v2', '',
+    ].join('\n'), 'utf8');
+
+    const fresh = run(root);
+    assert.equal(fresh.current_state[0].statement, 'fresh canonical owner state v2');
+    assert.doesNotMatch(JSON.stringify(fresh), /STALE CACHE MUST LOSE/);
+    assert.doesNotMatch(JSON.stringify(fresh), /canonical owner state"/);
+    assert.equal(fresh.provenance.projection_owner, 'ai-verse-os');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context hardening through Task 11.1.4: PASS\n');

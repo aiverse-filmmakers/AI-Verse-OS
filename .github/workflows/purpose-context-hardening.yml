@@ -9,6 +9,7 @@ on:
       - 'scripts/test-purpose-data-current-state.mjs'
       - 'scripts/test-purpose-data-source-descent.mjs'
       - 'scripts/test-purpose-memory-history-boundary.mjs'
+      - 'scripts/test-action-permission.mjs'
       - '.github/workflows/purpose-context-hardening.yml'
       - 'system/architecture/purpose-context.md'
       - 'system/schemas/purpose-context.schema.json'
@@ -39,3 +40,5 @@ jobs:
           node scripts/test-purpose-memory-history-boundary.mjs
       - name: Run exact-source permission descent proof
         run: node scripts/test-purpose-data-source-descent.mjs
+      - name: Run canonical action permission boundary
+        run: node scripts/test-action-permission.mjs

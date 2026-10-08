@@ -3,15 +3,17 @@ import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { applyFinalPurposeBudget } from './purpose-context-final-budget.mjs';
 
 const DEFAULT_MAX_BYTES = 16384;
+const OPTIONAL_DOMAIN_CAP = 64;
 const PROFILE_REQUESTS = new Set(['auto', 'basic', 'rich']);
 const RELATION_TOKENS = new Set([
   'addresses', 'serves', 'advances', 'blocks', 'executes', 'measures', 'affects', 'supersedes',
 ]);
-const OPTIONAL_OWNER_BACKED_DOMAINS = new Set(['risks']);
+const OPTIONAL_OWNER_BACKED_DOMAINS = new Set(['risks', 'team_resources']);
 const RICH_DOMAIN_KEYS = new Map([
   ['narratives', 'relevant_narrative_domain_present'],
   ['kpis', 'relevant_kpi_binding_present'],
   ['risks', 'relevant_risk_domain_present'],
+  ['team_resources', 'relevant_team_resource_domain_present'],
   ['current_state', 'relevant_rich_current_state_present'],
   ['recent_material_changes', 'relevant_material_change_context_present'],
 ]);
@@ -56,7 +58,9 @@ export function sanitizeOwnerBackedOptionalDomains(envelope) {
       delete output[domain];
       continue;
     }
-    const retained = output[domain].filter((item) => exactScopeOwnerEvidence(item, output.scope));
+    const retained = output[domain]
+      .filter((item) => exactScopeOwnerEvidence(item, output.scope))
+      .slice(0, OPTIONAL_DOMAIN_CAP);
     if (retained.length > 0) output[domain] = retained;
     else delete output[domain];
   }
@@ -175,6 +179,7 @@ export function applyPurposeProfile(envelope, options = {}) {
     delete output.narratives;
     delete output.kpis;
     delete output.risks;
+    delete output.team_resources;
   }
 
   output.provenance ??= {};

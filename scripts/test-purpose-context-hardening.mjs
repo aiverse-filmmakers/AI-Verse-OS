@@ -49,6 +49,22 @@ function normalized(value) {
   return copy;
 }
 
+function fileSnapshot(root) {
+  const entries = [];
+  function walk(dir) {
+    for (const name of fs.readdirSync(dir).sort()) {
+      const full = path.join(dir, name);
+      const rel = path.relative(root, full).split(path.sep).join('/');
+      const stat = fs.lstatSync(full);
+      if (stat.isDirectory()) walk(full);
+      else if (stat.isFile()) entries.push([rel, sha256(full)]);
+      else entries.push([rel, `special:${stat.mode}`]);
+    }
+  }
+  walk(root);
+  return entries;
+}
+
 // Slice 11.1 Task 1: deleting generated Purpose views/caches cannot delete or alter canonical state.
 {
   const root = makeRoot();
@@ -100,8 +116,6 @@ function normalized(value) {
     assert.equal(restartedProcess.current_state[0].statement, 'canonical owner state');
     assert.equal(secondRestart.provenance.projection_owner, 'ai-verse-os');
     assert.equal(sha256(owner), ownerHash);
-
-    // Every read above is a fresh child process. No restart-local state may be required to rebuild.
     assert.equal(fs.existsSync(path.join(root, '.aiverse', 'purpose.json')), false);
     assert.equal(fs.existsSync(path.join(root, 'PURPOSE.md')), false);
   } finally {
@@ -109,4 +123,26 @@ function normalized(value) {
   }
 }
 
-process.stdout.write('Purpose Context hardening through Task 11.1.2: PASS\n');
+// Slice 11.1 Task 3: repeated setup/restart cannot create duplicate Purpose state.
+{
+  const root = makeRoot();
+  try {
+    const beforeFiles = fileSnapshot(root);
+    const projections = [];
+    for (let index = 0; index < 8; index += 1) projections.push(run(root));
+    const afterFiles = fileSnapshot(root);
+
+    assert.deepEqual(afterFiles, beforeFiles, 'Purpose reads/restarts must not create or duplicate durable files');
+    for (const projection of projections.slice(1)) {
+      assert.deepEqual(normalized(projection), normalized(projections[0]));
+    }
+    assert.equal(projections[0].current_state.length, 1);
+    assert.equal(projections[0].current_state[0].statement, 'canonical owner state');
+    assert.equal(fs.existsSync(path.join(root, 'PURPOSE.md')), false);
+    assert.equal(fs.existsSync(path.join(root, '.aiverse', 'purpose.json')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context hardening through Task 11.1.3: PASS\n');

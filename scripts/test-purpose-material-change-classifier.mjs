@@ -7,6 +7,7 @@ import {
 } from './purpose-material-change-classifier.mjs';
 
 const scope = 'workspace:ai-verse';
+const osRef = (id) => ({ owner: 'ai-verse-os', scope, kind: 'event', id });
 const classified = classifyPurposeMaterialChanges(scope, [
   {
     scope,
@@ -27,6 +28,7 @@ const classified = classifyPurposeMaterialChanges(scope, [
     event: 'Goal moved from active to blocked',
     effect: 'Current execution can no longer advance Goal G until the dependency clears.',
     materiality: ['goal_status', 'blocker_state', 'blocker_state'],
+    source_refs: [osRef('goal-blocked-1')],
     raw_event: { must_not_cross: true },
   },
   {
@@ -35,6 +37,7 @@ const classified = classifyPurposeMaterialChanges(scope, [
     event: 'Priority order changed',
     effect: 'Initiative B now precedes Initiative A.',
     materiality: ['priority'],
+    source_refs: [osRef('priority-change-1')],
   },
   {
     scope,
@@ -42,6 +45,7 @@ const classified = classifyPurposeMaterialChanges(scope, [
     event: 'KPI crossed failure threshold',
     effect: 'The current strategy requires review before further scaling.',
     materiality: ['kpi_threshold', 'strategy_validity'],
+    source_refs: [osRef('kpi-threshold-1')],
   },
 ]);
 
@@ -57,6 +61,7 @@ assert.deepEqual(classified.changes.map((item) => item.event), [
   'Goal moved from active to blocked',
 ]);
 assert.deepEqual(classified.changes[2].materiality, ['blocker_state', 'goal_status']);
+assert.deepEqual(classified.changes[2].source_refs, [osRef('goal-blocked-1')]);
 assert.equal(Object.hasOwn(classified.changes[2], 'raw_event'), false);
 assert.equal(Object.hasOwn(classified.changes[0], 'payload'), false);
 
@@ -73,7 +78,7 @@ assert.deepEqual(MATERIALITY_DIMENSIONS, [
   'scope',
   'direction_ownership',
 ]);
-assert.deepEqual(PURPOSE_MATERIAL_CHANGE_LIMITS, { max_candidates: 64, max_changes: 20 });
+assert.deepEqual(PURPOSE_MATERIAL_CHANGE_LIMITS, { max_candidates: 64, max_changes: 20, max_source_refs: 8 });
 
 assert.throws(
   () => classifyPurposeMaterialChanges(scope, [{
@@ -103,6 +108,7 @@ const many = classifyPurposeMaterialChanges('operator', Array.from({ length: 21 
   event: `Material event ${index}`,
   effect: `Material effect ${index}`,
   materiality: ['risk'],
+  source_refs: [{ owner: 'ai-verse-os', scope: 'operator', kind: 'event', id: `risk-${index}` }],
 })));
 assert.equal(many.changes.length, 20);
 assert.equal(many.truncated, true);

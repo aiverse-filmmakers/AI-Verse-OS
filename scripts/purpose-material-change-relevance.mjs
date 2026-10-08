@@ -1,5 +1,7 @@
 const MATERIAL_CHANGE_SCHEMA_VERSION = 'purpose.material-changes.v1';
 const RELEVANCE_SECTIONS = Object.freeze(['goals', 'strategies', 'initiatives']);
+const RELEVANCE_TARGET_OWNERS = new Set(['ai-verse-os', 'ai-verse-brain']);
+const RELEVANCE_EFFECTS = new Set(['elevated', 'deprioritized', 'blocked', 'reconsider', 'invalidated', 'restored']);
 
 function invalid(message) {
   const error = new Error(message);
@@ -43,14 +45,30 @@ function buildTargetIndex(envelope) {
   return index;
 }
 
-function selectedRelevanceChanges(projection) {
+function validateAffectedRef(ref, scope, label) {
+  const key = canonicalRefKey(ref);
+  if (!key) invalid(`${label} must be a canonical strategic ref`);
+  if (!RELEVANCE_TARGET_OWNERS.has(ref.owner)) invalid(`${label} owner cannot be a current strategic relevance target`);
+  if (ref.scope !== scope) invalid(`${label} scope does not match Purpose Context scope`);
+  return key;
+}
+
+function selectedRelevanceChanges(scope, projection) {
   const selected = new Map();
-  for (const change of projection.changes) {
-    if (!Array.isArray(change?.affects) || !change.affects.length || typeof change.relevance_effect !== 'string') continue;
-    for (const ref of change.affects) {
-      const key = canonicalRefKey(ref);
-      if (!key) invalid('material-change affects must remain canonical');
-      if (!selected.has(key)) selected.set(key, { change, ref });
+  for (const [index, change] of projection.changes.entries()) {
+    if (!Array.isArray(change?.affects) || !change.affects.length) continue;
+    if (!RELEVANCE_EFFECTS.has(change.relevance_effect)) invalid(`material change ${index} has unsupported relevance_effect`);
+    if (!Array.isArray(change.materiality) || !change.materiality.length) invalid(`material change ${index} materiality is required`);
+    if (!Array.isArray(change.source_refs) || !change.source_refs.length) invalid(`material change ${index} source_refs are required`);
+    const occurredAt = Date.parse(change.occurred_at);
+    if (!Number.isFinite(occurredAt)) invalid(`material change ${index} occurred_at must be an owner timestamp`);
+
+    for (const [refIndex, ref] of change.affects.entries()) {
+      const key = validateAffectedRef(ref, scope, `material change ${index} affects[${refIndex}]`);
+      const current = selected.get(key);
+      if (!current || occurredAt > current.occurredAt) {
+        selected.set(key, { change, ref, occurredAt });
+      }
     }
   }
   return selected;
@@ -63,7 +81,7 @@ export function applyPurposeMaterialChangeRelevance(envelope, projection) {
 
   const output = structuredClone(envelope);
   const targetIndex = buildTargetIndex(output);
-  const selected = selectedRelevanceChanges(projection);
+  const selected = selectedRelevanceChanges(envelope.scope, projection);
   const unmatched = [];
   let applied = 0;
 
@@ -85,6 +103,7 @@ export function applyPurposeMaterialChangeRelevance(envelope, projection) {
     applied += 1;
   }
 
+  unmatched.sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
   output.recent_material_changes = structuredClone(projection.changes);
   output.section_states ??= {};
   output.section_states.material_change_relevance = {

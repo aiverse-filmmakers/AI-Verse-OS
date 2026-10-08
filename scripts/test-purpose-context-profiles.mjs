@@ -65,6 +65,11 @@ const shell = {
     statement: 'Owner-backed risk',
     canonical_ref: { owner: 'ai-verse-brain', scope: 'workspace:client-a', kind: 'risk', id: 'risk-1', version: '7' },
   }],
+  team_resources: [{
+    id: 'resource-1',
+    statement: 'Owner-backed team/resource fact',
+    canonical_ref: { owner: 'ai-verse-data', scope: 'workspace:client-a', kind: 'resource', id: 'resource-1', version: '3' },
+  }],
   current_state: [{ id: 'state-1' }],
   provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-07T00:00:00Z', owner_reads: [] },
 };
@@ -77,6 +82,9 @@ assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['kpis']), {
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['risks']), {
   requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_risk_domain_present'],
+});
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['team_resources']), {
+  requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_team_resource_domain_present'],
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'basic', shell, ['kpis']), {
   requested: 'basic', resolved: 'workspace_basic', reasons: ['explicit_profile_request'],
@@ -106,11 +114,31 @@ const malformedRiskRefs = structuredClone(shell);
 malformedRiskRefs.risks = [{ id: 'bad-risk', source_refs: [{ owner: 'ai-verse-brain', scope: 'workspace:client-a' }] }];
 assert.equal('risks' in sanitizeOwnerBackedOptionalDomains(malformedRiskRefs), false);
 
+const unbackedResources = structuredClone(shell);
+unbackedResources.team_resources = [{ id: 'invented-person', role: 'designer' }];
+assert.equal('team_resources' in sanitizeOwnerBackedOptionalDomains(unbackedResources), false);
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', unbackedResources, ['team_resources']), {
+  requested: 'auto', resolved: 'workspace_basic', reasons: ['workspace_default_basic'],
+});
+const crossScopeResources = structuredClone(shell);
+crossScopeResources.team_resources = [{
+  id: 'other-workspace-resource',
+  source_refs: [{ owner: 'ai-verse-data', scope: 'workspace:client-b', kind: 'resource', id: 'resource-b' }],
+}];
+assert.equal('team_resources' in sanitizeOwnerBackedOptionalDomains(crossScopeResources), false);
+const oversizedResources = structuredClone(shell);
+oversizedResources.team_resources = Array.from({ length: 80 }, (_, index) => ({
+  id: `resource-${index}`,
+  canonical_ref: { owner: 'ai-verse-data', scope: 'workspace:client-a', kind: 'resource', id: `resource-${index}` },
+}));
+assert.equal(sanitizeOwnerBackedOptionalDomains(oversizedResources).team_resources.length, 64);
+
 const basic = applyPurposeProfile(shell, { profile: 'basic' });
 assert.equal(basic.provenance.profile.resolved, 'workspace_basic');
 assert.equal('narratives' in basic, false);
 assert.equal('kpis' in basic, false);
 assert.equal('risks' in basic, false);
+assert.equal('team_resources' in basic, false);
 assert.deepEqual(basic.goals, shell.goals);
 assert.deepEqual(basic.current_state, shell.current_state);
 
@@ -118,9 +146,10 @@ const rich = applyPurposeProfile(shell, { profile: 'rich' });
 assert.equal(rich.provenance.profile.resolved, 'workspace_rich');
 assert.deepEqual(rich.kpis, shell.kpis);
 assert.deepEqual(rich.risks, shell.risks);
-const explicitRichUnbacked = applyPurposeProfile(unbackedRisks, { profile: 'rich' });
+assert.deepEqual(rich.team_resources, shell.team_resources);
+const explicitRichUnbacked = applyPurposeProfile(unbackedResources, { profile: 'rich' });
 assert.equal(explicitRichUnbacked.provenance.profile.resolved, 'workspace_rich');
-assert.equal('risks' in explicitRichUnbacked, false);
+assert.equal('team_resources' in explicitRichUnbacked, false);
 
 const root = makeRoot();
 try {
@@ -138,18 +167,18 @@ try {
   assert.equal('narratives' in projection, false);
   assert.equal('kpis' in projection, false);
   assert.equal('risks' in projection, false);
+  assert.equal('team_resources' in projection, false);
 
   const explicitRich = composeProfiledPurposeContext(root, 'workspace:client-a', {
     profile: 'rich',
     now: '2026-10-07T00:00:00Z',
   });
   assert.equal(explicitRich.provenance.profile.resolved, 'workspace_rich');
-  // No current canonical owner exposes risks, so rich mode omits them cleanly.
+  // No current canonical owner exposes these optional domains, so rich mode omits them cleanly.
   assert.equal('risks' in explicitRich, false);
+  assert.equal('team_resources' in explicitRich, false);
 
   // Reading client-a must never enumerate or ingest sibling client-b state.
-  // The assertion is performed over the complete rich projection to catch leaks
-  // through semantics, current state, provenance, or diagnostics.
   const serializedA = JSON.stringify(explicitRich);
   assert.equal(serializedA.includes('NEVER_LEAK_CLIENT_B'), false);
   assert.equal(serializedA.includes('workspace:client-b'), false);

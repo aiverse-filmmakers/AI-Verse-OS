@@ -10,6 +10,7 @@ import {
 
 const expected = [
   'recent_material_changes',
+  'team_resources',
   'risks',
   'kpis',
   'narratives',
@@ -37,6 +38,10 @@ assert.equal(purposeTruncationRank('unknown'), -1);
 assert.ok(
   purposeTruncationRank('recent_material_changes') < purposeTruncationRank('trajectory'),
   'optional material-change context must be discarded before trajectory',
+);
+assert.ok(
+  purposeTruncationRank('team_resources') < purposeTruncationRank('purpose.missions'),
+  'optional team/resource context must be discarded before mission',
 );
 assert.ok(
   purposeTruncationRank('narratives') < purposeTruncationRank('purpose.missions'),

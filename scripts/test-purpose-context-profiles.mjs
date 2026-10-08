@@ -70,6 +70,11 @@ const shell = {
     statement: 'Owner-backed team/resource fact',
     canonical_ref: { owner: 'ai-verse-data', scope: 'workspace:client-a', kind: 'resource', id: 'resource-1', version: '3' },
   }],
+  customers: [{
+    id: 'customer-1',
+    statement: 'Owner-backed customer fact',
+    canonical_ref: { owner: 'ai-verse-data', scope: 'workspace:client-a', kind: 'customer', id: 'customer-1', version: '2' },
+  }],
   current_state: [{ id: 'state-1' }],
   provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-07T00:00:00Z', owner_reads: [] },
 };
@@ -85,6 +90,9 @@ assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['risks']), {
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['team_resources']), {
   requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_team_resource_domain_present'],
+});
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', shell, ['customers']), {
+  requested: 'auto', resolved: 'workspace_rich', reasons: ['relevant_customer_domain_present'],
 });
 assert.deepEqual(resolvePurposeProfile('workspace', 'basic', shell, ['kpis']), {
   requested: 'basic', resolved: 'workspace_basic', reasons: ['explicit_profile_request'],
@@ -133,12 +141,32 @@ oversizedResources.team_resources = Array.from({ length: 80 }, (_, index) => ({
 }));
 assert.equal(sanitizeOwnerBackedOptionalDomains(oversizedResources).team_resources.length, 64);
 
+const unbackedCustomers = structuredClone(shell);
+unbackedCustomers.customers = [{ id: 'guessed-customer', name: 'Unverified account' }];
+assert.equal('customers' in sanitizeOwnerBackedOptionalDomains(unbackedCustomers), false);
+assert.deepEqual(resolvePurposeProfile('workspace', 'auto', unbackedCustomers, ['customers']), {
+  requested: 'auto', resolved: 'workspace_basic', reasons: ['workspace_default_basic'],
+});
+const crossScopeCustomers = structuredClone(shell);
+crossScopeCustomers.customers = [{
+  id: 'other-workspace-customer',
+  source_refs: [{ owner: 'ai-verse-data', scope: 'workspace:client-b', kind: 'customer', id: 'customer-b' }],
+}];
+assert.equal('customers' in sanitizeOwnerBackedOptionalDomains(crossScopeCustomers), false);
+const oversizedCustomers = structuredClone(shell);
+oversizedCustomers.customers = Array.from({ length: 80 }, (_, index) => ({
+  id: `customer-${index}`,
+  canonical_ref: { owner: 'ai-verse-data', scope: 'workspace:client-a', kind: 'customer', id: `customer-${index}` },
+}));
+assert.equal(sanitizeOwnerBackedOptionalDomains(oversizedCustomers).customers.length, 64);
+
 const basic = applyPurposeProfile(shell, { profile: 'basic' });
 assert.equal(basic.provenance.profile.resolved, 'workspace_basic');
 assert.equal('narratives' in basic, false);
 assert.equal('kpis' in basic, false);
 assert.equal('risks' in basic, false);
 assert.equal('team_resources' in basic, false);
+assert.equal('customers' in basic, false);
 assert.deepEqual(basic.goals, shell.goals);
 assert.deepEqual(basic.current_state, shell.current_state);
 
@@ -147,9 +175,10 @@ assert.equal(rich.provenance.profile.resolved, 'workspace_rich');
 assert.deepEqual(rich.kpis, shell.kpis);
 assert.deepEqual(rich.risks, shell.risks);
 assert.deepEqual(rich.team_resources, shell.team_resources);
-const explicitRichUnbacked = applyPurposeProfile(unbackedResources, { profile: 'rich' });
+assert.deepEqual(rich.customers, shell.customers);
+const explicitRichUnbacked = applyPurposeProfile(unbackedCustomers, { profile: 'rich' });
 assert.equal(explicitRichUnbacked.provenance.profile.resolved, 'workspace_rich');
-assert.equal('team_resources' in explicitRichUnbacked, false);
+assert.equal('customers' in explicitRichUnbacked, false);
 
 const root = makeRoot();
 try {
@@ -168,6 +197,7 @@ try {
   assert.equal('kpis' in projection, false);
   assert.equal('risks' in projection, false);
   assert.equal('team_resources' in projection, false);
+  assert.equal('customers' in projection, false);
 
   const explicitRich = composeProfiledPurposeContext(root, 'workspace:client-a', {
     profile: 'rich',
@@ -177,6 +207,7 @@ try {
   // No current canonical owner exposes these optional domains, so rich mode omits them cleanly.
   assert.equal('risks' in explicitRich, false);
   assert.equal('team_resources' in explicitRich, false);
+  assert.equal('customers' in explicitRich, false);
 
   // Reading client-a must never enumerate or ingest sibling client-b state.
   const serializedA = JSON.stringify(explicitRich);

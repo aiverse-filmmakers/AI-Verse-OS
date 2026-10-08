@@ -6,6 +6,7 @@ export const PURPOSE_BUDGET_POLICY_VERSION = 'os.purpose-budget-policy.v1';
 export const PURPOSE_TRUNCATION_PRIORITY = Object.freeze([
   'recent_material_changes',
   'team_resources',
+  'customers',
   'risks',
   'kpis',
   'narratives',

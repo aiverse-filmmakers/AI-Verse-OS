@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
+import { evaluateActionPermission } from './action-permission.mjs';
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
@@ -33,6 +35,13 @@ function addWorkspace(root, id, secret) {
   ].join('\n'), 'utf8');
 }
 
+function writeOwnership(root, value, raw = false) {
+  const marker = path.join(root, '.aiverse', 'direction', 'ownership.json');
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, raw ? String(value) : JSON.stringify(value), 'utf8');
+  return marker;
+}
+
 function run(root, scope) {
   const result = spawnSync(process.execPath, [cli, 'read', '--root', root, '--scope', scope], {
     cwd: repoRoot,
@@ -41,6 +50,23 @@ function run(root, scope) {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
   return JSON.parse(result.stdout);
+}
+
+function actionRequest(actionClass, scope = 'operator') {
+  return {
+    request_id: `purpose-security-${actionClass}`,
+    action_class: actionClass,
+    scope,
+    operation: 'test',
+    parameters: {},
+    idempotency_key: `purpose-security-${actionClass}`,
+    in_scope: true,
+    within_budget: true,
+    reversible: true,
+    reason: 'Purpose must not grant action authority',
+    created_at: '2026-10-09T00:00:00Z',
+    request_fingerprint: crypto.createHash('sha256').update(`${actionClass}|${scope}|purpose-security`).digest('hex'),
+  };
 }
 
 // Slice 11.2 Test 1: operator scope cannot descend into workspace-owned context.
@@ -61,9 +87,7 @@ function run(root, scope) {
         assert.doesNotMatch(String(ref), /workspace:alpha|workspace:beta|workspaces\/alpha|workspaces\/beta/);
       }
     }
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
 // Slice 11.2 Test 2: workspace A cannot leak workspace B and vice versa.
@@ -72,12 +96,10 @@ function run(root, scope) {
   try {
     addWorkspace(root, 'alpha', 'ALPHA PRIVATE');
     addWorkspace(root, 'beta', 'BETA PRIVATE');
-
     const alpha = run(root, 'workspace:alpha');
     const beta = run(root, 'workspace:beta');
     const alphaJson = JSON.stringify(alpha);
     const betaJson = JSON.stringify(beta);
-
     assert.equal(alpha.scope, 'workspace:alpha');
     assert.equal(beta.scope, 'workspace:beta');
     assert.match(alphaJson, /ALPHA PRIVATE OBJECTIVE|ALPHA PRIVATE STATE/);
@@ -86,16 +108,9 @@ function run(root, scope) {
     assert.doesNotMatch(betaJson, /ALPHA PRIVATE/);
     assert.doesNotMatch(alphaJson, /OPERATOR ONLY/);
     assert.doesNotMatch(betaJson, /OPERATOR ONLY/);
-
-    for (const read of alpha.provenance.owner_reads ?? []) {
-      for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:beta|workspaces\/beta/);
-    }
-    for (const read of beta.provenance.owner_reads ?? []) {
-      for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:alpha|workspaces\/alpha/);
-    }
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+    for (const read of alpha.provenance.owner_reads ?? []) for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:beta|workspaces\/beta/);
+    for (const read of beta.provenance.owner_reads ?? []) for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:alpha|workspaces\/alpha/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
 // Slice 11.2 Test 3: path traversal and workspace symlink redirects fail closed before outside data can be projected.
@@ -104,30 +119,84 @@ function run(root, scope) {
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-security-outside-'));
   try {
     fs.mkdirSync(path.join(root, 'workspaces'), { recursive: true });
-
-    assert.throws(
-      () => composeProfiledPurposeContext(root, 'workspace:../escape', { now: '2026-10-09T00:00:00Z' }),
-      /invalid scope/,
-    );
-
+    assert.throws(() => composeProfiledPurposeContext(root, 'workspace:../escape', { now: '2026-10-09T00:00:00Z' }), /invalid scope/);
     fs.mkdirSync(path.join(outside, 'context'), { recursive: true });
     fs.writeFileSync(path.join(outside, 'WORKSPACE.yaml'), 'schema_version: "2.0"\nid: evil\n', 'utf8');
-    fs.writeFileSync(path.join(outside, 'context', 'CURRENT.md'), [
-      '## Objective', '', 'OUTSIDE SECRET OBJECTIVE', '',
-      '## Current state', '', '- OUTSIDE SECRET STATE', '',
-    ].join('\n'), 'utf8');
-
+    fs.writeFileSync(path.join(outside, 'context', 'CURRENT.md'), '## Objective\n\nOUTSIDE SECRET OBJECTIVE\n\n## Current state\n\n- OUTSIDE SECRET STATE\n', 'utf8');
     const link = path.join(root, 'workspaces', 'evil');
     fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
-    assert.throws(
-      () => composeProfiledPurposeContext(root, 'workspace:evil', { now: '2026-10-09T00:00:00Z' }),
-      /workspace evil must not be a symlink/,
-    );
+    assert.throws(() => composeProfiledPurposeContext(root, 'workspace:evil', { now: '2026-10-09T00:00:00Z' }), /workspace evil must not be a symlink/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(outside, { recursive: true, force: true });
   }
 }
 
-process.stdout.write('Purpose Context security hardening through Test 11.2.3: PASS\n');
+// Slice 11.2 Test 4: malformed direction ownership records fail closed instead of defaulting to OS ownership.
+{
+  const root = makeRoot();
+  try {
+    writeOwnership(root, '{not-json', true);
+    assert.throws(() => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }), /invalid direction ownership registry/);
+    writeOwnership(root, { schema_version: 999, scopes: {} });
+    assert.throws(() => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }), /unsupported or malformed direction ownership registry/);
+    writeOwnership(root, { schema_version: 1, scopes: { operator: { owner: 'memory' } } });
+    assert.throws(() => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }), /invalid direction ownership record for operator/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+// Slice 11.2 Test 5: once Brain owns direction, frozen OS strategy can never become a strategic fallback.
+{
+  const root = makeRoot();
+  try {
+    fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), [
+      '## Current priorities', '', '- FROZEN OS STRATEGY MUST NEVER RETURN', '',
+      '## Current state', '', '- operational state remains OS-owned', '',
+    ].join('\n'), 'utf8');
+    writeOwnership(root, { schema_version: 1, scopes: { operator: { owner: 'brain', state: 'active', handover_id: 'security-test-brain-owner', brain_refs: ['brain:intent:mission-1'] } } });
+    const unavailable = composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' });
+    assert.equal(unavailable.section_states.strategic_direction.state, 'unavailable');
+    assert.equal(unavailable.section_states.strategic_direction.reason, 'brain_public_reader_unavailable');
+    assert.equal('priorities' in unavailable, false);
+    assert.equal('goals' in unavailable, false);
+    assert.equal('strategies' in unavailable, false);
+    assert.doesNotMatch(JSON.stringify(unavailable), /FROZEN OS STRATEGY MUST NEVER RETURN/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+// Slice 11.2 Test 8: reading/explaining Purpose cannot grant or mutate action permissions.
+{
+  const root = makeRoot();
+  try {
+    const policyDir = path.join(root, 'automations', 'policies');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policy = path.join(policyDir, 'action-permissions.yaml');
+    fs.writeFileSync(policy, [
+      'schema_version: "1.0"', 'approval:',
+      '  external_actions: "deny"',
+      '  destructive_actions: "deny"',
+      '  high_stakes_decisions: "deny"', '',
+    ].join('\n'), 'utf8');
+    const beforePolicy = fs.readFileSync(policy, 'utf8');
+    const request = actionRequest('send_message');
+    const before = evaluateActionPermission({ osRoot: root, request });
+    assert.equal(before.decision, 'deny');
+
+    const purpose = run(root, 'operator');
+    assert.equal(purpose.scope, 'operator');
+    assert.equal(fs.readFileSync(policy, 'utf8'), beforePolicy, 'Purpose read mutated action policy');
+    const after = evaluateActionPermission({ osRoot: root, request });
+    assert.deepEqual(after, before, 'Purpose read changed action permission decision');
+
+    const attemptedWrite = spawnSync(process.execPath, [cli, 'write', '--root', root, '--scope', 'operator'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    assert.equal(attemptedWrite.status, 2);
+    assert.match(attemptedWrite.stderr, /unknown command: write/);
+    assert.equal(fs.readFileSync(policy, 'utf8'), beforePolicy, 'unsupported Purpose write changed action policy');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+process.stdout.write('Purpose Context security hardening through Test 11.2.8: PASS\n');

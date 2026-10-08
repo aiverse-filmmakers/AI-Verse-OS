@@ -79,7 +79,13 @@ try {
   function readExactSource(ref, sourceProvenance) {
     assert.deepEqual(Object.keys(ref).sort(), ['entity', 'field', 'owner', 'recordId', 'spaceId']);
     assert.equal(ref.owner, 'ai-verse-data');
-    if (sourceProvenance) assert.equal(sourceProvenance.scope.workspaceId, 'film');
+    if (sourceProvenance) {
+      if (sourceProvenance.scope?.workspaceId !== 'film') throw new Error('owner permission scope denied');
+      if (sourceProvenance.authorization?.mode !== 'host-bound') throw new Error('owner authorization mode denied');
+      if (!sourceProvenance.authorization?.capabilityRefs?.includes('data:metrics:read')) {
+        throw new Error('owner capability denied');
+      }
+    }
     return ownerEvidence.get(refKey(ref));
   }
 
@@ -115,12 +121,25 @@ try {
   const siblingRecord = { ...countRef, recordId: 'today-copy' };
   assert.equal(readExactSource(siblingRecord, current[0].source_provenance), undefined, 'sibling record resolved unexpectedly');
 
+  assert.throws(
+    () => readExactSource(countRef, { ...current[0].source_provenance, scope: { workspaceId: 'other' } }),
+    /owner permission scope denied/,
+  );
+  assert.throws(
+    () => readExactSource(countRef, { ...current[0].source_provenance, authorization: { mode: 'host-bound', capabilityRefs: [] } }),
+    /owner capability denied/,
+  );
+  assert.throws(
+    () => readExactSource(countRef, { ...current[0].source_provenance, authorization: { mode: 'unbound', capabilityRefs: ['data:metrics:read'] } }),
+    /owner authorization mode denied/,
+  );
+
   const serialized = JSON.stringify(envelope);
   assert.equal(serialized.includes('ownerEvidence'), false);
   assert.equal(serialized.includes('today-copy'), false);
   assert.equal(serialized.includes('count-prefix'), false);
 
-  process.stdout.write('Purpose Data exact-source descent: PASS\n');
+  process.stdout.write('Purpose Data exact-source descent with owner permissions: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

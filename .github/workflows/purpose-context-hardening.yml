@@ -6,6 +6,10 @@ on:
       - 'scripts/purpose-*.mjs'
       - 'scripts/test-purpose-context-hardening.mjs'
       - 'scripts/test-purpose-context-security-hardening.mjs'
+      - 'scripts/test-purpose-data-current-state.mjs'
+      - 'scripts/test-purpose-data-source-descent.mjs'
+      - 'scripts/test-purpose-memory-history-boundary.mjs'
+      - 'scripts/test-action-permission.mjs'
       - '.github/workflows/purpose-context-hardening.yml'
       - 'system/architecture/purpose-context.md'
       - 'system/schemas/purpose-context.schema.json'
@@ -30,3 +34,11 @@ jobs:
         run: node scripts/test-purpose-context-hardening.mjs
       - name: Run Purpose Context security hardening proofs
         run: node scripts/test-purpose-context-security-hardening.mjs
+      - name: Run Data and Memory scope boundary proofs
+        run: |
+          node scripts/test-purpose-data-current-state.mjs
+          node scripts/test-purpose-memory-history-boundary.mjs
+      - name: Run exact-source permission descent proof
+        run: node scripts/test-purpose-data-source-descent.mjs
+      - name: Run canonical action permission boundary
+        run: node scripts/test-action-permission.mjs

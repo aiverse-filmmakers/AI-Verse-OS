@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
 
 const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptsDir, '..');
@@ -97,4 +98,36 @@ function run(root, scope) {
   }
 }
 
-process.stdout.write('Purpose Context security hardening through Test 11.2.2: PASS\n');
+// Slice 11.2 Test 3: path traversal and workspace symlink redirects fail closed before outside data can be projected.
+{
+  const root = makeRoot();
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-security-outside-'));
+  try {
+    fs.mkdirSync(path.join(root, 'workspaces'), { recursive: true });
+
+    assert.throws(
+      () => composeProfiledPurposeContext(root, 'workspace:../escape', { now: '2026-10-09T00:00:00Z' }),
+      /invalid scope/,
+    );
+
+    fs.mkdirSync(path.join(outside, 'context'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'WORKSPACE.yaml'), 'schema_version: "2.0"\nid: evil\n', 'utf8');
+    fs.writeFileSync(path.join(outside, 'context', 'CURRENT.md'), [
+      '## Objective', '', 'OUTSIDE SECRET OBJECTIVE', '',
+      '## Current state', '', '- OUTSIDE SECRET STATE', '',
+    ].join('\n'), 'utf8');
+
+    const link = path.join(root, 'workspaces', 'evil');
+    fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.throws(
+      () => composeProfiledPurposeContext(root, 'workspace:evil', { now: '2026-10-09T00:00:00Z' }),
+      /workspace evil must not be a symlink/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context security hardening through Test 11.2.3: PASS\n');

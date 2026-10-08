@@ -163,4 +163,36 @@ function run(root, scope) {
   }
 }
 
-process.stdout.write('Purpose Context security hardening through Test 11.2.4: PASS\n');
+// Slice 11.2 Test 5: once Brain owns direction, frozen OS strategy can never become a strategic fallback.
+{
+  const root = makeRoot();
+  try {
+    fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), [
+      '## Current priorities', '', '- FROZEN OS STRATEGY MUST NEVER RETURN', '',
+      '## Current state', '', '- operational state remains OS-owned', '',
+    ].join('\n'), 'utf8');
+    writeOwnership(root, {
+      schema_version: 1,
+      scopes: {
+        operator: {
+          owner: 'brain',
+          state: 'active',
+          handover_id: 'security-test-brain-owner',
+          brain_refs: ['brain:intent:mission-1'],
+        },
+      },
+    });
+
+    const unavailable = composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' });
+    assert.equal(unavailable.section_states.strategic_direction.state, 'unavailable');
+    assert.equal(unavailable.section_states.strategic_direction.reason, 'brain_public_reader_unavailable');
+    assert.equal('priorities' in unavailable, false);
+    assert.equal('goals' in unavailable, false);
+    assert.equal('strategies' in unavailable, false);
+    assert.doesNotMatch(JSON.stringify(unavailable), /FROZEN OS STRATEGY MUST NEVER RETURN/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context security hardening through Test 11.2.5: PASS\n');

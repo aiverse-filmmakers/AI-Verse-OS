@@ -33,6 +33,13 @@ function addWorkspace(root, id, secret) {
   ].join('\n'), 'utf8');
 }
 
+function writeOwnership(root, value, raw = false) {
+  const marker = path.join(root, '.aiverse', 'direction', 'ownership.json');
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, raw ? String(value) : JSON.stringify(value), 'utf8');
+  return marker;
+}
+
 function run(root, scope) {
   const result = spawnSync(process.execPath, [cli, 'read', '--root', root, '--scope', scope], {
     cwd: repoRoot,
@@ -130,4 +137,30 @@ function run(root, scope) {
   }
 }
 
-process.stdout.write('Purpose Context security hardening through Test 11.2.3: PASS\n');
+// Slice 11.2 Test 4: malformed direction ownership records fail closed instead of defaulting to OS ownership.
+{
+  const root = makeRoot();
+  try {
+    writeOwnership(root, '{not-json', true);
+    assert.throws(
+      () => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }),
+      /invalid direction ownership registry/,
+    );
+
+    writeOwnership(root, { schema_version: 999, scopes: {} });
+    assert.throws(
+      () => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }),
+      /unsupported or malformed direction ownership registry/,
+    );
+
+    writeOwnership(root, { schema_version: 1, scopes: { operator: { owner: 'memory' } } });
+    assert.throws(
+      () => composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T00:00:00Z' }),
+      /invalid direction ownership record for operator/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context security hardening through Test 11.2.4: PASS\n');

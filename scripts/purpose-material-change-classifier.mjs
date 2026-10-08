@@ -2,6 +2,7 @@ const MATERIAL_CHANGE_SCHEMA_VERSION = 'purpose.material-changes.v1';
 const MAX_CANDIDATES = 64;
 const MAX_CHANGES = 20;
 const MAX_SOURCE_REFS = 8;
+const MAX_AFFECTS_REFS = 8;
 
 const MATERIALITY_DIMENSIONS = Object.freeze([
   'goal_status',
@@ -18,6 +19,16 @@ const MATERIALITY_DIMENSIONS = Object.freeze([
 ]);
 const MATERIALITY_SET = new Set(MATERIALITY_DIMENSIONS);
 const CANONICAL_REF_OWNERS = new Set(['ai-verse-os', 'ai-verse-brain', 'ai-verse-memory']);
+const RELEVANCE_TARGET_OWNERS = new Set(['ai-verse-os', 'ai-verse-brain']);
+const RELEVANCE_EFFECTS = Object.freeze([
+  'elevated',
+  'deprioritized',
+  'blocked',
+  'reconsider',
+  'invalidated',
+  'restored',
+]);
+const RELEVANCE_EFFECT_SET = new Set(RELEVANCE_EFFECTS);
 
 function invalid(message) {
   const error = new Error(message);
@@ -91,6 +102,21 @@ function normalizeCanonicalOwnerRef(ref, scope, label) {
   return version ? { owner, scope: refScope, kind, id, version } : { owner, scope: refScope, kind, id };
 }
 
+function normalizeRelevanceTargetRef(ref, scope, label) {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref)) invalid(`${label} must be an object`);
+  const owner = requireString(ref.owner, `${label}.owner`);
+  if (!RELEVANCE_TARGET_OWNERS.has(owner)) {
+    invalid(`${label}.owner ${owner} cannot be a current strategic relevance target`);
+  }
+  const refScope = requireString(ref.scope, `${label}.scope`);
+  if (refScope !== scope) invalid(`${label}.scope does not match Purpose scope`);
+  const kind = requireString(ref.kind, `${label}.kind`);
+  const id = requireString(ref.id, `${label}.id`);
+  let version;
+  if (ref.version !== undefined) version = requireString(ref.version, `${label}.version`);
+  return version ? { owner, scope: refScope, kind, id, version } : { owner, scope: refScope, kind, id };
+}
+
 function normalizeDataOwnerRef(ref, scope, label) {
   if (!scope.startsWith('workspace:')) invalid(`${label} cannot use ai-verse-data without a workspace Data scope contract`);
   const workspaceId = scope.slice('workspace:'.length);
@@ -128,11 +154,36 @@ function normalizeSourceRefs(value, scope, index) {
   return [...refs.values()].sort((a, b) => sourceRefKey(a).localeCompare(sourceRefKey(b)));
 }
 
+function normalizeAffects(value, scope, index) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) invalid(`candidates[${index}].affects must be an array`);
+  if (value.length > MAX_AFFECTS_REFS) invalid(`candidates[${index}].affects exceed hard cap ${MAX_AFFECTS_REFS}`);
+  const refs = new Map();
+  for (const [refIndex, raw] of value.entries()) {
+    const ref = normalizeRelevanceTargetRef(raw, scope, `candidates[${index}].affects[${refIndex}]`);
+    const key = canonicalRefKey(ref);
+    if (!refs.has(key)) refs.set(key, ref);
+  }
+  return [...refs.values()].sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
+}
+
+function normalizeRelevanceEffect(value, affects, index) {
+  if (affects.length === 0) {
+    if (value !== undefined && value !== null) invalid(`candidates[${index}].relevance_effect requires at least one affects ref`);
+    return null;
+  }
+  const effect = requireString(value, `candidates[${index}].relevance_effect`);
+  if (!RELEVANCE_EFFECT_SET.has(effect)) invalid(`candidates[${index}].relevance_effect ${effect} is unsupported`);
+  return effect;
+}
+
 function compareChanges(a, b) {
   const time = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);
   if (time !== 0) return time;
   const dimensions = a.materiality.join('\u0000').localeCompare(b.materiality.join('\u0000'));
   if (dimensions !== 0) return dimensions;
+  const affects = (a.affects ?? []).map(canonicalRefKey).join('\u0001').localeCompare((b.affects ?? []).map(canonicalRefKey).join('\u0001'));
+  if (affects !== 0) return affects;
   const refs = a.source_refs.map(sourceRefKey).join('\u0001').localeCompare(b.source_refs.map(sourceRefKey).join('\u0001'));
   if (refs !== 0) return refs;
   const event = a.event.localeCompare(b.event);
@@ -163,14 +214,21 @@ export function classifyPurposeMaterialChanges(scope, candidates = []) {
       continue;
     }
 
-    changes.push({
+    const affects = normalizeAffects(candidate.affects, expectedScope, index);
+    const relevanceEffect = normalizeRelevanceEffect(candidate.relevance_effect, affects, index);
+    const change = {
       kind: 'material_change',
       occurred_at: validateTimestamp(candidate.occurred_at, `candidates[${index}].occurred_at`),
       event: requireString(candidate.event, `candidates[${index}].event`),
       effect: requireString(candidate.effect, `candidates[${index}].effect`),
       materiality,
       source_refs: normalizeSourceRefs(candidate.source_refs, expectedScope, index),
-    });
+    };
+    if (affects.length) {
+      change.affects = affects;
+      change.relevance_effect = relevanceEffect;
+    }
+    changes.push(change);
   }
 
   changes.sort(compareChanges);
@@ -189,6 +247,7 @@ export const PURPOSE_MATERIAL_CHANGE_LIMITS = Object.freeze({
   max_candidates: MAX_CANDIDATES,
   max_changes: MAX_CHANGES,
   max_source_refs: MAX_SOURCE_REFS,
+  max_affects_refs: MAX_AFFECTS_REFS,
 });
 
-export { MATERIAL_CHANGE_SCHEMA_VERSION, MATERIALITY_DIMENSIONS };
+export { MATERIAL_CHANGE_SCHEMA_VERSION, MATERIALITY_DIMENSIONS, RELEVANCE_EFFECTS };

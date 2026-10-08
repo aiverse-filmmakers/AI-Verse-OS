@@ -78,7 +78,12 @@ assert.deepEqual(MATERIALITY_DIMENSIONS, [
   'scope',
   'direction_ownership',
 ]);
-assert.deepEqual(PURPOSE_MATERIAL_CHANGE_LIMITS, { max_candidates: 64, max_changes: 20, max_source_refs: 8 });
+assert.deepEqual(PURPOSE_MATERIAL_CHANGE_LIMITS, {
+  max_candidates: 64,
+  max_changes: 20,
+  max_source_refs: 8,
+  max_affects_refs: 8,
+});
 
 assert.throws(
   () => classifyPurposeMaterialChanges(scope, [{

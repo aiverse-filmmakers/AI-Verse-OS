@@ -36,6 +36,8 @@ jobs:
         run: node scripts/test-purpose-context-rebuild.mjs
       - name: Test Purpose Context workspace profile behavior
         run: node scripts/test-purpose-context-profiles.mjs
+      - name: Test Purpose Context optional owner-backed rich domains
+        run: node scripts/test-purpose-context-rich-domains.mjs
       - name: Test Purpose Context explicit scope relationships
         run: node scripts/test-purpose-context-relationships.mjs
       - name: Test Purpose Context workspace boundary attacks
@@ -86,6 +88,8 @@ jobs:
           test -f scripts/test-purpose-context-budget-policy.mjs
           test -f scripts/purpose-context-final-budget.mjs
           test -f scripts/test-purpose-context-final-budget.mjs
+          test -f scripts/purpose-context-rich-domains.mjs
+          test -f scripts/test-purpose-context-rich-domains.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

@@ -8,6 +8,7 @@ export const PURPOSE_TRUNCATION_PRIORITY = Object.freeze([
   'team_resources',
   'customers',
   'infrastructure',
+  'budget_cost',
   'risks',
   'kpis',
   'narratives',

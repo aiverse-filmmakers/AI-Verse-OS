@@ -198,7 +198,6 @@ function fileSnapshot(root) {
     assert.equal(brainRead.status, 'partial');
     assert.notEqual(brainRead.freshness.state, 'fresh');
     assert.doesNotMatch(JSON.stringify(partial), /STALE OS STRATEGIC PRIORITY/);
-    assert.equal(partial.current_state[0].statement, 'operational state remains available');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 

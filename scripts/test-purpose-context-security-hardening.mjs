@@ -65,4 +65,36 @@ function run(root, scope) {
   }
 }
 
-process.stdout.write('Purpose Context security hardening through Test 11.2.1: PASS\n');
+// Slice 11.2 Test 2: workspace A cannot leak workspace B and vice versa.
+{
+  const root = makeRoot();
+  try {
+    addWorkspace(root, 'alpha', 'ALPHA PRIVATE');
+    addWorkspace(root, 'beta', 'BETA PRIVATE');
+
+    const alpha = run(root, 'workspace:alpha');
+    const beta = run(root, 'workspace:beta');
+    const alphaJson = JSON.stringify(alpha);
+    const betaJson = JSON.stringify(beta);
+
+    assert.equal(alpha.scope, 'workspace:alpha');
+    assert.equal(beta.scope, 'workspace:beta');
+    assert.match(alphaJson, /ALPHA PRIVATE OBJECTIVE|ALPHA PRIVATE STATE/);
+    assert.match(betaJson, /BETA PRIVATE OBJECTIVE|BETA PRIVATE STATE/);
+    assert.doesNotMatch(alphaJson, /BETA PRIVATE/);
+    assert.doesNotMatch(betaJson, /ALPHA PRIVATE/);
+    assert.doesNotMatch(alphaJson, /OPERATOR ONLY/);
+    assert.doesNotMatch(betaJson, /OPERATOR ONLY/);
+
+    for (const read of alpha.provenance.owner_reads ?? []) {
+      for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:beta|workspaces\/beta/);
+    }
+    for (const read of beta.provenance.owner_reads ?? []) {
+      for (const ref of read.canonical_refs ?? []) assert.doesNotMatch(String(ref), /workspace:alpha|workspaces\/alpha/);
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context security hardening through Test 11.2.2: PASS\n');

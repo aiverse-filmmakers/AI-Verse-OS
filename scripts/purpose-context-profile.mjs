@@ -1,6 +1,10 @@
 import { composePurposeContext as composeBasePurposeContext } from './purpose-context-core.mjs';
 import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { applyFinalPurposeBudget } from './purpose-context-final-budget.mjs';
+import {
+  PURPOSE_OPTIONAL_OWNER_BACKED_DOMAINS,
+  PURPOSE_OPTIONAL_OWNER_BACKED_DOMAIN_NAMES,
+} from './purpose-context-rich-domains.mjs';
 
 const DEFAULT_MAX_BYTES = 16384;
 const OPTIONAL_DOMAIN_CAP = 64;
@@ -8,13 +12,11 @@ const PROFILE_REQUESTS = new Set(['auto', 'basic', 'rich']);
 const RELATION_TOKENS = new Set([
   'addresses', 'serves', 'advances', 'blocks', 'executes', 'measures', 'affects', 'supersedes',
 ]);
-const OPTIONAL_OWNER_BACKED_DOMAINS = new Set(['risks', 'team_resources', 'customers']);
+const OPTIONAL_OWNER_BACKED_DOMAINS = new Set(PURPOSE_OPTIONAL_OWNER_BACKED_DOMAIN_NAMES);
 const RICH_DOMAIN_KEYS = new Map([
   ['narratives', 'relevant_narrative_domain_present'],
   ['kpis', 'relevant_kpi_binding_present'],
-  ['risks', 'relevant_risk_domain_present'],
-  ['team_resources', 'relevant_team_resource_domain_present'],
-  ['customers', 'relevant_customer_domain_present'],
+  ...Object.entries(PURPOSE_OPTIONAL_OWNER_BACKED_DOMAINS),
   ['current_state', 'relevant_rich_current_state_present'],
   ['recent_material_changes', 'relevant_material_change_context_present'],
 ]);
@@ -179,9 +181,7 @@ export function applyPurposeProfile(envelope, options = {}) {
   if (profile.resolved === 'workspace_basic') {
     delete output.narratives;
     delete output.kpis;
-    delete output.risks;
-    delete output.team_resources;
-    delete output.customers;
+    for (const domain of OPTIONAL_OWNER_BACKED_DOMAINS) delete output[domain];
   }
 
   output.provenance ??= {};

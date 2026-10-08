@@ -21,7 +21,7 @@ function setBrainOwner() {
         owner: 'brain',
         state: 'active',
         handover_id: 'purpose-initiative-status',
-        brain_refs: ['brain:initiative:edit'],
+        brain_refs: ['brain:intent:initiative-status-anchor'],
       },
     },
   }));

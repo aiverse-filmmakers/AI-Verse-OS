@@ -24,6 +24,8 @@ jobs:
         run: node scripts/test-purpose-context.mjs
       - name: Test Purpose Context v1 envelope
         run: node scripts/test-purpose-context-envelope.mjs
+      - name: Test Purpose Context truncation-priority policy
+        run: node scripts/test-purpose-context-budget-policy.mjs
       - name: Test Purpose Context v1 no-cache behavior
         run: node scripts/test-purpose-context-no-cache.mjs
       - name: Test Purpose Context v1 fail-closed owner behavior
@@ -78,6 +80,8 @@ jobs:
           test -f scripts/test-purpose-material-change-provenance.mjs
           test -f scripts/purpose-material-change-relevance.mjs
           test -f scripts/test-purpose-material-change-relevance.mjs
+          test -f scripts/purpose-context-budget-policy.mjs
+          test -f scripts/test-purpose-context-budget-policy.mjs
       - name: Verify generated runtime peers remain canonical
         shell: bash
         run: |

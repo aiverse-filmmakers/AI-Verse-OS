@@ -59,11 +59,9 @@ function normalized(value) {
     const manifestHash = sha256(manifest);
     const before = run(root);
 
-    // Purpose itself is rebuild-only and creates no local Purpose truth while reading.
     assert.equal(fs.existsSync(path.join(root, 'PURPOSE.md')), false);
     assert.equal(fs.existsSync(path.join(root, '.aiverse', 'purpose.json')), false);
 
-    // Simulate disposable consumer views/caches containing conflicting stale output.
     const cacheRoot = path.join(root, '.generated-purpose-cache');
     fs.mkdirSync(cacheRoot, { recursive: true });
     fs.writeFileSync(path.join(cacheRoot, 'purpose-view.json'), JSON.stringify({
@@ -71,7 +69,6 @@ function normalized(value) {
       current_state: [{ statement: 'STALE GENERATED PURPOSE STATE' }],
     }), 'utf8');
     fs.writeFileSync(path.join(cacheRoot, 'purpose-copy.json'), JSON.stringify(before), 'utf8');
-
     fs.rmSync(cacheRoot, { recursive: true, force: true });
 
     assert.equal(sha256(owner), ownerHash);
@@ -87,4 +84,29 @@ function normalized(value) {
   }
 }
 
-process.stdout.write('Purpose Context hardening Task 11.1.1: PASS\n');
+// Slice 11.1 Task 2: independent process restarts rebuild the same owner-backed Purpose projection.
+{
+  const root = makeRoot();
+  try {
+    const owner = path.join(root, 'operator', 'context', 'CURRENT.md');
+    const ownerHash = sha256(owner);
+    const firstProcess = run(root);
+    const restartedProcess = run(root);
+    const secondRestart = run(root);
+
+    assert.deepEqual(normalized(restartedProcess), normalized(firstProcess));
+    assert.deepEqual(normalized(secondRestart), normalized(firstProcess));
+    assert.equal(firstProcess.scope, 'operator');
+    assert.equal(restartedProcess.current_state[0].statement, 'canonical owner state');
+    assert.equal(secondRestart.provenance.projection_owner, 'ai-verse-os');
+    assert.equal(sha256(owner), ownerHash);
+
+    // Every read above is a fresh child process. No restart-local state may be required to rebuild.
+    assert.equal(fs.existsSync(path.join(root, '.aiverse', 'purpose.json')), false);
+    assert.equal(fs.existsSync(path.join(root, 'PURPOSE.md')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+process.stdout.write('Purpose Context hardening through Task 11.1.2: PASS\n');

@@ -5,6 +5,7 @@ export const PURPOSE_BUDGET_POLICY_VERSION = 'os.purpose-budget-policy.v1';
 // projection-only policy and never mutates canonical owner state.
 export const PURPOSE_TRUNCATION_PRIORITY = Object.freeze([
   'recent_material_changes',
+  'team_resources',
   'risks',
   'kpis',
   'narratives',

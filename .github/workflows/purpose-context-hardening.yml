@@ -5,6 +5,7 @@ on:
     paths:
       - 'scripts/purpose-*.mjs'
       - 'scripts/test-purpose-context-hardening.mjs'
+      - 'scripts/test-purpose-context-security-hardening.mjs'
       - '.github/workflows/purpose-context-hardening.yml'
       - 'system/architecture/purpose-context.md'
       - 'system/schemas/purpose-context.schema.json'
@@ -25,5 +26,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Run Purpose Context hardening proofs
+      - name: Run Purpose Context rebuildability hardening proofs
         run: node scripts/test-purpose-context-hardening.mjs
+      - name: Run Purpose Context security hardening proofs
+        run: node scripts/test-purpose-context-security-hardening.mjs

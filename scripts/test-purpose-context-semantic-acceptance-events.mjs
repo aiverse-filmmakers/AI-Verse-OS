@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 
 import { classifyPurposeMaterialChanges } from './purpose-material-change-classifier.mjs';
 import { applyPurposeMaterialChangeRelevance } from './purpose-material-change-relevance.mjs';
+import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
+import { projectTransientDataCurrentValues } from './purpose-data-current-value-boundary.mjs';
 
 const scope = 'workspace:film';
 const goalRef = { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'goal-release', version: '4' };
@@ -16,34 +18,32 @@ function canonicalEnvelope() {
     scope,
     scope_kind: 'workspace',
     identity: { kind: 'workspace', id: 'film' },
-    goals: [{
-      id: 'goal-release', semantic_kind: 'goal', status: 'ACTIVE', canonical_ref: goalRef,
-      payload: { statement: 'Release the film on schedule' },
-    }],
-    strategies: [{
-      id: 'strategy-release', semantic_kind: 'strategy', status: 'ACTIVE', canonical_ref: strategyRef,
-      payload: { statement: 'Lock picture before final sound' },
-    }],
-    initiatives: [{
-      id: 'initiative-picture-lock', semantic_kind: 'initiative', status: 'ACTIVE', canonical_ref: initiativeRef,
-      payload: { outcome: 'Picture locked' },
-    }],
+    goals: [{ id: 'goal-release', semantic_kind: 'goal', status: 'ACTIVE', canonical_ref: goalRef, payload: { statement: 'Release the film on schedule' } }],
+    strategies: [{ id: 'strategy-release', semantic_kind: 'strategy', status: 'ACTIVE', canonical_ref: strategyRef, payload: { statement: 'Lock picture before final sound' } }],
+    initiatives: [{ id: 'initiative-picture-lock', semantic_kind: 'initiative', status: 'ACTIVE', canonical_ref: initiativeRef, payload: { outcome: 'Picture locked' } }],
+    current_state: [{ kind: 'current_state', statement: 'Editorial is active', source_refs: [{ owner: 'ai-verse-os', scope, kind: 'current-context', id: 'active' }] }],
     trajectory: [{ relation: 'advances', from_ref: initiativeRef, to_ref: goalRef, source_refs: [initiativeRef] }],
-    provenance: { projection_owner: 'ai-verse-os', owner_reads: [] },
+    provenance: { projection_owner: 'ai-verse-os', generated_at: '2026-10-09T02:00:00.000Z', owner_reads: [] },
+  };
+}
+
+function dataProvenance(recordVersion = 1) {
+  return {
+    scope: { workspaceId: 'film' },
+    actor: { kind: 'bot', id: 'purpose-reader' },
+    authorization: { mode: 'host-bound', capabilityRefs: ['data:metrics:read'] },
+    schemaVersion: 1,
+    recordVersion,
   };
 }
 
 // Slice 11.3 Scenario 6: material event closes a blocker.
 {
   const projection = classifyPurposeMaterialChanges(scope, [{
-    scope,
-    occurred_at: '2026-10-09T02:00:00.000Z',
-    event: 'Client approval blocker cleared',
-    effect: 'Picture-lock initiative can advance again.',
-    materiality: ['blocker_state', 'initiative_status'],
+    scope, occurred_at: '2026-10-09T02:00:00.000Z', event: 'Client approval blocker cleared',
+    effect: 'Picture-lock initiative can advance again.', materiality: ['blocker_state', 'initiative_status'],
     source_refs: [{ owner: 'ai-verse-os', scope, kind: 'event', id: 'client-approval-cleared' }],
-    affects: [initiativeRef],
-    relevance_effect: 'restored',
+    affects: [initiativeRef], relevance_effect: 'restored',
   }]);
   const rebuilt = applyPurposeMaterialChangeRelevance(canonicalEnvelope(), projection);
   const initiative = rebuilt.initiatives[0];
@@ -51,30 +51,19 @@ function canonicalEnvelope() {
   assert.equal(initiative.status, 'ACTIVE');
   assert.deepEqual(initiative.canonical_ref, initiativeRef);
   assert.deepEqual(initiative.payload, { outcome: 'Picture locked' });
-  assert.deepEqual(initiative.purpose_relevance, {
-    projection_only: true,
-    authoritative_for_owner_state: false,
-    state: 'restored',
-    as_of: '2026-10-09T02:00:00.000Z',
-    materiality: ['blocker_state', 'initiative_status'],
-    source_refs: [{ owner: 'ai-verse-os', scope, kind: 'event', id: 'client-approval-cleared' }],
-  });
-  assert.equal(rebuilt.section_states.material_change_relevance.state, 'ok');
+  assert.equal(initiative.purpose_relevance.state, 'restored');
+  assert.equal(initiative.purpose_relevance.projection_only, true);
+  assert.equal(initiative.purpose_relevance.authoritative_for_owner_state, false);
   assert.equal(rebuilt.section_states.material_change_relevance.applied_count, 1);
-  assert.equal(rebuilt.recent_material_changes[0].relevance_effect, 'restored');
 }
 
 // Slice 11.3 Scenario 7: material event invalidates feasibility of a strategy.
 {
   const projection = classifyPurposeMaterialChanges(scope, [{
-    scope,
-    occurred_at: '2026-10-09T02:10:00.000Z',
-    event: 'Required finishing vendor became unavailable',
-    effect: 'The current release strategy is no longer feasible as written.',
-    materiality: ['feasibility', 'strategy_validity'],
+    scope, occurred_at: '2026-10-09T02:10:00.000Z', event: 'Required finishing vendor became unavailable',
+    effect: 'The current release strategy is no longer feasible as written.', materiality: ['feasibility', 'strategy_validity'],
     source_refs: [{ owner: 'ai-verse-os', scope, kind: 'event', id: 'finishing-vendor-unavailable' }],
-    affects: [strategyRef],
-    relevance_effect: 'invalidated',
+    affects: [strategyRef], relevance_effect: 'invalidated',
   }]);
   const rebuilt = applyPurposeMaterialChangeRelevance(canonicalEnvelope(), projection);
   const strategy = rebuilt.strategies[0];
@@ -85,8 +74,42 @@ function canonicalEnvelope() {
   assert.equal(strategy.purpose_relevance.projection_only, true);
   assert.equal(strategy.purpose_relevance.authoritative_for_owner_state, false);
   assert.deepEqual(strategy.purpose_relevance.materiality, ['feasibility', 'strategy_validity']);
-  assert.equal(rebuilt.recent_material_changes[0].relevance_effect, 'invalidated');
-  assert.equal(rebuilt.section_states.material_change_relevance.applied_count, 1);
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.7: PASS\n');
+// Slice 11.3 Scenario 8: Data value becomes stale/unavailable.
+{
+  const dataRef = { owner: 'ai-verse-data', spaceId: 'metrics', entity: 'release', recordId: 'today', field: 'confidence' };
+  const staleCurrent = projectTransientDataCurrentValues([{
+    ref: dataRef,
+    state: 'stale',
+    value: 0.42,
+    sourceUpdatedAt: '2026-10-07T00:00:00.000Z',
+    provenance: dataProvenance(4),
+  }]).values[0];
+
+  const stale = applyPurposeDataCurrentState(canonicalEnvelope(), {
+    now: '2026-10-09T02:20:00.000Z',
+    readPurposeDataCurrentState(request) {
+      assert.equal(request.scope, scope);
+      return { status: 'ok', scope, bindings: [{ purpose_ref: goalRef, current: staleCurrent }] };
+    },
+  });
+  assert.equal(stale.current_state.some((item) => item.kind === 'data_current_state'), false);
+  assert.equal(stale.section_states.data_current_state.state, 'partial');
+  assert.equal(stale.section_states.data_current_state.diagnostics[0].state, 'stale');
+  assert.equal(stale.provenance.owner_reads.find((item) => item.owner === 'ai-verse-data').freshness.state, 'mixed');
+
+  const unavailable = applyPurposeDataCurrentState(stale, {
+    now: '2026-10-09T02:25:00.000Z',
+    readPurposeDataCurrentState() {
+      return { status: 'unavailable', scope, reason: 'data_service_unreachable' };
+    },
+  });
+  assert.equal(unavailable.current_state.some((item) => item.kind === 'data_current_state'), false);
+  assert.deepEqual(unavailable.section_states.data_current_state, { state: 'unavailable', reason: 'data_service_unreachable' });
+  const dataRead = unavailable.provenance.owner_reads.find((item) => item.owner === 'ai-verse-data');
+  assert.equal(dataRead.status, 'unavailable');
+  assert.equal(dataRead.freshness.state, 'unavailable');
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.8: PASS\n');

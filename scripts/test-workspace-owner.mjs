@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const script = path.join(repoRoot, 'scripts', 'workspace-owner.mjs');
+const schemaPath = path.join(repoRoot, 'system', 'schemas', 'workspace.schema.yaml');
 
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-workspace-owner-'));
@@ -61,6 +62,11 @@ function run(root, payload) {
   }
   return { ...out, json };
 }
+
+const schemaText = fs.readFileSync(schemaPath, 'utf8');
+const idSchema = schemaText.match(/\n  id:\n([\s\S]*?)(?=\n  [a-z_]+:\n)/)?.[0] ?? '';
+assert.match(idSchema, /maxLength:\s*128\b/, 'workspace manifest schema id maxLength must match runtime max 128');
+assert.match(idSchema, /pattern:\s*"\^\[a-z0-9\]/, 'workspace manifest schema must retain lowercase slug pattern');
 
 const root = makeRoot();
 try {
@@ -181,6 +187,19 @@ try {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /credential\/secret material/);
   assert.equal(fs.existsSync(path.join(root, 'workspaces', 'secret')), false);
+
+  // Runtime and schema must agree on the 128-character workspace ID boundary.
+  const maxId = `w${'a'.repeat(127)}`;
+  r = run(root, request({ workspace: { id: maxId, name: 'Max Length Workspace' } }));
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.json.workspace.id, maxId);
+  assert.equal(fs.existsSync(path.join(root, 'workspaces', maxId, 'WORKSPACE.yaml')), true);
+
+  const tooLongId = `w${'b'.repeat(128)}`;
+  r = run(root, request({ workspace: { id: tooLongId, name: 'Too Long Workspace' } }));
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /workspace\.id exceeds 128 characters|workspace\.id cannot be derived safely|workspace\.id/);
+  assert.equal(fs.existsSync(path.join(root, 'workspaces', tooLongId)), false);
 
   // Existing manually-created workspace can evolve additively without losing unrelated fields.
   const manualRoot = path.join(root, 'workspaces', 'manual-client');

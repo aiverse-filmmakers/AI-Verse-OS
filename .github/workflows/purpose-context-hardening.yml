@@ -7,6 +7,7 @@ on:
       - 'scripts/test-purpose-context-hardening.mjs'
       - 'scripts/test-purpose-context-security-hardening.mjs'
       - 'scripts/test-purpose-context-semantic-acceptance.mjs'
+      - 'scripts/test-purpose-context-semantic-acceptance-events.mjs'
       - 'scripts/test-purpose-data-current-state.mjs'
       - 'scripts/test-purpose-data-source-descent.mjs'
       - 'scripts/test-purpose-memory-history-boundary.mjs'
@@ -44,4 +45,6 @@ jobs:
       - name: Run canonical action permission boundary
         run: node scripts/test-action-permission.mjs
       - name: Run Purpose semantic acceptance scenarios
-        run: node scripts/test-purpose-context-semantic-acceptance.mjs
+        run: |
+          node scripts/test-purpose-context-semantic-acceptance.mjs
+          node scripts/test-purpose-context-semantic-acceptance-events.mjs

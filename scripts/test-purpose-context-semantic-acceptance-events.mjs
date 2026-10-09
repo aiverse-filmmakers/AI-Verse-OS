@@ -17,24 +17,15 @@ function canonicalEnvelope() {
     scope_kind: 'workspace',
     identity: { kind: 'workspace', id: 'film' },
     goals: [{
-      id: 'goal-release',
-      semantic_kind: 'goal',
-      status: 'ACTIVE',
-      canonical_ref: goalRef,
+      id: 'goal-release', semantic_kind: 'goal', status: 'ACTIVE', canonical_ref: goalRef,
       payload: { statement: 'Release the film on schedule' },
     }],
     strategies: [{
-      id: 'strategy-release',
-      semantic_kind: 'strategy',
-      status: 'ACTIVE',
-      canonical_ref: strategyRef,
+      id: 'strategy-release', semantic_kind: 'strategy', status: 'ACTIVE', canonical_ref: strategyRef,
       payload: { statement: 'Lock picture before final sound' },
     }],
     initiatives: [{
-      id: 'initiative-picture-lock',
-      semantic_kind: 'initiative',
-      status: 'ACTIVE',
-      canonical_ref: initiativeRef,
+      id: 'initiative-picture-lock', semantic_kind: 'initiative', status: 'ACTIVE', canonical_ref: initiativeRef,
       payload: { outcome: 'Picture locked' },
     }],
     trajectory: [{ relation: 'advances', from_ref: initiativeRef, to_ref: goalRef, source_refs: [initiativeRef] }],
@@ -56,7 +47,6 @@ function canonicalEnvelope() {
   }]);
   const rebuilt = applyPurposeMaterialChangeRelevance(canonicalEnvelope(), projection);
   const initiative = rebuilt.initiatives[0];
-
   assert.equal(projection.changes.length, 1);
   assert.equal(initiative.status, 'ACTIVE');
   assert.deepEqual(initiative.canonical_ref, initiativeRef);
@@ -74,4 +64,29 @@ function canonicalEnvelope() {
   assert.equal(rebuilt.recent_material_changes[0].relevance_effect, 'restored');
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.6: PASS\n');
+// Slice 11.3 Scenario 7: material event invalidates feasibility of a strategy.
+{
+  const projection = classifyPurposeMaterialChanges(scope, [{
+    scope,
+    occurred_at: '2026-10-09T02:10:00.000Z',
+    event: 'Required finishing vendor became unavailable',
+    effect: 'The current release strategy is no longer feasible as written.',
+    materiality: ['feasibility', 'strategy_validity'],
+    source_refs: [{ owner: 'ai-verse-os', scope, kind: 'event', id: 'finishing-vendor-unavailable' }],
+    affects: [strategyRef],
+    relevance_effect: 'invalidated',
+  }]);
+  const rebuilt = applyPurposeMaterialChangeRelevance(canonicalEnvelope(), projection);
+  const strategy = rebuilt.strategies[0];
+  assert.equal(strategy.status, 'ACTIVE', 'projection must not rewrite Brain owner status');
+  assert.deepEqual(strategy.canonical_ref, strategyRef);
+  assert.deepEqual(strategy.payload, { statement: 'Lock picture before final sound' });
+  assert.equal(strategy.purpose_relevance.state, 'invalidated');
+  assert.equal(strategy.purpose_relevance.projection_only, true);
+  assert.equal(strategy.purpose_relevance.authoritative_for_owner_state, false);
+  assert.deepEqual(strategy.purpose_relevance.materiality, ['feasibility', 'strategy_validity']);
+  assert.equal(rebuilt.recent_material_changes[0].relevance_effect, 'invalidated');
+  assert.equal(rebuilt.section_states.material_change_relevance.applied_count, 1);
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.7: PASS\n');

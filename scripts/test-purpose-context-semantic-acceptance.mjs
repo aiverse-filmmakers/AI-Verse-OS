@@ -18,6 +18,21 @@ function makeRoot() {
   return root;
 }
 
+function addWorkspace(root, id, lines, type = 'project') {
+  const workspace = path.join(root, 'workspaces', id);
+  fs.mkdirSync(path.join(workspace, 'context'), { recursive: true });
+  fs.writeFileSync(path.join(workspace, 'WORKSPACE.yaml'), [
+    'schema_version: "2.0"',
+    `id: "${id}"`,
+    `name: "${id}"`,
+    `type: "${type}"`,
+    'status: "active"',
+    `purpose: "Acceptance workspace ${id}"`,
+    '',
+  ].join('\n'), 'utf8');
+  fs.writeFileSync(path.join(workspace, 'context', 'CURRENT.md'), lines.join('\n'), 'utf8');
+}
+
 function setBrainOwner(root, scope) {
   const marker = path.join(root, '.aiverse', 'direction', 'ownership.json');
   fs.mkdirSync(path.dirname(marker), { recursive: true });
@@ -53,12 +68,7 @@ function brainSnapshot(scope) {
   return {
     schema_version: '1.0', scope, direction_owner: 'brain', status: 'ok', read_states: {},
     strategic_objects: { intents: [mission, goal, strategy], gaps: [], initiatives: [] },
-    relationships: [{
-      relation: 'advances',
-      from_ref: strategy.canonical_ref,
-      to_ref: goal.canonical_ref,
-      source_refs: [strategy.canonical_ref],
-    }],
+    relationships: [{ relation: 'advances', from_ref: strategy.canonical_ref, to_ref: goal.canonical_ref, source_refs: [strategy.canonical_ref] }],
     relationship_rejections: [],
   };
 }
@@ -67,9 +77,7 @@ function brainSnapshot(scope) {
 {
   const root = makeRoot();
   try {
-    const envelope = composeProfiledPurposeContext(root, 'operator', {
-      now: '2026-10-09T01:00:00.000Z',
-    });
+    const envelope = composeProfiledPurposeContext(root, 'operator', { now: '2026-10-09T01:00:00.000Z' });
     assert.equal(envelope.scope, 'operator');
     assert.equal(envelope.scope_kind, 'operator');
     assert.deepEqual(envelope.identity, { kind: 'operator', id: 'operator' });
@@ -81,9 +89,7 @@ function brainSnapshot(scope) {
     assert.ok(osRead);
     assert.equal(osRead.operation, 'current-context.read');
     assert.equal(envelope.provenance.owner_reads.some((read) => read.owner === 'ai-verse-brain'), false);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
 // Slice 11.3 Scenario 2: operator with Brain-owned strategic direction.
@@ -95,14 +101,10 @@ function brainSnapshot(scope) {
       '## Current state', '', '- Operational runtime remains healthy', '',
     ].join('\n'), 'utf8');
     setBrainOwner(root, 'operator');
-
     const envelope = composeProfiledPurposeContext(root, 'operator', {
       now: '2026-10-09T01:05:00.000Z',
-      readBrainPurposeSnapshot(scope) {
-        return brainSnapshot(scope);
-      },
+      readBrainPurposeSnapshot(scope) { return brainSnapshot(scope); },
     });
-
     assert.equal(envelope.purpose.missions[0].payload.statement, 'Build an owner-backed AI operating system');
     assert.equal(envelope.goals[0].payload.statement, 'Complete Purpose Context acceptance');
     assert.equal(envelope.strategies[0].payload.statement, 'Keep every projection tied to canonical owners');
@@ -115,9 +117,36 @@ function brainSnapshot(scope) {
     assert.ok(osRead);
     assert.equal(brainRead.status, 'ok');
     assert.equal(envelope.provenance.profile.resolved, 'operator_default');
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.2: PASS\n');
+// Slice 11.3 Scenario 3: simple workspace using only basic trajectory fields.
+{
+  const root = makeRoot();
+  try {
+    addWorkspace(root, 'simple-film', [
+      '## Objective', '', '- Launch the short film', '',
+      '## Current state', '', '- Rough cut complete', '',
+      '## Next useful actions', '', '- Lock picture', '',
+      '## Constraints / approvals', '', '- Director approval required', '',
+    ]);
+    const envelope = composeProfiledPurposeContext(root, 'workspace:simple-film', {
+      profile: 'basic',
+      now: '2026-10-09T01:10:00.000Z',
+    });
+    assert.equal(envelope.scope, 'workspace:simple-film');
+    assert.equal(envelope.provenance.profile.resolved, 'workspace_basic');
+    assert.equal(envelope.goals[0].statement, 'Launch the short film');
+    assert.equal(envelope.current_state[0].statement, 'Rough cut complete');
+    assert.equal(envelope.current_work[0].statement, 'Lock picture');
+    assert.equal(envelope.constraints[0].statement, 'Director approval required');
+    for (const key of ['narratives', 'kpis', 'risks', 'team_resources', 'customers', 'infrastructure', 'budget_cost']) {
+      assert.equal(key in envelope, false, `basic workspace unexpectedly surfaced ${key}`);
+    }
+    const expectedRef = { owner: 'ai-verse-os', scope: 'workspace:simple-film', kind: 'current-context', id: 'active' };
+    assert.deepEqual(envelope.goals[0].source_refs, [expectedRef]);
+    assert.deepEqual(envelope.current_state[0].source_refs, [expectedRef]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.3: PASS\n');

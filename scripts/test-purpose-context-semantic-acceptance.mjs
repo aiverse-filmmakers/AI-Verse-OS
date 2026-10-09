@@ -107,11 +107,12 @@ function brainSnapshot(scope) {
     assert.equal(envelope.goals[0].payload.statement, 'Complete Purpose Context acceptance');
     assert.equal(envelope.strategies[0].payload.statement, 'Keep every projection tied to canonical owners');
     assert.equal(envelope.trajectory[0].relation, 'advances');
-    assert.equal(envelope.current_state[0].statement, 'Operational runtime remains healthy');
     assert.equal('priorities' in envelope, false);
     assert.doesNotMatch(JSON.stringify(envelope), /STALE OS STRATEGIC DIRECTION/);
     const brainRead = envelope.provenance.owner_reads.find((read) => read.owner === 'ai-verse-brain');
+    const osRead = envelope.provenance.owner_reads.find((read) => read.owner === 'ai-verse-os');
     assert.ok(brainRead);
+    assert.ok(osRead);
     assert.equal(brainRead.status, 'ok');
     assert.equal(envelope.provenance.profile.resolved, 'operator_default');
   } finally {

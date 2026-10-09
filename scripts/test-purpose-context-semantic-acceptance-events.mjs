@@ -7,6 +7,7 @@ import { applyPurposeMaterialChangeRelevance } from './purpose-material-change-r
 import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { projectTransientDataCurrentValues } from './purpose-data-current-value-boundary.mjs';
 import { projectPurposeMemoryHistory } from './purpose-memory-history-boundary.mjs';
+import { traverseExplicitTrajectory } from './purpose-context-explain.mjs';
 
 const scope = 'workspace:film';
 const goalRef = { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'goal-release', version: '4' };
@@ -110,32 +111,17 @@ function dataProvenance(recordVersion = 1) {
 {
   const current = canonicalEnvelope();
   const history = projectPurposeMemoryHistory(scope, {
-    api_version: 'memory.purpose-history.v1',
-    scope,
-    purpose_refs: [goalRef],
-    max_age_days: 30,
-    limit: 8,
-    budget_bytes: 4096,
+    api_version: 'memory.purpose-history.v1', scope, purpose_refs: [goalRef], max_age_days: 30, limit: 8, budget_bytes: 4096,
     history: [{
-      id: 'old-release-decision',
-      type: 'lesson',
-      scope,
-      occurred_at: '2026-09-20T12:00:00.000Z',
+      id: 'old-release-decision', type: 'lesson', scope, occurred_at: '2026-09-20T12:00:00.000Z',
       excerpt: 'Old decision: do not release the film this month.',
       source_refs: [{ owner: 'ai-verse-memory', scope, kind: 'memory', id: 'old-release-decision', version: 'sha256:version-1' }],
-      provenance: {
-        owner: 'ai-verse-memory',
-        source_identity: 'sha256:identity-1',
-        source_version: 'sha256:version-1',
-        freshness: 'historical',
-      },
+      provenance: { owner: 'ai-verse-memory', source_identity: 'sha256:identity-1', source_version: 'sha256:version-1', freshness: 'historical' },
       goals: [{ statement: 'Do not release the film this month' }],
       current_state: [{ statement: 'Release is cancelled' }],
       current_value: 0,
     }],
-    truncated: false,
-    returned: 1,
-    candidate_count: 1,
+    truncated: false, returned: 1, candidate_count: 1,
   });
 
   assert.equal(current.goals[0].payload.statement, 'Release the film on schedule');
@@ -149,4 +135,23 @@ function dataProvenance(recordVersion = 1) {
   assert.deepEqual(current.goals[0].canonical_ref, goalRef);
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.9: PASS\n');
+// Slice 11.3 Scenario 12: missing trajectory relationship reports a gap instead of inventing a parent node.
+{
+  const envelope = canonicalEnvelope();
+  delete envelope.goals;
+  const explained = traverseExplicitTrajectory(envelope, 'initiative:initiative-picture-lock');
+
+  assert.equal(explained.paths.length, 1);
+  assert.equal(explained.paths[0].status, 'partial');
+  assert.equal(explained.paths[0].termination_reason, 'missing_parent');
+  assert.deepEqual(explained.paths[0].terminal_ref, goalRef);
+  assert.deepEqual(explained.paths[0].selectors, ['initiative:initiative-picture-lock']);
+  assert.deepEqual(explained.paths[0].relations, ['advances']);
+  assert.equal(explained.missing_links.length, 1);
+  assert.equal(explained.missing_links[0].reason, 'missing_parent_node');
+  assert.equal(explained.missing_links[0].relation, 'advances');
+  assert.deepEqual(explained.missing_links[0].to_ref, goalRef);
+  assert.equal(JSON.stringify(explained).includes('goal:goal-release'), false, 'explain invented a missing goal selector');
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.12: PASS\n');

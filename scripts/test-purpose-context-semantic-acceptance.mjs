@@ -197,4 +197,41 @@ function brainSnapshot(scope) {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.4: PASS\n');
+// Slice 11.3 Scenario 5: two isolated workspaces can hold conflicting goals without reconciliation or leakage.
+{
+  const root = makeRoot();
+  try {
+    addWorkspace(root, 'launch-now', [
+      '## Objective', '', '- Ship the campaign on Friday', '',
+      '## Current state', '', '- Launch assets are approved', '',
+    ], 'business');
+    addWorkspace(root, 'hold-launch', [
+      '## Objective', '', '- Do not ship the campaign on Friday', '',
+      '## Current state', '', '- Legal review is still open', '',
+    ], 'business');
+
+    const launch = composeProfiledPurposeContext(root, 'workspace:launch-now', {
+      profile: 'basic', now: '2026-10-09T01:20:00.000Z',
+    });
+    const hold = composeProfiledPurposeContext(root, 'workspace:hold-launch', {
+      profile: 'basic', now: '2026-10-09T01:20:00.000Z',
+    });
+    const launchJson = JSON.stringify(launch);
+    const holdJson = JSON.stringify(hold);
+
+    assert.equal(launch.goals[0].statement, 'Ship the campaign on Friday');
+    assert.equal(hold.goals[0].statement, 'Do not ship the campaign on Friday');
+    assert.equal(launch.current_state[0].statement, 'Launch assets are approved');
+    assert.equal(hold.current_state[0].statement, 'Legal review is still open');
+    assert.doesNotMatch(launchJson, /Do not ship the campaign on Friday|Legal review is still open|workspace:hold-launch/);
+    assert.doesNotMatch(holdJson, /Ship the campaign on Friday|Launch assets are approved|workspace:launch-now/);
+
+    const launchRef = { owner: 'ai-verse-os', scope: 'workspace:launch-now', kind: 'current-context', id: 'active' };
+    const holdRef = { owner: 'ai-verse-os', scope: 'workspace:hold-launch', kind: 'current-context', id: 'active' };
+    assert.deepEqual(launch.goals[0].source_refs, [launchRef]);
+    assert.deepEqual(hold.goals[0].source_refs, [holdRef]);
+    assert.notDeepEqual(launch.goals, hold.goals);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.5: PASS\n');

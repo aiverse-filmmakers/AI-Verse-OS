@@ -140,17 +140,18 @@ function dataProvenance(recordVersion = 1) {
   const envelope = canonicalEnvelope();
   delete envelope.goals;
   const explained = traverseExplicitTrajectory(envelope, 'initiative:initiative-picture-lock');
+  const traversal = explained.traversal;
 
-  assert.equal(explained.paths.length, 1);
-  assert.equal(explained.paths[0].status, 'partial');
-  assert.equal(explained.paths[0].termination_reason, 'missing_parent');
-  assert.deepEqual(explained.paths[0].terminal_ref, goalRef);
-  assert.deepEqual(explained.paths[0].selectors, ['initiative:initiative-picture-lock']);
-  assert.deepEqual(explained.paths[0].relations, ['advances']);
-  assert.equal(explained.missing_links.length, 1);
-  assert.equal(explained.missing_links[0].reason, 'missing_parent_node');
-  assert.equal(explained.missing_links[0].relation, 'advances');
-  assert.deepEqual(explained.missing_links[0].to_ref, goalRef);
+  assert.equal(traversal.paths.length, 1);
+  assert.equal(traversal.paths[0].status, 'partial');
+  assert.equal(traversal.paths[0].termination_reason, 'missing_parent');
+  assert.deepEqual(traversal.paths[0].terminal_ref, goalRef);
+  assert.deepEqual(traversal.paths[0].selectors, ['initiative:initiative-picture-lock']);
+  assert.deepEqual(traversal.paths[0].relations, ['advances']);
+  assert.equal(traversal.missing_links.length, 1);
+  assert.equal(traversal.missing_links[0].reason, 'missing_parent_node');
+  assert.equal(traversal.missing_links[0].relation, 'advances');
+  assert.deepEqual(traversal.missing_links[0].to_ref, goalRef);
   assert.equal(JSON.stringify(explained).includes('goal:goal-release'), false, 'explain invented a missing goal selector');
 }
 

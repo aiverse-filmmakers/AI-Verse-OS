@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { composeProfiledPurposeContext } from './purpose-context-profile.mjs';
+import { applyPurposeProfile, composeProfiledPurposeContext } from './purpose-context-profile.mjs';
 
 function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-semantic-'));
@@ -149,4 +149,52 @@ function brainSnapshot(scope) {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.3: PASS\n');
+// Slice 11.3 Scenario 4: rich product/business workspace with KPI, risk, and current-state context.
+{
+  const root = makeRoot();
+  try {
+    const scope = 'workspace:product-growth';
+    addWorkspace(root, 'product-growth', [
+      '## Objective', '', '- Reach repeatable paid conversion', '',
+      '## Current state', '', '- Checkout experiment is live', '',
+      '## Next useful actions', '', '- Review conversion cohort', '',
+    ], 'product');
+
+    const base = composeProfiledPurposeContext(root, scope, {
+      profile: 'basic',
+      now: '2026-10-09T01:15:00.000Z',
+    });
+    const enriched = structuredClone(base);
+    enriched.kpis = [{
+      id: 'conversion-rate',
+      statement: 'Paid conversion rate',
+      current_value: 0.31,
+      canonical_ref: { owner: 'ai-verse-data', scope, kind: 'kpi', id: 'conversion-rate', version: '12' },
+    }];
+    enriched.risks = [{
+      id: 'checkout-dropoff',
+      statement: 'Checkout drop-off can invalidate growth assumptions',
+      canonical_ref: { owner: 'ai-verse-brain', scope, kind: 'risk', id: 'checkout-dropoff', version: '4' },
+    }];
+
+    const rich = applyPurposeProfile(enriched, {
+      profile: 'rich',
+      relevantDomains: ['kpis', 'risks', 'current_state'],
+    });
+    assert.equal(rich.scope, scope);
+    assert.equal(rich.provenance.profile.resolved, 'workspace_rich');
+    assert.equal(rich.goals[0].statement, 'Reach repeatable paid conversion');
+    assert.equal(rich.current_state[0].statement, 'Checkout experiment is live');
+    assert.equal(rich.kpis[0].current_value, 0.31);
+    assert.equal(rich.risks[0].statement, 'Checkout drop-off can invalidate growth assumptions');
+    assert.equal(rich.kpis[0].canonical_ref.scope, scope);
+    assert.equal(rich.risks[0].canonical_ref.scope, scope);
+
+    const crossScope = structuredClone(enriched);
+    crossScope.risks[0].canonical_ref.scope = 'workspace:other-business';
+    const filtered = applyPurposeProfile(crossScope, { profile: 'rich', relevantDomains: ['risks'] });
+    assert.equal('risks' in filtered, false, 'rich workspace retained a cross-scope risk');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.4: PASS\n');

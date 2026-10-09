@@ -1,5 +1,5 @@
 schema_version: "2.0"
-registry: AI-Verse shared capabilities
+registry: AI-Verse OS System Capabilities
 
 canonical_materialization: system/capabilities/
 adapters:
@@ -32,4 +32,4 @@ capabilities:
     scope: optional-app
     purpose: "Build a local interactive knowledge visualization from selected sources."
 
-promotion_rule: "Workspace-local capabilities become shared only when their method is portable, guarded, verifiable, and no longer depends on hidden workspace-specific facts."
+promotion_rule: "Workspace-local capabilities become shared only when their method is portable, guarded, verifiable, and no longer depends on hidden workspace-specific facts. Reusable distributed task expertise belongs in the separately owned AI-Verse-Skills Skills Library rather than becoming a second OS capability store."

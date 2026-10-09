@@ -6,6 +6,7 @@ import { classifyPurposeMaterialChanges } from './purpose-material-change-classi
 import { applyPurposeMaterialChangeRelevance } from './purpose-material-change-relevance.mjs';
 import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { projectTransientDataCurrentValues } from './purpose-data-current-value-boundary.mjs';
+import { projectPurposeMemoryHistory } from './purpose-memory-history-boundary.mjs';
 
 const scope = 'workspace:film';
 const goalRef = { owner: 'ai-verse-brain', scope, kind: 'intent', id: 'goal-release', version: '4' };
@@ -80,13 +81,8 @@ function dataProvenance(recordVersion = 1) {
 {
   const dataRef = { owner: 'ai-verse-data', spaceId: 'metrics', entity: 'release', recordId: 'today', field: 'confidence' };
   const staleCurrent = projectTransientDataCurrentValues([{
-    ref: dataRef,
-    state: 'stale',
-    value: 0.42,
-    sourceUpdatedAt: '2026-10-07T00:00:00.000Z',
-    provenance: dataProvenance(4),
+    ref: dataRef, state: 'stale', value: 0.42, sourceUpdatedAt: '2026-10-07T00:00:00.000Z', provenance: dataProvenance(4),
   }]).values[0];
-
   const stale = applyPurposeDataCurrentState(canonicalEnvelope(), {
     now: '2026-10-09T02:20:00.000Z',
     readPurposeDataCurrentState(request) {
@@ -101,9 +97,7 @@ function dataProvenance(recordVersion = 1) {
 
   const unavailable = applyPurposeDataCurrentState(stale, {
     now: '2026-10-09T02:25:00.000Z',
-    readPurposeDataCurrentState() {
-      return { status: 'unavailable', scope, reason: 'data_service_unreachable' };
-    },
+    readPurposeDataCurrentState() { return { status: 'unavailable', scope, reason: 'data_service_unreachable' }; },
   });
   assert.equal(unavailable.current_state.some((item) => item.kind === 'data_current_state'), false);
   assert.deepEqual(unavailable.section_states.data_current_state, { state: 'unavailable', reason: 'data_service_unreachable' });
@@ -112,4 +106,47 @@ function dataProvenance(recordVersion = 1) {
   assert.equal(dataRead.freshness.state, 'unavailable');
 }
 
-process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.8: PASS\n');
+// Slice 11.3 Scenario 9: Memory old history conflicts with current Brain/Data truth.
+{
+  const current = canonicalEnvelope();
+  const history = projectPurposeMemoryHistory(scope, {
+    api_version: 'memory.purpose-history.v1',
+    scope,
+    purpose_refs: [goalRef],
+    max_age_days: 30,
+    limit: 8,
+    budget_bytes: 4096,
+    history: [{
+      id: 'old-release-decision',
+      type: 'lesson',
+      scope,
+      occurred_at: '2026-09-20T12:00:00.000Z',
+      excerpt: 'Old decision: do not release the film this month.',
+      source_refs: [{ owner: 'ai-verse-memory', scope, kind: 'memory', id: 'old-release-decision', version: 'sha256:version-1' }],
+      provenance: {
+        owner: 'ai-verse-memory',
+        source_identity: 'sha256:identity-1',
+        source_version: 'sha256:version-1',
+        freshness: 'historical',
+      },
+      goals: [{ statement: 'Do not release the film this month' }],
+      current_state: [{ statement: 'Release is cancelled' }],
+      current_value: 0,
+    }],
+    truncated: false,
+    returned: 1,
+    candidate_count: 1,
+  });
+
+  assert.equal(current.goals[0].payload.statement, 'Release the film on schedule');
+  assert.equal(history.evidence_role, 'historical');
+  assert.equal(history.authoritative_for_current_state, false);
+  assert.equal(history.history[0].kind, 'historical_evidence');
+  assert.equal(history.history[0].statement, 'Old decision: do not release the film this month.');
+  assert.equal('goals' in history.history[0], false);
+  assert.equal('current_state' in history.history[0], false);
+  assert.equal('current_value' in history.history[0], false);
+  assert.deepEqual(current.goals[0].canonical_ref, goalRef);
+}
+
+process.stdout.write('Purpose Context semantic acceptance through Scenario 11.3.9: PASS\n');

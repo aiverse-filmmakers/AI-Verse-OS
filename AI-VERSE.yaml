@@ -36,6 +36,19 @@ paths:
   runtime: runtime/
   archives: archives/
 
+capability_layers:
+  system_capabilities:
+    owner: ai-verse-os
+    provider_id: os
+    source: system/capabilities/
+    role: "Built-in operating behaviors required to organize, route, audit, onboard, and improve AI-Verse itself."
+  skills_library:
+    owner: ai-verse-skills
+    provider_id: aiverse-skills
+    source: "external installed AI-Verse-Skills provider"
+    role: "Reusable task and professional expertise such as filmmaking, design, marketing, coding, research, business, and media workflows."
+  runtime_adapter_note: "`.agents/skills/` and `.claude/skills/` are host adapter surfaces. Their `skills` folder name is a runtime convention and does not change canonical ownership: OS System Capabilities remain OS-owned and Skills Library packages remain AI-Verse-Skills-owned."
+
 ownership:
   system_owned:
     - AGENTS.md

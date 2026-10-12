@@ -94,11 +94,14 @@ export function targetForPlacement({ intent, workspaceId = null, capabilityId })
 function sourceProvider(qualifiedId) {
   if (typeof qualifiedId !== 'string' || !qualifiedId.trim()) return null;
   const source = qualifiedId.trim();
-  if (/^local:[a-z0-9][a-z0-9-]*$/.test(source)) return { source, provider: 'local', writable: true };
+  const local = source.match(/^local:([a-z0-9][a-z0-9-]*)$/);
+  if (local) return { source, provider: 'local', writable: true, bare_id: local[1] };
   const workspace = source.match(/^workspace:([a-z0-9][a-z0-9-]*):([a-z0-9][a-z0-9-]*)$/);
-  if (workspace) return { source, provider: `workspace:${workspace[1]}`, writable: true };
-  if (/^os:[a-z0-9][a-z0-9-]*$/.test(source)) return { source, provider: 'os', writable: false };
-  if (/^aiverse-skills:[a-z0-9][a-z0-9-]*$/.test(source)) return { source, provider: 'aiverse-skills', writable: false };
+  if (workspace) return { source, provider: `workspace:${workspace[1]}`, writable: true, bare_id: workspace[2] };
+  const osMatch = source.match(/^os:([a-z0-9][a-z0-9-]*)$/);
+  if (osMatch) return { source, provider: 'os', writable: false, bare_id: osMatch[1] };
+  const skills = source.match(/^aiverse-skills:([a-z0-9][a-z0-9-]*)$/);
+  if (skills) return { source, provider: 'aiverse-skills', writable: false, bare_id: skills[1] };
   throw new Error('source qualified id is not a current capability identity');
 }
 
@@ -117,15 +120,23 @@ export function promotionRequirement(sourceQualifiedId, targetQualifiedId) {
   if (source.source === targetQualifiedId) {
     return { required: false, source_qualified_id: source.source, target_qualified_id: targetQualifiedId };
   }
+
+  const targetLocal = typeof targetQualifiedId === 'string'
+    ? targetQualifiedId.match(/^local:([a-z0-9][a-z0-9-]*)$/)
+    : null;
+  const workspaceToLocal = source.provider.startsWith('workspace:') && targetLocal && targetLocal[1] === source.bare_id;
   return {
     required: true,
-    apply_supported: false,
+    apply_supported: Boolean(workspaceToLocal),
+    admitted_operation: workspaceToLocal ? 'workspace-to-local' : null,
     source_qualified_id: source.source,
     target_qualified_id: targetQualifiedId,
     qualified_identity_preserved: false,
     preserve_provenance: true,
     preserve_history: true,
     reference_repair_required: true,
-    reason: 'Cross-provider promotion requires the separately admitted migration and reference-repair flow.',
+    reason: workspaceToLocal
+      ? 'Workspace-to-personal promotion is admitted through the evidence-bound promotion and compatibility-repair flow.'
+      : 'This cross-provider scope change is not admitted by the current promotion contract.',
   };
 }

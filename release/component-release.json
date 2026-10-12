@@ -14,7 +14,7 @@
   "runtime_requirements": {"python": null, "node": ">=18", "other": []},
   "lifecycle": {"install": true, "setup": true, "status": true, "doctor": true, "enable": false, "disable": false, "update": true, "uninstall": false},
   "state": {"canonical_state_owned": true, "preserve_on_update": true, "preserve_on_uninstall": true, "preserve_unknown_user_files": true, "state_format": "unified-workspace-v2"},
-  "migration": {"change_classification": "non-breaking", "compatibility": "none-required", "from_versions": [], "requires_explicit_migration": false, "owner_controlled": true, "checkpoint_policy": "not-required"},
+  "migration": {"change_classification": "breaking", "compatibility": "none-required", "from_versions": [], "requires_explicit_migration": false, "owner_controlled": true, "checkpoint_policy": "not-required"},
   "authority": {"grants_permissions": false, "changes_direction_owner": false, "changes_scope": false, "enables_disabled_component": false, "exposes_remote_listener": false},
   "evidence": {
     "ci": [{"kind": "owner-native-ci", "status": "pass", "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b", "run_id": "38228297973", "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/38228297973"}],
@@ -22,4 +22,3 @@
   },
   "semantics": {"release_metadata_only": true, "live_health_truth": false}
 }
-

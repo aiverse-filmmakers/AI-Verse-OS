@@ -1,0 +1,32 @@
+name: Capability Placement Contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  placement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Check placement and resolver syntax
+        run: |
+          node --check scripts/capability-placement.mjs
+          node --check scripts/capability-resolver.mjs
+          node --check scripts/capability-resolver-cli.mjs
+
+      - name: Test practical placement semantics
+        run: node scripts/test-capability-placement.mjs
+
+      - name: Regress scoped discovery and managed-generation selection
+        run: node scripts/test-capability-resolver.mjs

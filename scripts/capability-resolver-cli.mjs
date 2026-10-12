@@ -2,7 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { discoverCapabilities, selectCapability } from './capability-resolver.mjs';
+import { discoverCapabilities, planCapabilityPlacement, selectCapability } from './capability-resolver.mjs';
 
 function fail(message) {
   process.stderr.write(`capability-resolver-cli: ${message}\n`);
@@ -41,6 +41,7 @@ if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) fail(`AI-Verse OS root not
 const request = await readPayload();
 const allowed = new Set([
   'operation', 'scope', 'skills_root', 'local_skills_root', 'query', 'qualified_id', 'limit',
+  'placement', 'context_label', 'capability_id', 'source_qualified_id',
 ]);
 for (const key of Object.keys(request)) {
   if (!allowed.has(key)) fail(`unknown request field: ${key}`);
@@ -65,6 +66,15 @@ if (operation === 'discover') {
     ...options,
     query: request.query,
     qualifiedId: request.qualified_id,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (operation === 'plan-placement') {
+  const result = planCapabilityPlacement({
+    ...options,
+    placement: request.placement,
+    contextLabel: request.context_label,
+    capabilityId: request.capability_id,
+    sourceQualifiedId: request.source_qualified_id,
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {

@@ -2,7 +2,7 @@
   "schema_version": "ai-verse.component-release/v1",
   "component_id": "ai-verse-os",
   "version": "0.2.0",
-  "revision": "9600929b946746c25c64e48471fcc83031fddda9",
+  "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b",
   "release_status": "accepted",
   "package": {
     "repository": "aiverse-filmmakers/AI-Verse-OS",
@@ -38,6 +38,7 @@
     "state_format": "unified-workspace-v2"
   },
   "migration": {
+    "change_classification": "non-breaking",
     "compatibility": "none-required",
     "from_versions": [],
     "requires_explicit_migration": false,
@@ -54,20 +55,20 @@
   "evidence": {
     "ci": [
       {
-        "kind": "distribution-core-ci",
+        "kind": "owner-native-ci",
         "status": "pass",
-        "revision": "9600929b946746c25c64e48471fcc83031fddda9",
-        "run_id": "34782949282",
-        "url": "https://github.com/aiverse-filmmakers/ai-verse-distribution/actions/runs/34782949282"
+        "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b",
+        "run_id": "38228297973",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/38228297973"
       }
     ],
     "acceptance": [
       {
-        "kind": "distribution-core-clean-machine",
+        "kind": "owner-local-native-workflow-acceptance",
         "status": "pass",
-        "revision": "9600929b946746c25c64e48471fcc83031fddda9",
-        "run_id": "34782949287",
-        "url": "https://github.com/aiverse-filmmakers/ai-verse-distribution/actions/runs/34782949287"
+        "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b",
+        "run_id": "38228297973",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/38228297973"
       }
     ]
   },

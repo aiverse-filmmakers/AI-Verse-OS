@@ -1,8 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as core from './capability-resolver-core.mjs';
+import {
+  CAPABILITY_PLACEMENT_CONTRACT,
+  normalizePlacementIntent,
+  promotionRequirement,
+  targetForPlacement,
+} from './capability-placement.mjs';
 
 export * from './capability-resolver-core.mjs';
+export { CAPABILITY_PLACEMENT_CONTRACT } from './capability-placement.mjs';
 
 const WORKSPACE_SEGMENT = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -136,4 +143,59 @@ export function selectCapability(options = {}) {
   if (boundary.state !== 'invalid') return core.selectCapability(options);
   const result = core.selectCapability({ ...options, scope: 'operator' });
   return { ...result, providers: [...(result.providers ?? []), degradedWorkspaceProvider(boundary)] };
+}
+
+export function planCapabilityPlacement(options = {}) {
+  const scope = options.scope ?? 'operator';
+  const intent = normalizePlacementIntent(options.placement, options.contextLabel);
+  let workspaceId = null;
+
+  if (intent.kind === 'this-project') {
+    const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
+    if (boundary.state !== 'valid') {
+      return {
+        contract: CAPABILITY_PLACEMENT_CONTRACT,
+        status: 'review',
+        member_intent: intent,
+        member_message: 'Open or choose the project that should own this capability, then try again.',
+        promotion: { required: false },
+      };
+    }
+    workspaceId = boundary.workspaceId;
+  }
+
+  const target = targetForPlacement({
+    intent,
+    workspaceId,
+    capabilityId: options.capabilityId,
+  });
+  if (target.status !== 'planned') {
+    return {
+      contract: CAPABILITY_PLACEMENT_CONTRACT,
+      ...target,
+      member_intent: intent,
+      promotion: { required: false },
+    };
+  }
+
+  const promotion = promotionRequirement(options.sourceQualifiedId, target.target_qualified_id);
+  if (promotion.blocked) {
+    return {
+      contract: CAPABILITY_PLACEMENT_CONTRACT,
+      status: 'review',
+      member_intent: intent,
+      target_provider: target.target_provider,
+      target_qualified_id: target.target_qualified_id,
+      member_message: 'This capability is managed by AI-Verse and cannot be moved through personal placement.',
+      promotion,
+    };
+  }
+
+  return {
+    contract: CAPABILITY_PLACEMENT_CONTRACT,
+    ...target,
+    member_intent: intent,
+    promotion,
+    managed_distribution_writable_target: false,
+  };
 }

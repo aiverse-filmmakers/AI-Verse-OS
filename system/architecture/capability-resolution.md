@@ -4,7 +4,7 @@ Status: implemented OS consumer for Capability Provider Contract v1.
 
 ## Purpose
 
-AI-Verse OS owns capability discovery and selection. It composes four provider classes without turning any of them into a second OS source of truth:
+AI-Verse OS owns capability discovery, selection and user-owned placement semantics. It composes four provider classes without turning any of them into a second OS source of truth:
 
 1. `os` — canonical built-ins from `system/capabilities/`.
 2. `aiverse-skills` — the optional standalone AI-Verse-Skills distribution, read from its active immutable generation.
@@ -18,6 +18,36 @@ The implementation is `scripts/capability-resolver.mjs`. It performs no network 
 A workspace provider is derived from the requested trusted workspace scope; arbitrary workspace paths are not accepted. `workspace:alpha` can see only `workspaces/alpha/skills/`. Another workspace is neither scanned nor returned. The workspace directory must remain physically inside the OS `workspaces/` root and contain `WORKSPACE.yaml`.
 
 Paths and symlinks are resolved physically before a candidate is accepted. An escaping package or symlink is rejected. Directory-backed providers inspect only direct package directories containing `SKILL.md`; they do not deep-scan unrelated trees.
+
+## Practical placement semantics
+
+New user-owned capabilities are placed by practical reuse intent rather than by asking the member to choose a provider or filesystem path.
+
+The OS-owned placement planner accepts meanings such as:
+
+- "only use this in this project" -> the trusted active Workspace provider;
+- "use this for all YouTube work" -> the private reusable `local` provider, with YouTube retained as practical context rather than invented as a new provider class;
+- "use this everywhere" -> the private reusable `local` provider.
+
+A project-only request fails for practical review when there is no trusted active Workspace. The member is asked to open or choose the project, not to supply a Workspace ID or storage path.
+
+`os` is never a user-authoring target. `aiverse-skills` is also never a user-authoring target: it is the installer-managed distribution whose publication, generations and lifecycle remain owned by AI-Verse-Skills. Saving something for reuse across the member's own work therefore targets `local`, not the installed distribution.
+
+The planner is planning/classification only. It does not move an existing package. If an existing user-owned capability would need to cross providers, the plan explicitly marks that as a separate promotion/migration: current provider-qualified identity is not assumed to survive, provenance/history must be preserved, and affected durable references require admitted repair. Applying that migration belongs to the dedicated promotion/re-scoping flow rather than placement planning.
+
+Machine interface:
+
+```text
+planCapabilityPlacement({
+  scope: <trusted current scope>,
+  placement: "this-project" | "related-work" | "all-my-work" | practical phrase,
+  contextLabel?: <practical label such as YouTube>,
+  capabilityId: <bare capability id>,
+  sourceQualifiedId?: <existing user-owned qualified id>
+})
+```
+
+The corresponding resolver CLI operation is `plan-placement`. The host supplies trusted scope; the member does not select provider IDs, internal scope IDs or folders.
 
 ## Identity and precedence
 

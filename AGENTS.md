@@ -19,6 +19,18 @@ For substantial work inside AI-Verse OS:
 9. Validate before handing output to another step or taking an external action.
 10. Write back only information that deserves to become durable state.
 
+### Core update request rule
+
+When the operator says **"Update AI-Verse"**, **"upgrade AI-Verse"**, **"update the system"**, or makes an equivalent clear request to update the installed AI-Verse Core, treat that as explicit intent to run the canonical Core lifecycle updater.
+
+- From the installed AI-Verse project, locate and invoke the canonical project-bound Distribution command `aiverse update` using the installation's existing tool stack/environment. Do not ask the operator for a release ID, component SHA, repository path, or installer path for an ordinary update.
+- Use the default admitted Core channel unless the operator explicitly names an advanced exact target. Never infer or invent a release target.
+- Do not substitute `git pull`, `git reset`, branch checkout, delete/reclone, reinstall-from-scratch, or direct component-repository updates for the canonical updater.
+- Do not delete, reset, bulk-copy templates over, or directly migrate operator state, Brain state, Memory, workspaces, Data databases, connections, custom files, local/workspace Skills, automations, extensions, or project history as part of an update.
+- If the updater reports a local modification, ambiguous ownership, failed migration, failed health check, or recovery requirement, stop and surface that conflict. Do not work around the fail-closed result by overwriting or deleting the conflicting state.
+- A successful updater result is the authority for completion. Do not claim the update succeeded merely because Git or one component changed.
+- Claude adapters, Codex-compatible agents, Gateway-hosted agents, and other runtimes that consume this contract must converge on this same lifecycle path rather than defining runtime-specific update behavior.
+
 ### First-use and progressive onboarding rule
 
 An incomplete profile or intake must not block an ordinary useful request.

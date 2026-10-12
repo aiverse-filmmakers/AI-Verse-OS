@@ -85,7 +85,8 @@ function noInternalMemberJargon(result) {
     });
     assert.equal(promotion.status, 'planned');
     assert.equal(promotion.promotion.required, true);
-    assert.equal(promotion.promotion.apply_supported, false);
+    assert.equal(promotion.promotion.apply_supported, true);
+    assert.equal(promotion.promotion.admitted_operation, 'workspace-to-local');
     assert.equal(promotion.promotion.qualified_identity_preserved, false);
     assert.equal(promotion.promotion.preserve_provenance, true);
     assert.equal(promotion.promotion.preserve_history, true);

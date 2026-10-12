@@ -12,6 +12,7 @@ permissions:
 jobs:
   placement:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +23,15 @@ jobs:
       - name: Check placement and resolver syntax
         run: |
           node --check scripts/capability-placement.mjs
+          node --check scripts/capability-promotion.mjs
           node --check scripts/capability-resolver.mjs
           node --check scripts/capability-resolver-cli.mjs
 
       - name: Test practical placement semantics
         run: node scripts/test-capability-placement.mjs
+
+      - name: Test admitted Workspace-to-personal promotion and compatibility repair
+        run: node scripts/test-capability-promotion.mjs
 
       - name: Regress scoped discovery and managed-generation selection
         run: node scripts/test-capability-resolver.mjs

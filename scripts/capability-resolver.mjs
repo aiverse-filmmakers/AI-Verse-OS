@@ -7,9 +7,17 @@ import {
   promotionRequirement,
   targetForPlacement,
 } from './capability-placement.mjs';
+import {
+  CAPABILITY_PROMOTION_CONTRACT,
+  applyWorkspaceToLocalPromotion,
+  buildWorkspaceToLocalPromotionPlan,
+  getPromotionCompatibility,
+  parseWorkspaceQualifiedId,
+} from './capability-promotion.mjs';
 
 export * from './capability-resolver-core.mjs';
 export { CAPABILITY_PLACEMENT_CONTRACT } from './capability-placement.mjs';
+export { CAPABILITY_PROMOTION_CONTRACT } from './capability-promotion.mjs';
 
 const WORKSPACE_SEGMENT = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -137,12 +145,177 @@ export function discoverCapabilities(options = {}) {
   };
 }
 
+function exactRequestedCapability(options) {
+  if (typeof options.qualifiedId === 'string' && options.qualifiedId.includes(':')) return options.qualifiedId;
+  if (typeof options.query === 'string' && options.query.includes(':')) return options.query;
+  return null;
+}
+
+function compatibilitySelection(options, direct, requested, boundary) {
+  if (!requested || direct.status === 'selected') return direct;
+  let compatibility;
+  try {
+    compatibility = getPromotionCompatibility({
+      localSkillsRoot: options.localSkillsRoot,
+      requestedQualifiedId: requested,
+    });
+  } catch (error) {
+    return {
+      ...direct,
+      reason: `promotion compatibility evidence is invalid: ${error.message}`,
+    };
+  }
+  if (!compatibility) return direct;
+
+  const effectiveScope = boundary.state === 'invalid' ? 'operator' : (options.scope ?? 'operator');
+  const redirected = core.selectCapability({
+    ...options,
+    scope: effectiveScope,
+    query: compatibility.target_qualified_id,
+    qualifiedId: compatibility.target_qualified_id,
+  });
+  if (redirected.status !== 'selected') {
+    return {
+      ...direct,
+      reason: 'the recorded promoted capability target is unavailable or unhealthy',
+      compatibility,
+    };
+  }
+  return {
+    ...redirected,
+    requested,
+    compatibility,
+    providers: boundary.state === 'invalid'
+      ? [...(redirected.providers ?? []), degradedWorkspaceProvider(boundary)]
+      : redirected.providers,
+  };
+}
+
 export function selectCapability(options = {}) {
   const scope = options.scope ?? 'operator';
   const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
-  if (boundary.state !== 'invalid') return core.selectCapability(options);
-  const result = core.selectCapability({ ...options, scope: 'operator' });
-  return { ...result, providers: [...(result.providers ?? []), degradedWorkspaceProvider(boundary)] };
+  let result;
+  if (boundary.state !== 'invalid') {
+    result = core.selectCapability(options);
+  } else {
+    result = core.selectCapability({ ...options, scope: 'operator' });
+    result = { ...result, providers: [...(result.providers ?? []), degradedWorkspaceProvider(boundary)] };
+  }
+  return compatibilitySelection(options, result, exactRequestedCapability(options), boundary);
+}
+
+function sourceScopeForPromotion(sourceQualifiedId) {
+  const source = parseWorkspaceQualifiedId(sourceQualifiedId);
+  return source ? `workspace:${source.workspace_id}` : null;
+}
+
+function promotionSource(options, sourceQualifiedId) {
+  const sourceScope = sourceScopeForPromotion(sourceQualifiedId);
+  if (!sourceScope) {
+    return { status: 'review', member_message: 'Only a capability owned by the current project can be promoted through this flow.' };
+  }
+  if ((options.scope ?? 'operator') !== sourceScope) {
+    return { status: 'review', member_message: 'Open the project that owns this capability before promoting it.' };
+  }
+  const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope: sourceScope });
+  if (boundary.state !== 'valid') {
+    return { status: 'review', member_message: 'The project that owns this capability needs review before promotion.' };
+  }
+  const selected = core.selectCapability({
+    ...options,
+    scope: sourceScope,
+    query: sourceQualifiedId,
+    qualifiedId: sourceQualifiedId,
+  });
+  if (selected.status !== 'selected' || !selected.selection) {
+    return { status: 'review', member_message: 'The project capability could not be verified for promotion.' };
+  }
+  return { status: 'selected', selection: selected.selection };
+}
+
+function alreadyPromoted(options, sourceQualifiedId) {
+  let compatibility;
+  try {
+    compatibility = getPromotionCompatibility({
+      localSkillsRoot: options.localSkillsRoot,
+      requestedQualifiedId: sourceQualifiedId,
+    });
+  } catch (error) {
+    return { status: 'review', diagnostic: error.message, member_message: 'Promotion history needs review before anything changes.' };
+  }
+  if (!compatibility) return null;
+  const selected = core.selectCapability({
+    ...options,
+    scope: options.scope ?? 'operator',
+    query: compatibility.target_qualified_id,
+    qualifiedId: compatibility.target_qualified_id,
+  });
+  if (selected.status !== 'selected') {
+    return { status: 'review', compatibility, member_message: 'The recorded reusable capability is unavailable and needs review.' };
+  }
+  return {
+    contract: CAPABILITY_PROMOTION_CONTRACT,
+    status: 'already-promoted',
+    source_qualified_id: sourceQualifiedId,
+    target_qualified_id: compatibility.target_qualified_id,
+    qualified_identity_preserved: false,
+    compatibility,
+    member_message: 'This capability is already reusable across your work.',
+  };
+}
+
+export function planCapabilityPromotion(options = {}) {
+  const sourceQualifiedId = options.sourceQualifiedId;
+  if (typeof sourceQualifiedId !== 'string' || !sourceQualifiedId) {
+    return { contract: CAPABILITY_PROMOTION_CONTRACT, status: 'review', member_message: 'Choose the project capability you want to reuse more broadly.' };
+  }
+  const sourceScope = sourceScopeForPromotion(sourceQualifiedId);
+  if (!sourceScope) {
+    return { contract: CAPABILITY_PROMOTION_CONTRACT, status: 'review', member_message: 'Only a capability owned by the current project can be promoted through this flow.' };
+  }
+  if ((options.scope ?? 'operator') !== sourceScope) {
+    return { contract: CAPABILITY_PROMOTION_CONTRACT, status: 'review', member_message: 'Open the project that owns this capability before promoting it.' };
+  }
+
+  const existing = alreadyPromoted(options, sourceQualifiedId);
+  if (existing) return existing;
+  const source = promotionSource(options, sourceQualifiedId);
+  if (source.status !== 'selected') return { contract: CAPABILITY_PROMOTION_CONTRACT, ...source };
+  return buildWorkspaceToLocalPromotionPlan({
+    sourceQualifiedId,
+    sourceSelection: source.selection,
+    localSkillsRoot: options.localSkillsRoot,
+  });
+}
+
+export function applyCapabilityPromotion(options = {}) {
+  const sourceQualifiedId = options.sourceQualifiedId;
+  const preview = planCapabilityPromotion(options);
+  if (preview.status === 'already-promoted') {
+    return { ...preview, effect_occurred: false };
+  }
+  if (preview.status !== 'ready') return { ...preview, effect_occurred: false };
+  if (
+    options.expectedSourceGenerationId !== preview.source_generation_id ||
+    options.expectedSourceDigest !== preview.source_digest?.value
+  ) {
+    return {
+      contract: CAPABILITY_PROMOTION_CONTRACT,
+      status: 'review',
+      effect_occurred: false,
+      stale_plan: true,
+      member_message: 'This capability changed since the preview, so nothing was moved.',
+    };
+  }
+  const source = promotionSource(options, sourceQualifiedId);
+  if (source.status !== 'selected') return { contract: CAPABILITY_PROMOTION_CONTRACT, ...source, effect_occurred: false };
+  return applyWorkspaceToLocalPromotion({
+    sourceQualifiedId,
+    sourceSelection: source.selection,
+    localSkillsRoot: options.localSkillsRoot,
+    expectedSourceGenerationId: options.expectedSourceGenerationId,
+    expectedSourceDigest: options.expectedSourceDigest,
+  });
 }
 
 export function planCapabilityPlacement(options = {}) {

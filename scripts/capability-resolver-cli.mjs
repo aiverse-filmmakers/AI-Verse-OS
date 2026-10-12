@@ -2,7 +2,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { discoverCapabilities, planCapabilityPlacement, selectCapability } from './capability-resolver.mjs';
+import {
+  applyCapabilityPromotion,
+  discoverCapabilities,
+  planCapabilityPlacement,
+  planCapabilityPromotion,
+  selectCapability,
+} from './capability-resolver.mjs';
 
 function fail(message) {
   process.stderr.write(`capability-resolver-cli: ${message}\n`);
@@ -42,6 +48,7 @@ const request = await readPayload();
 const allowed = new Set([
   'operation', 'scope', 'skills_root', 'local_skills_root', 'query', 'qualified_id', 'limit',
   'placement', 'context_label', 'capability_id', 'source_qualified_id',
+  'expected_source_generation_id', 'expected_source_digest',
 ]);
 for (const key of Object.keys(request)) {
   if (!allowed.has(key)) fail(`unknown request field: ${key}`);
@@ -75,6 +82,20 @@ if (operation === 'discover') {
     contextLabel: request.context_label,
     capabilityId: request.capability_id,
     sourceQualifiedId: request.source_qualified_id,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (operation === 'plan-promotion') {
+  const result = planCapabilityPromotion({
+    ...options,
+    sourceQualifiedId: request.source_qualified_id,
+  });
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (operation === 'apply-promotion') {
+  const result = applyCapabilityPromotion({
+    ...options,
+    sourceQualifiedId: request.source_qualified_id,
+    expectedSourceGenerationId: request.expected_source_generation_id,
+    expectedSourceDigest: request.expected_source_digest,
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
 } else {

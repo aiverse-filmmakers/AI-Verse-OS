@@ -215,6 +215,7 @@ Use `SKILL-AUTHORING.md` when creating or promoting a capability.
 - `/audit`: verify architecture, Four Cs, routing, freshness, isolation, and evidence.
 - `/level-up`: use the Three Ms to ship one useful improvement.
 - `/3d-brain`: build a local visual knowledge explorer from selected sources.
+- `/version`: show the installed OS version and compare it with the latest accepted member release.
 
 ## Writeback rules
 

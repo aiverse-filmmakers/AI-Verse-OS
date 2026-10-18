@@ -281,7 +281,7 @@ def effect_counts(effects):
     return counts
 
 
-INTENT_ENGINE_SHA256 = "6e373db8852b59786519cd7911084c4d8ff4cd482dc4dd33588ad1524a4eeb63"
+INTENT_ENGINE_SHA256 = "0cca697b22ded1ad54f8dc1fa2903a82c3511aa04ab04965c9d111557c92ca66"
 
 
 class Bridge:

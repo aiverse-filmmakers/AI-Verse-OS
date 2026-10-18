@@ -183,6 +183,28 @@ class IntentTests(unittest.TestCase):
         replacement=self.service.controller.store.load('intent','operator',new['ref']['id'])
         self.assertEqual(replacement.payload['workspace_links'],['workspace:alpha'])
 
+    def test_correction_link_transfer_resumes_after_owner_api_interruption(self):
+        self.handover()
+        old=self.capture('My overall goal is a research practice.')['ref']
+        self.service.link('alpha',old['id'],'fixture:user','link-before-correction')
+        prior=self.service.controller.store.load('intent','operator',old['id'])
+        data={'classification':'correction','statement':'My overall goal is a research studio.',
+              'supersedes':old['id'],'expected_version':prior.revision,'explicit_user_declaration':True}
+        link_workspace_intent=self.service.controller.link_workspace_intent
+        interrupted=[False]
+        def fail_once(*args,**kwargs):
+            if not interrupted[0]:
+                interrupted[0]=True
+                raise OSError('synthetic interruption during owner link transfer')
+            return link_workspace_intent(*args,**kwargs)
+        self.service.controller.link_workspace_intent=fail_once
+        with self.assertRaises(OSError): self.service.capture('operator',data,'fixture:correction','correction-transfer')
+        self.service.controller.link_workspace_intent=link_workspace_intent
+        saved=self.service.capture('operator',data,'fixture:correction','correction-transfer')
+        view=self.service.relevant('workspace:alpha','Plan substantial work against the corrected overall research goal.')
+        self.assertEqual(view['linked_operator_intents'][0]['id'],saved['ref']['id'])
+        self.assertEqual(len(self.service.snapshot('operator')['strategic_objects']['intents']),1)
+
     def test_cross_scope_read_needs_explicit_request_or_link(self):
         self.handover()
         self.capture('My overall goal is a research practice.')

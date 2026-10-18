@@ -12,7 +12,7 @@ from unittest.mock import patch
 TEST_DIR = Path(__file__).resolve().parent
 PACKAGE = TEST_DIR.parents[1] / "packages" / "ai-verse-codex-learning"
 sys.path.insert(0, str(PACKAGE))
-from install import ID, setup
+from install import FILES, ID, SOURCE, VERSION, setup
 
 
 class SetupTests(unittest.TestCase):
@@ -21,11 +21,17 @@ class SetupTests(unittest.TestCase):
         (root / "AI-VERSE.yaml").write_text('architecture: unified-workspace\n', encoding="utf-8")
         extension = root / ".aiverse/extensions" / ID
         extension.mkdir(parents=True)
-        (extension / "SETUP.md").write_text("Review hooks for [your AI-Verse project].", encoding="utf-8")
-        (extension / "bridge.py").write_bytes((PACKAGE / "bridge.py").read_bytes())
+        for name in FILES:
+            (extension / name).write_bytes((SOURCE / name).read_bytes())
+        files = {
+            name: hashlib.sha256((extension / name).read_bytes()).hexdigest()
+            for name in FILES
+        }
+        (extension / "install-receipt.json").write_text(json.dumps({"version": VERSION, "files": files}), encoding="utf-8")
         registry = {
             "schema_version": "1.0",
-            "extensions": {ID: {"id": ID, "supported": True, "installed": True, "enabled": True}},
+            "extensions": {ID: {"id": ID, "supported": True, "installed": True, "enabled": True,
+                                 "version": VERSION}},
         }
         (root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry), encoding="utf-8")
         return extension
@@ -53,7 +59,8 @@ class SetupTests(unittest.TestCase):
             with patch("install.shutil.which", return_value=None):
                 result = setup(root)
             self.assertEqual(result["state"], "setup-required")
-            self.assertIn("Review hooks for AI-Verse.", result["guidance"])
+            self.assertNotIn("[your AI-Verse project]", result["guidance"])
+            self.assertIn("AI-Verse project", result["guidance"])
             self.assertFalse(result["execution_observed"])
             self.assertFalse(result["review_observed"])
             self.assertFalse(runtime.exists())
@@ -93,12 +100,21 @@ class SetupTests(unittest.TestCase):
             ):
                 result = setup(root)
             self.assertEqual(result["state"], "ready", result)
+            self.assertTrue(result["package_files_verified"])
             self.assertEqual(result["hooks_discovered"], 6)
             self.assertTrue(result["handlers_enabled"])
             self.assertFalse(result["approval_required"])
             self.assertTrue(result["execution_observed"])
             self.assertTrue(result["review_observed"])
             self.assertEqual(events.read_bytes(), before)
+
+            (root / ".aiverse/extensions" / ID / "maintenance.py").write_text("tampered\n", encoding="utf-8")
+            with patch("install.shutil.which", return_value="codex"), patch(
+                "inspect_runtime.inspect", return_value=self.observed_hooks(root)
+            ):
+                result = setup(root)
+            self.assertEqual(result["state"], "setup-required")
+            self.assertFalse(result["package_files_verified"])
 
 
 if __name__ == "__main__":

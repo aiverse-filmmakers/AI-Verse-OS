@@ -348,10 +348,32 @@ def remove(root):
 def setup(root, codex=None):
     root = Path(root).resolve()
     bridge = Bridge(root, create_runtime=False)
+    package_files_verified = False
+    installed_version = None
+    try:
+        registry = read_json(root / ".aiverse/extensions/registry.json", root)
+        entry = registry.get("extensions", {}).get(ID, {})
+        receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
+        installed_version = entry.get("version")
+        expected_files = {name: sha(SOURCE / name) for name in FILES}
+        installed_files = {
+            name: sha(safe(root / f".aiverse/extensions/{ID}" / name, root, file=True))
+            for name in FILES
+        }
+        package_files_verified = (
+            installed_version == VERSION
+            and receipt.get("version") == VERSION
+            and receipt.get("files") == expected_files
+            and installed_files == expected_files
+        )
+    except (OSError, ValueError):
+        pass
     result = {"state": "setup-required", "installed": bridge.registered(),
+              "version": VERSION, "installed_version": installed_version,
+              "package_files_verified": package_files_verified,
               "review_mode": bridge.config["review_mode"], "project": root.name,
               "approval_required": None, "execution_observed": False, "review_observed": False,
-              "guidance": (root / f".aiverse/extensions/{ID}/SETUP.md").read_text().replace(
+              "guidance": (SOURCE / "SETUP.md").read_text().replace(
                   "[your AI-Verse project]", root.name
               )}
     executable = codex or shutil.which("codex")
@@ -376,7 +398,8 @@ def setup(root, codex=None):
             r.get("build") == build and r.get("event") == "review" and r.get("state") == "reviewed"
             for r in rows
         )
-    if result.get("handlers_enabled") and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]:
+    if (result["package_files_verified"] and result.get("handlers_enabled")
+            and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]):
         result["state"] = "ready"
     return result
 

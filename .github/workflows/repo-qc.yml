@@ -32,6 +32,9 @@ jobs:
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 
+      - name: Test read-only accepted OS/Core version report
+        run: node scripts/test-os-version.mjs
+
       - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
 

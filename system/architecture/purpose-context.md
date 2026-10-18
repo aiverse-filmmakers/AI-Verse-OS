@@ -74,6 +74,14 @@ node scripts/purpose-context.mjs read --scope workspace:ai-verse --profile rich 
 
 The CLI is read-only. It creates no Purpose state or cache. If Brain owns direction and no Brain public reader is available in the calling runtime, the projection fails closed with explicit unavailable strategic-direction state rather than reading Brain internals or falling back to stale OS strategy.
 
+### Registered Brain public reader
+
+When Brain owns direction, the Purpose CLI may load only the public reader declared by the installed `ai-verse-brain` extension. The reader path is validated as an OS-root-relative path; the local Python executable is supplied by ignored installation configuration, never packaged. Returned scope and direction owner are checked, and any missing, disabled, malformed, or failing reader remains explicitly unavailable. OS does not inspect Brain storage or fall back to frozen OS direction.
+
+### Explicit Data field reader
+
+The Purpose CLI accepts an optional `--data-bindings` JSON array on stdin, bounded to 64 KiB and 32 exact bindings. Each binding links a retained same-scope Purpose reference to one exact Data field and carries the caller's non-negative `staleAfterMs` policy. The adapter invokes Data only through the existing authorized OS host operation `data.record.get`, preserves source record time and authorization provenance, and projects only scalar values. It does not infer fields, initialize a workspace database, open SQLite, persist copied values, or expose raw record data. Without bindings, the projection reports `data_purpose_bindings_required`; missing, stale, denied, disabled, and unavailable reads remain distinct.
+
 ## Stability and budget
 
 - schema version: `1.0`

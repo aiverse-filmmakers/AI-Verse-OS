@@ -8,12 +8,12 @@
     "install.py": "af20cebc00db275b964f73ef8c686003b969bf917dd8157b71d098810b6a1961",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",
     "inspect_runtime.py": "1b5810e3e323e0432fb1f9f7db8fe6b31e3c16c3fc11dcd9a6edc0d2ac357538",
-    "INSTRUCTIONS.md": "7887b91484f8316d7b39b0b03453cf88ccaacc629db9e46a66bd0e6a36e2bd7e",
+    "INSTRUCTIONS.md": "2483a0a292c93840a7e85aaf4b333a7df40ad07e3d20a543c6ab4e5bf493ce60",
     "README.md": "f60cb04c9c8fb3c46a9d59618bcb784f3a203c918abf0c6c2f076da2f76ca320",
     "REVIEW-SCHEMA.md": "b951991ee6509c2d577b4419c57277bcf1725f0c0850d79f661faea550d25c10",
     "SETUP.md": "1ad9a3c6d540519287730593f2d276f0f49784d82b5a9e594af3ff0b024b79fc",
-    "intent.py": "6e373db8852b59786519cd7911084c4d8ff4cd482dc4dd33588ad1524a4eeb63",
+    "intent.py": "0cca697b22ded1ad54f8dc1fa2903a82c3511aa04ab04965c9d111557c92ca66",
     "brain_read.py": "be53f0eebbb312570079d474e8b8156375ede0c68ee2ca0301378b2a2a8cead1",
-    "INTENT.md": "8b8a6c194145d4b28bd8e86e200b69d061520f3412ade4eaa759f5095751ac3d"
+    "INTENT.md": "263944f8809a685bad99aa2bcae8fc55f47882974ca0a3ae59a8f46624e70ca6"
   }
 }

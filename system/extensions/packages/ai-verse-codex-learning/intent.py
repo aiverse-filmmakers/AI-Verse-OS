@@ -137,9 +137,8 @@ class IntentService:
                     prior = self.controller.store.load("intent", scope, prior_id)
                     if prior.revision != expected or prior.status not in CURRENT or prior.payload.get("subtype") != subtype:
                         raise ValueError("Stale version, inactive, or incompatible correction target")
-                workspace_links = list(prior.payload.get("workspace_links", [])) if prior_id else []
                 item = self.controller.create("intent", scope, "PROPOSED", {
-                    "subtype": subtype, "statement": statement, "workspace_links": workspace_links,
+                    "subtype": subtype, "statement": statement,
                     "codex_capture": {"operation": operation, "fingerprint": fp,
                                       "expected_prior_version": expected, "explicit": confirmed}},
                     source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
@@ -155,8 +154,31 @@ class IntentService:
                     item = self.controller.transition("intent", scope, item.id, "CONFIRMED", source=USER, actor="codex:intent")
                 if item.status == "CONFIRMED":
                     item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor="codex:intent")
+                if prior_id:
+                    # Preserve only relationships already present on the exact superseded
+                    # Brain intent, and recreate each through Brain's public owner API.
+                    # Link scopes stay out of prompts and are never inferred or expanded.
+                    prior = self.controller.store.load("intent", scope, prior_id)
+                    for workspace_scope in self._workspace_link_scopes(prior):
+                        link_operation = "codex-correction-link:" + fingerprint(
+                            {"operation": operation, "intent": item.id, "scope": workspace_scope})
+                        item = self.controller.link_workspace_intent(
+                            item.id, workspace_scope, expected_revision=item.revision,
+                            operation_id=link_operation, evidence_ref=source_ref, source=USER)
             return {"state": "saved" if confirmed else "awaiting-confirmation", "ref": canonical_ref(item),
                     "status": item.status, "supersedes": item.supersedes}
+
+    @staticmethod
+    def _workspace_link_scopes(intent):
+        """Read existing link targets only to carry them across an explicit correction."""
+        scopes = []
+        for link in intent.payload.get("workspace_links", []):
+            scope = link if isinstance(link, str) else link.get("scope") if isinstance(link, dict) else None
+            if not isinstance(scope, str) or not re.fullmatch(r"workspace:[a-z0-9][a-z0-9-]{0,127}", scope):
+                raise ValueError("Prior Brain workspace link is malformed; correction cannot preserve it safely")
+            if scope not in scopes:
+                scopes.append(scope)
+        return scopes
 
     def confirm(self, scope, intent_id, expected, source_ref, operation):
         if self.ownership.owner(scope) != "brain":
@@ -178,7 +200,7 @@ class IntentService:
             return {"state": "saved", "ref": canonical_ref(item), "status": item.status}
 
     def link(self, workspace, intent_id, source_ref, operation):
-        """Explicit relationship metadata lives on the canonical Brain intent itself."""
+        """Record an explicit visibility-only link through Brain's owner API."""
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", workspace) or workspace == "_template":
             raise ValueError("Invalid workspace")
         path = self.root / "workspaces" / workspace / "WORKSPACE.yaml"
@@ -190,19 +212,9 @@ class IntentService:
             intent = self.controller.store.load("intent", "operator", intent_id)
             if intent.status not in {"ACTIVE", "CONFIRMED"}:
                 raise ValueError("Link needs a current operator intent")
-            links = intent.payload.get("workspace_links", [])
-            if any(link.get("scope") == "workspace:" + workspace for link in links):
-                return {"state": "linked", "ref": canonical_ref(intent)}
-            if len(links) >= 32:
-                raise ValueError("Workspace relationship budget exceeded")
-            revision = intent.revision
-            intent.payload["workspace_links"] = links + [{
-                "scope": "workspace:" + workspace, "relation": "executes",
-                "canonical_ref": {"owner": "ai-verse-os", "scope": "workspace:" + workspace,
-                                  "kind": "current-context", "id": "active"},
-                "source_refs": [source_ref], "operation_id": operation}]
-            intent.source_refs.append(source_ref)
-            intent = self.controller.store.save(intent, expected_revision=revision)
+            intent = self.controller.link_workspace_intent(
+                intent_id, "workspace:" + workspace, expected_revision=intent.revision,
+                operation_id=operation, evidence_ref=source_ref, source=USER)
             return {"state": "linked", "ref": canonical_ref(intent)}
 
     def relevant(self, scope, prompt):
@@ -214,25 +226,16 @@ class IntentService:
                   "status": own["status"], "strategic_objects": own["strategic_objects"],
                   "relationships": own["relationships"]}
         if scope.startswith("workspace:"):
-            # Only Brain's public operator snapshot is filtered; no other workspace is read.
-            if self.ownership.owner("operator") == "brain":
-                snapshot = self.snapshot("operator")
-                linked = []
-                for item in snapshot["strategic_objects"]["intents"]:
-                    links = [link for link in item["payload"].get("workspace_links", [])
-                             if link.get("scope") == scope and link.get("relation") == "executes"]
-                    if links:
-                        # Other workspace links never enter this workspace's prompt.
-                        item["payload"]["workspace_links"] = links
-                        linked.append(item)
-                if linked:
-                    result["linked_operator_intents"] = linked
+            # Brain's workspace-scoped projection returns only links for this scope.
+            linked = own.get("linked_operator_intents", [])
+            if linked:
+                result["linked_operator_intents"] = linked
         # Public snapshot is the owner boundary; emit only useful owner-backed fields.
         for group in [*result["strategic_objects"].values(), result.get("linked_operator_intents", [])]:
             for item in group:
                 if "payload" in item:
                     item["payload"] = {key: value for key, value in item["payload"].items()
-                                       if key in {"subtype", "statement", "workspace_links", "hypothesis", "outcome", "serves", "desired_state_refs", "interpretation"}}
+                                       if key in {"subtype", "statement", "hypothesis", "outcome", "serves", "desired_state_refs", "interpretation"}}
         # Bound by objects rather than truncating JSON; data omitted is reported explicitly.
         encoded = json.dumps(result, ensure_ascii=False)
         while len(encoded.encode()) > 4500:

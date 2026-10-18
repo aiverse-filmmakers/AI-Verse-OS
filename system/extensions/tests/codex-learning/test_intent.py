@@ -110,12 +110,16 @@ class IntentTests(unittest.TestCase):
         session,turn,_=self.start('This workspace serves my overall research goal.','workspace:alpha')
         data={'quote':'This workspace serves my overall research goal.','workspace':'alpha','intent_id':goal['id'],'explicit_relationship':True,'explicit_operator_scope':True}
         self.bridge.intent('link','operator',data,session,turn['id'],turn['token'])
+        linked_object=self.service.controller.store.load('intent','operator',goal['id'])
+        revision=linked_object.revision
+        self.bridge.intent('link','operator',data,session,turn['id'],turn['token'])
+        self.assertEqual(self.service.controller.store.load('intent','operator',goal['id']).revision,revision)
         visible=self.service.relevant('workspace:alpha','Plan the next substantial research deliverable for the linked overall goal.')
         self.assertEqual(visible['linked_operator_intents'][0]['id'],goal['id'])
         self.assertNotIn('linked_operator_intents',self.service.relevant('workspace:beta','Plan the next substantial research deliverable for the linked overall goal.'))
         canonical=self.service.controller.store.load('intent','operator',goal['id'])
-        self.assertEqual(canonical.payload['workspace_links'][0]['scope'],'workspace:alpha')
-        self.assertNotIn('statement',canonical.payload['workspace_links'][0])
+        self.assertEqual(canonical.payload['workspace_links'],['workspace:alpha'])
+        self.assertEqual(canonical.payload['workspace_link_operations'][0]['workspace_scope'],'workspace:alpha')
         self.assertEqual(len(self.service.controller.store.list('initiative','operator')),0)
 
     def test_wrong_turn_tool_claim_and_scope_rejected(self):
@@ -176,6 +180,8 @@ class IntentTests(unittest.TestCase):
         new=self.capture('My overall goal is a research studio.', classification='correction',supersedes=old.id,expected_version=old.revision)
         view=self.service.relevant('workspace:alpha','Plan substantial work against the current overall research goal.')
         self.assertEqual(view['linked_operator_intents'][0]['id'],new['ref']['id'])
+        replacement=self.service.controller.store.load('intent','operator',new['ref']['id'])
+        self.assertEqual(replacement.payload['workspace_links'],['workspace:alpha'])
 
     def test_cross_scope_read_needs_explicit_request_or_link(self):
         self.handover()

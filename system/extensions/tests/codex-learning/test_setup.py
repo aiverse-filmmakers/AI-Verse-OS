@@ -101,6 +101,7 @@ class SetupTests(unittest.TestCase):
                 result = setup(root)
             self.assertEqual(result["state"], "ready", result)
             self.assertTrue(result["package_files_verified"])
+            self.assertTrue(result["enabled"])
             self.assertEqual(result["hooks_discovered"], 6)
             self.assertTrue(result["handlers_enabled"])
             self.assertFalse(result["approval_required"])
@@ -115,6 +116,22 @@ class SetupTests(unittest.TestCase):
                 result = setup(root)
             self.assertEqual(result["state"], "setup-required")
             self.assertFalse(result["package_files_verified"])
+
+    def test_disabled_extension_is_installed_but_never_ready(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "AI-Verse"
+            extension = self.fixture(root)
+            root = root.resolve()
+            registry_path = root / ".aiverse/extensions/registry.json"
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+            registry["extensions"][ID]["enabled"] = False
+            registry_path.write_text(json.dumps(registry), encoding="utf-8")
+            with patch("install.shutil.which", return_value=None):
+                result = setup(root)
+            self.assertTrue(result["installed"])
+            self.assertFalse(result["enabled"])
+            self.assertTrue(result["package_files_verified"])
+            self.assertEqual(result["state"], "setup-required")
 
 
 if __name__ == "__main__":

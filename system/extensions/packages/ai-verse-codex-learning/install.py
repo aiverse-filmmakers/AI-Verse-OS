@@ -1,0 +1,250 @@
+#!/usr/bin/env python3
+"""Portable extension package/install/setup interface for AI-Verse Distribution."""
+import argparse
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import zipfile
+
+from bridge import Bridge, DEFAULT_ROOT, ID, VERSION, atomic_json, read_json, safe, utc
+from lifecycle import definition, merge
+
+SOURCE = Path(__file__).resolve().parent
+FILES = ("bridge.py", "lifecycle.py", "install.py", "maintenance.py", "inspect_runtime.py",
+         "INSTRUCTIONS.md", "README.md", "REVIEW-SCHEMA.md", "SETUP.md", "intent.py", "brain_read.py", "INTENT.md")
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def metadata_for(root, explicit=None):
+    candidates = [Path(explicit)] if explicit else list((root.parent / ".ai-verse-tools").glob("*/project.json"))
+    matches = []
+    for path in candidates:
+        if path.stat().st_size > 1_000_000:
+            continue
+        value = json.loads(path.read_text())
+        if value.get("schema_version") == 1 and Path(value.get("project", "")).resolve() == root:
+            matches.append((path, value))
+    if len(matches) > 1:
+        raise ValueError("multiple installation records match this project; supply the admitted metadata file")
+    if explicit and not matches:
+        raise ValueError("installation metadata belongs to another project")
+    return matches[0][1] if matches else {}
+
+
+def discover(root, options):
+    metadata = metadata_for(root, options.get("metadata"))
+    components = metadata.get("checks", {}).get("doctor", {}).get("components", {})
+    brain = components.get("ai-verse-brain", {}).get("argv", [])
+    owner_python = Path(brain[0]).parent / ("python.exe" if os.name == "nt" else "python") if brain else None
+    python = options.get("python") or (str(owner_python) if owner_python and owner_python.is_file() else metadata.get("python")) or sys.executable
+    # Resolving a venv symlink to its base Python loses the installed owner packages.
+    python = str(Path(python).absolute())
+    check_code = "import sys,sqlite3;assert sys.version_info >= (3,9)"
+    if brain:
+        check_code += ";import aiverse_brain"
+    check = subprocess.run([python, "-c", check_code],
+                           capture_output=True, timeout=10)
+    if check.returncode:
+        raise ValueError("setup requires Python >=3.9 with the admitted owner's packages; provision it through Distribution")
+    node = options.get("node") or metadata.get("managed_node", {}).get("node") or shutil.which("node")
+    if not node or not Path(node).is_file():
+        raise ValueError("setup requires the project's admitted Node runtime")
+    node = Path(node).resolve()
+    skills = components.get("ai-verse-skills", {}).get("argv", [])
+    skills_root = options.get("skills_root")
+    if not skills_root and "--root" in skills:
+        skills_root = skills[skills.index("--root") + 1]
+    entrypoint = options.get("skills_entrypoint") or (skills[1] if len(skills) > 1 and skills[1].endswith(".py") else None)
+    if bool(skills_root) != bool(entrypoint):
+        raise ValueError("Skills root and admitted entrypoint must be supplied together")
+    if entrypoint and (not Path(entrypoint).is_file() or not Path(skills_root).is_dir()):
+        raise ValueError("Skills installation paths are unavailable")
+    return {"python": python, "runtime_path": str(node.parent),
+            "skills_root": str(Path(skills_root).resolve()) if skills_root else None,
+            "skills_entrypoint": str(Path(entrypoint).resolve()) if entrypoint else None}
+
+
+def package(output):
+    manifest = {"schema_version": 1, "id": ID, "version": VERSION,
+                "files": {name: sha(SOURCE / name) for name in FILES}}
+    output = Path(output).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name in FILES:
+            archive.write(SOURCE / name, name)
+        archive.writestr("PACKAGE.json", json.dumps(manifest, indent=2) + "\n")
+    return {"package": str(output), "sha256": sha(output), "version": VERSION,
+            "includes_operator_data": False, "files": list(FILES)}
+
+
+def install(root, options):
+    root = Path(root).resolve()
+    manifest = safe(root / "AI-VERSE.yaml", root, file=True).read_text()
+    if "unified-workspace" not in manifest:
+        raise ValueError("target is not a compatible AI-Verse OS")
+    target = root / ".aiverse/extensions" / ID
+    same = SOURCE == target
+    if not same:
+        admitted = json.loads((SOURCE / "PACKAGE.json").read_text())
+        if admitted.get("id") != ID or admitted.get("version") != VERSION or set(admitted.get("files", {})) != set(FILES):
+            raise ValueError("invalid package manifest")
+        if any(sha(safe(SOURCE / name, SOURCE, file=True)) != admitted["files"][name] for name in FILES):
+            raise ValueError("package integrity mismatch")
+    runtime = discover(root, options)
+    ledger_path = target / "install-receipt.json"
+    prior = read_json(ledger_path, root) if ledger_path.exists() else {}
+    for name in FILES:
+        destination = safe(target / name, root)
+        if destination.exists() and not same and sha(destination) != sha(SOURCE / name):
+            if prior.get("files", {}).get(name) != sha(destination):
+                raise ValueError("preserve locally modified or unknown extension file: " + name)
+    config_path = safe(target / "config.json", root)
+    existing = read_json(config_path, root) if config_path.exists() else {}
+    config = {**existing, "schema_version": 1, "enabled": existing.get("enabled", True),
+              "review_mode": existing.get("review_mode", "off"),
+              **{key: value for key, value in runtime.items() if key != "python"}}
+    hooks_path = safe(root / ".codex/hooks.json", root)
+    hooks = read_json(hooks_path, root) if hooks_path.exists() else {"hooks": {}}
+    # Relocation: remove only exact owned commands recorded in the previous receipt.
+    owned = set(prior.get("hook_commands", []))
+    expected_handlers = {(item["event"], item["handler"]["command"]): item for item in prior.get("handlers", [])}
+    for event, groups in hooks.get("hooks", {}).items():
+        for group in groups:
+            for handler in group["hooks"]:
+                if handler.get("command") in owned:
+                    expected = expected_handlers.get((event, handler["command"]))
+                    if expected and (handler != expected["handler"] or
+                                     {k: v for k, v in group.items() if k != "hooks"} != expected["group"]):
+                        raise ValueError("preserve locally modified owned hook: " + event)
+            group["hooks"] = [h for h in group["hooks"] if h.get("command") not in owned]
+    generated = definition(root, runtime["python"], build=sha(SOURCE / "bridge.py"))
+    hooks = merge(hooks, generated["hooks"], root)
+    registry_path = safe(root / ".aiverse/extensions/registry.json", root)
+    registry = read_json(registry_path, root) if registry_path.exists() else {"schema_version": "1.0", "extensions": {}}
+    if registry.get("schema_version") != "1.0" or not isinstance(registry.get("extensions"), dict):
+        raise ValueError("preserve unsupported extension registry")
+    registry["extensions"][ID] = {**registry["extensions"].get(ID, {}), "id": ID,
+        "supported": True, "installed": True, "enabled": config["enabled"], "version": VERSION,
+        "source": "ai-verse-codex-learning-package", "engine": f".aiverse/extensions/{ID}/bridge.py",
+        "instructions": f".aiverse/extensions/{ID}/INSTRUCTIONS.md", "adapters": [".codex/hooks.json"],
+        "hook_build_sha256": sha(SOURCE / "bridge.py"),
+        "compatibility": {"os_schema_major": 2, "codex_hooks": "command-v1"}}
+    # All conflicts and dependencies are checked before the first write. Preserve bytes on a failed transaction.
+    destinations = [target / name for name in FILES] + [config_path, hooks_path, registry_path, ledger_path]
+    backup = {file: file.read_bytes() if file.exists() else None for file in destinations}
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if not same:
+            for name in FILES:
+                destination = safe(target / name, root)
+                destination.write_bytes((SOURCE / name).read_bytes())
+        atomic_json(config_path, config, root)
+        atomic_json(hooks_path, hooks, root)
+        atomic_json(registry_path, registry, root)
+        ledger = {"schema_version": 1, "version": VERSION, "root": str(root), "python": runtime["python"],
+                  "installed_at": utc(), "files": {name: sha(target / name) for name in FILES},
+                  "handlers": [{"event": event, "group": {k: v for k, v in group.items() if k != "hooks"}, "handler": handler}
+                               for event, groups in generated["hooks"].items() for group in groups for handler in group["hooks"]],
+                  "hook_commands": [h["command"] for groups in generated["hooks"].values() for group in groups for h in group["hooks"]]}
+        atomic_json(ledger_path, ledger, root)
+        Bridge(root)  # Validate generated configuration through the actual runtime.
+    except Exception:
+        for file, data in backup.items():
+            if data is None:
+                file.unlink(missing_ok=True)
+            else:
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(data)
+        raise
+    return {"state": "setup-required", "installed": True, "version": VERSION,
+            "trust_modified": False, "next_step": "Open Codex Settings → Hooks, review this project's six hooks, then say Done in the setup chat.",
+            "review_mode": config["review_mode"], "canonical_user_state_modified": False}
+
+
+def setup(root, codex=None):
+    root = Path(root).resolve()
+    bridge = Bridge(root)
+    result = {"state": "setup-required", "installed": bridge.registered(),
+              "review_mode": bridge.config["review_mode"], "project": root.name,
+              "approval_required": None, "execution_observed": False, "review_observed": False,
+              "guidance": (root / f".aiverse/extensions/{ID}/SETUP.md").read_text()}
+    executable = codex or shutil.which("codex")
+    if executable:
+        from inspect_runtime import inspect
+        try:
+            observed = inspect(root, codex=executable)
+            hooks = [h for row in observed.get("hooks", {}).get("result", {}).get("data", [])
+                     for h in row.get("hooks", []) if h.get("sourcePath") == str(root / ".codex/hooks.json")
+                     and f".aiverse/extensions/{ID}/bridge.py" in h.get("command", "").replace("\\", "/")]
+            result["hooks_discovered"] = len(hooks)
+            result["handlers_enabled"] = len(hooks) == 6 and all(h.get("enabled") is True for h in hooks)
+            result["approval_required"] = any(h.get("trustStatus") != "trusted" for h in hooks) if hooks else None
+        except (OSError, ValueError, RuntimeError, TimeoutError):
+            result["discovery"] = "unavailable; keep setup pending"
+    events = root / "runtime/codex-learning/events.jsonl"
+    if events.exists() and events.stat().st_size <= 4_000_000:
+        rows = [json.loads(s) for s in events.read_text().splitlines()[-5000:]]
+        build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
+        result["execution_observed"] = any(r.get("build") == build and r.get("event") == "UserPromptSubmit" for r in rows)
+        result["review_observed"] = any(r.get("build") == build and r.get("event") == "review" for r in rows)
+    if result.get("handlers_enabled") and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]:
+        result["state"] = "ready"
+    return result
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("command", choices=["package", "install", "setup", "doctor", "descriptor", "remove"])
+    p.add_argument("--root", default=str(DEFAULT_ROOT))
+    p.add_argument("--output")
+    for name in ("metadata", "python", "node", "skills-root", "skills-entrypoint", "codex"):
+        p.add_argument("--" + name)
+    p.add_argument("--json", action="store_true")
+    args = p.parse_args()
+    options = vars(args)
+    root = Path(args.root).resolve()
+    try:
+        if args.command == "package":
+            if not args.output:
+                p.error("package requires --output")
+            result = package(args.output)
+        elif args.command == "install":
+            result = install(root, options)
+        elif args.command == "remove":
+            from lifecycle import merge
+            file = safe(root / ".codex/hooks.json", root)
+            atomic_json(file, merge(read_json(file, root), {}, root), root)
+            registry_file = root / ".aiverse/extensions/registry.json"
+            registry = read_json(registry_file, root)
+            registry["extensions"][ID].update({"installed": False, "enabled": False, "adapters": []})
+            atomic_json(registry_file, registry, root)
+            result = {"state": "absent", "canonical_state_preserved": True, "extension_files_preserved": True}
+        else:
+            result = setup(root, args.codex)
+            if args.command == "descriptor":
+                result.update({"component_id": ID, "version": VERSION,
+                    "owner": ID, "os_schema_major": 2, "public_commands": ["install", "setup", "doctor", "descriptor", "remove"],
+                    "authority_transfer": False, "preserves_canonical_state": True,
+                    "platform_status": {"macos": "local runtime checked", "linux": "implementation; native release test required", "windows": "implementation; native release test required"}})
+        if args.json or args.command not in {"setup", "doctor"}:
+            print(json.dumps(result))
+        else:
+            print(result["guidance"].replace("[your AI-Verse project]", root.name))
+            print("\nObserved setup state: " + result["state"])
+        return 0
+    except Exception as error:
+        print(json.dumps({"state": "setup-required", "ok": False, "error": str(error)[:300]}))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

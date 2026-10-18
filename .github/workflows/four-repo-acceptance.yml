@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     env:
       MEMORY_COMMIT: 2606bf6524fd67b4a3930fb7d98de54a3d483fb1
-      BRAIN_COMMIT: a53f79cf083d99b39a87d9ffe9509bf4e2d02922
+      BRAIN_COMMIT: 107100e850f31c6720f69ae47f27c1d8d34b3abf
       SKILLS_COMMIT: fb0c138ef424734cd2e5359040f376e35c4c5875
 
     steps:
@@ -94,6 +94,17 @@ jobs:
           PY
           grep -Fq 'ai-verse-brain' .aiverse/extensions/registry.json
           test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Run optional Codex learning owner and lifecycle tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          SKILLS="$(cat "$RUNNER_TEMP/skills-repo.txt")"
+          AIVERSE_TEST_SKILLS_ENTRYPOINT="$SKILLS/installer/aiverse_skills.py" \
+          PYTHONPATH="system/extensions/packages/ai-verse-codex-learning:system/extensions/tests/codex-learning" \
+            python -m unittest discover \
+              -s system/extensions/tests/codex-learning \
+              -p 'test*.py' -v
 
       - name: Install Skills externally and prove OS provider discovery
         shell: bash

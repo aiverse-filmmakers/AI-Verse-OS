@@ -21,7 +21,7 @@ class SetupTests(unittest.TestCase):
         (root / "AI-VERSE.yaml").write_text('architecture: unified-workspace\n', encoding="utf-8")
         extension = root / ".aiverse/extensions" / ID
         extension.mkdir(parents=True)
-        (extension / "SETUP.md").write_text("Review project hooks.", encoding="utf-8")
+        (extension / "SETUP.md").write_text("Review hooks for [your AI-Verse project].", encoding="utf-8")
         (extension / "bridge.py").write_bytes((PACKAGE / "bridge.py").read_bytes())
         registry = {
             "schema_version": "1.0",
@@ -53,6 +53,7 @@ class SetupTests(unittest.TestCase):
             with patch("install.shutil.which", return_value=None):
                 result = setup(root)
             self.assertEqual(result["state"], "setup-required")
+            self.assertIn("Review hooks for AI-Verse.", result["guidance"])
             self.assertFalse(result["execution_observed"])
             self.assertFalse(result["review_observed"])
             self.assertFalse(runtime.exists())

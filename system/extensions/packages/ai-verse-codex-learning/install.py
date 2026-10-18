@@ -351,7 +351,9 @@ def setup(root, codex=None):
     result = {"state": "setup-required", "installed": bridge.registered(),
               "review_mode": bridge.config["review_mode"], "project": root.name,
               "approval_required": None, "execution_observed": False, "review_observed": False,
-              "guidance": (root / f".aiverse/extensions/{ID}/SETUP.md").read_text()}
+              "guidance": (root / f".aiverse/extensions/{ID}/SETUP.md").read_text().replace(
+                  "[your AI-Verse project]", root.name
+              )}
     executable = codex or shutil.which("codex")
     if executable:
         from inspect_runtime import inspect

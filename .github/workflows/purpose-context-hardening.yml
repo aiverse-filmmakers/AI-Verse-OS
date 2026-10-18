@@ -9,6 +9,9 @@ on:
       - 'scripts/test-purpose-context-semantic-acceptance.mjs'
       - 'scripts/test-purpose-context-semantic-acceptance-events.mjs'
       - 'scripts/test-purpose-data-current-state.mjs'
+      - 'scripts/*purpose-reader.mjs'
+      - 'scripts/test-purpose-context-cli-data.mjs'
+      - 'scripts/test-brain-purpose-reader.mjs'
       - 'scripts/test-purpose-data-source-descent.mjs'
       - 'scripts/test-purpose-memory-history-boundary.mjs'
       - 'scripts/test-action-permission.mjs'
@@ -32,8 +35,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
       - name: Run Purpose Context rebuildability hardening proofs
         run: node scripts/test-purpose-context-hardening.mjs
+      - name: Run explicit Brain and Data Purpose reader proofs
+        env:
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: |
+          node scripts/test-brain-purpose-reader.mjs
+          node scripts/test-purpose-context-cli-data.mjs
       - name: Run Purpose Context security hardening proofs
         run: node scripts/test-purpose-context-security-hardening.mjs
       - name: Run Data and Memory scope boundary proofs

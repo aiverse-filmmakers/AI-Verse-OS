@@ -193,7 +193,10 @@ def _atomic_write_bytes(path, payload):
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
         if mode is not None:
-            os.fchmod(fd, mode)
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, mode)
+            else:
+                os.chmod(temporary, mode)
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()

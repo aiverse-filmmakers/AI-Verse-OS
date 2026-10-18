@@ -11,6 +11,8 @@ import tempfile
 import time
 import threading
 import unittest
+import zipfile
+from unittest.mock import patch
 
 from bridge import Bridge, DEFAULT_ROOT, EXT, ID, Refused, atomic_json, digest, proof, matches, load_module
 from lifecycle import definition, merge
@@ -717,6 +719,69 @@ class AdapterTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 installer.install(self.root, options)
             self.assertEqual(hooks.read_bytes(), before)
+        finally:
+            installer.SOURCE = source
+
+    def test_portable_package_remove_preserves_modified_owned_hooks(self):
+        import install as installer
+        source = installer.SOURCE
+        try:
+            archive = self.root / "adapter.zip"
+            installer.package(archive)
+            extracted = self.root / "package"
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)
+            installer.SOURCE = extracted
+            options = {"python": sys.executable, "node": shutil.which("node")}
+            installer.install(self.root, options)
+            hooks = self.root / ".codex/hooks.json"
+            registry = self.root / ".aiverse/extensions/registry.json"
+            original_hooks = hooks.read_bytes()
+            original_registry = registry.read_bytes()
+            value = json.loads(original_hooks)
+            value["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 99
+            hooks.write_text(json.dumps(value))
+            modified_hooks = hooks.read_bytes()
+            with self.assertRaises(ValueError):
+                installer.remove(self.root)
+            self.assertEqual(hooks.read_bytes(), modified_hooks)
+            self.assertEqual(registry.read_bytes(), original_registry)
+
+            hooks.write_bytes(original_hooks)
+            real_atomic_json = installer.atomic_json
+            failed = False
+
+            def fail_registry_once(path, value, root):
+                nonlocal failed
+                if Path(path) == registry and not failed:
+                    failed = True
+                    raise OSError("simulated registry write failure")
+                return real_atomic_json(path, value, root)
+
+            with patch.object(installer, "atomic_json", side_effect=fail_registry_once):
+                with self.assertRaises(OSError):
+                    installer.remove(self.root)
+            self.assertEqual(hooks.read_bytes(), original_hooks)
+            self.assertEqual(registry.read_bytes(), original_registry)
+
+            value = json.loads(original_hooks)
+            value["hooks"]["Stop"][0]["hooks"].append({"type": "command", "command": "echo user-owned"})
+            hooks.write_text(json.dumps(value))
+            installer.remove(self.root)
+            result_hooks = json.loads(hooks.read_text())
+            result_registry = json.loads(registry.read_text())
+            self.assertEqual(result_hooks["hooks"]["Stop"][0]["hooks"],
+                             [{"type": "command", "command": "echo user-owned"}])
+            self.assertFalse(result_registry["extensions"][ID]["installed"])
+            self.assertFalse(result_registry["extensions"][ID]["enabled"])
+            self.assertEqual(result_registry["extensions"][ID]["adapters"], [])
+            self.assertTrue((self.root / ".aiverse/extensions" / ID / "bridge.py").is_file())
+            self.assertTrue((self.root / "operator/memory").is_dir())
+            hooks_after_remove = hooks.read_bytes()
+            registry_after_remove = registry.read_bytes()
+            installer.remove(self.root)
+            self.assertEqual(hooks.read_bytes(), hooks_after_remove)
+            self.assertEqual(registry.read_bytes(), registry_after_remove)
         finally:
             installer.SOURCE = source
 

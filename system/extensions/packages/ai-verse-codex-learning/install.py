@@ -170,6 +170,158 @@ def install(root, options):
             "review_mode": config["review_mode"], "canonical_user_state_modified": False}
 
 
+def _restore_bytes(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".restore", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def remove(root):
+    """Disable this package only after proving every removed hook is still owned."""
+    root = Path(root).resolve()
+    registry_file = safe(root / ".aiverse/extensions/registry.json", root, file=True)
+    hooks_file = safe(root / ".codex/hooks.json", root, file=True)
+    receipt_file = safe(root / ".aiverse/extensions" / ID / "install-receipt.json", root, file=True)
+    if not registry_file.is_file():
+        if hooks_file.exists():
+            from lifecycle import is_ours, merge
+            hooks = read_json(hooks_file, root)
+            merge(hooks, {}, root)
+            if any(is_ours(handler, root)
+                   for groups in hooks["hooks"].values()
+                   for group in groups
+                   for handler in group["hooks"]):
+                raise ValueError("extension registry is missing; hook ownership cannot be verified")
+        return {"state": "absent", "canonical_state_preserved": True,
+                "extension_files_preserved": True, "trust_modified": False}
+
+    registry = read_json(registry_file, root)
+    if registry.get("schema_version") != "1.0" or not isinstance(registry.get("extensions"), dict):
+        raise ValueError("unsupported extension registry; preserve it")
+    entry = registry["extensions"].get(ID)
+    if entry is None:
+        raise ValueError("package registration is missing; hook ownership cannot be verified")
+    if not isinstance(entry, dict) or entry.get("id", ID) != ID:
+        raise ValueError("package registration is malformed; preserve it")
+    if not receipt_file.is_file():
+        raise ValueError("package ownership receipt is missing; preserve registered hooks")
+
+    prior = read_json(receipt_file, root)
+    commands = prior.get("hook_commands")
+    handlers = prior.get("handlers")
+    if (
+        prior.get("schema_version") != 1
+        or not isinstance(prior.get("version"), str)
+        or entry.get("version") != prior.get("version")
+        or not isinstance(commands, list)
+        or not commands
+        or any(not isinstance(command, str) or not command for command in commands)
+        or not isinstance(handlers, list)
+    ):
+        raise ValueError("package ownership receipt is invalid; preserve registered hooks")
+    owned = set(commands)
+    expected = {}
+    for row in handlers:
+        if not isinstance(row, dict) or not isinstance(row.get("event"), str):
+            raise ValueError("package hook ownership receipt is invalid; preserve registered hooks")
+        group = row.get("group")
+        handler = row.get("handler")
+        command = handler.get("command") if isinstance(handler, dict) else None
+        if (
+            not isinstance(group, dict)
+            or not isinstance(handler, dict)
+            or command not in owned
+            or (row["event"], command) in expected
+        ):
+            raise ValueError("package hook ownership receipt is invalid; preserve registered hooks")
+        expected[(row["event"], command)] = row
+    if {command for _, command in expected} != owned:
+        raise ValueError("package hook ownership receipt is incomplete; preserve registered hooks")
+
+    hooks_existed = hooks_file.exists()
+    hooks = read_json(hooks_file, root) if hooks_existed else {"hooks": {}}
+    from lifecycle import is_ours, merge
+    merge(hooks, {}, root)  # Validate the full shared hook document before changing it.
+    actual_owned = set()
+    updated_hooks = {**hooks, "hooks": {}}
+    for event, groups in hooks["hooks"].items():
+        retained_groups = []
+        for group in groups:
+            metadata = {key: value for key, value in group.items() if key != "hooks"}
+            retained_handlers = []
+            removed_from_group = False
+            for handler in group["hooks"]:
+                command = handler.get("command") if isinstance(handler, dict) else None
+                if command in owned:
+                    recorded = expected.get((event, command))
+                    if (
+                        recorded is None
+                        or handler != recorded["handler"]
+                        or metadata != recorded["group"]
+                    ):
+                        raise ValueError(f"preserve locally modified owned hook: {event}")
+                    actual_owned.add((event, command))
+                    removed_from_group = True
+                elif is_ours(handler, root):
+                    raise ValueError(f"hook ownership cannot be verified: {event}")
+                else:
+                    retained_handlers.append(handler)
+            if retained_handlers:
+                retained_groups.append({**group, "hooks": retained_handlers})
+            elif not removed_from_group:
+                retained_groups.append(group)
+        updated_hooks["hooks"][event] = retained_groups
+    updated_hooks["hooks"] = {
+        event: groups for event, groups in updated_hooks["hooks"].items()
+        if groups or not hooks["hooks"].get(event)
+    }
+
+    if entry.get("installed") is not True and not actual_owned:
+        if entry.get("enabled") is not False or entry.get("adapters") != []:
+            raise ValueError("package registration is inconsistent; preserve it")
+        return {"state": "absent", "canonical_state_preserved": True,
+                "extension_files_preserved": True, "trust_modified": False}
+    if actual_owned != set(expected):
+        raise ValueError("registered hooks are incomplete; preserve package state")
+    updated_registry = json.loads(json.dumps(registry))
+    updated_registry["extensions"][ID].update(
+        {"installed": False, "enabled": False, "adapters": []}
+    )
+    backups = {
+        hooks_file: hooks_file.read_bytes() if hooks_existed else None,
+        registry_file: registry_file.read_bytes(),
+    }
+    try:
+        if hooks_existed:
+            atomic_json(hooks_file, updated_hooks, root)
+        atomic_json(registry_file, updated_registry, root)
+        written_registry = read_json(registry_file, root)
+        written_entry = written_registry["extensions"].get(ID, {})
+        if (written_entry.get("installed") is not False
+                or written_entry.get("enabled") is not False
+                or written_entry.get("adapters") != []):
+            raise ValueError("package removal did not verify")
+    except Exception:
+        for path, payload in backups.items():
+            if payload is None:
+                path.unlink(missing_ok=True)
+            else:
+                _restore_bytes(path, payload)
+        raise
+    return {"state": "absent", "canonical_state_preserved": True,
+            "extension_files_preserved": True, "trust_modified": False}
+
+
 def setup(root, codex=None):
     root = Path(root).resolve()
     bridge = Bridge(root)
@@ -220,14 +372,7 @@ def main():
         elif args.command == "install":
             result = install(root, options)
         elif args.command == "remove":
-            from lifecycle import merge
-            file = safe(root / ".codex/hooks.json", root)
-            atomic_json(file, merge(read_json(file, root), {}, root), root)
-            registry_file = root / ".aiverse/extensions/registry.json"
-            registry = read_json(registry_file, root)
-            registry["extensions"][ID].update({"installed": False, "enabled": False, "adapters": []})
-            atomic_json(registry_file, registry, root)
-            result = {"state": "absent", "canonical_state_preserved": True, "extension_files_preserved": True}
+            result = remove(root)
         else:
             result = setup(root, args.codex)
             if args.command == "descriptor":

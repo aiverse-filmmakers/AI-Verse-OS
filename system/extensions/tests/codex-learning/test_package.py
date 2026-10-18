@@ -45,6 +45,8 @@ class PackageTests(unittest.TestCase):
             with zipfile.ZipFile(archive_path) as archive:
                 names = set(archive.namelist())
                 manifest = json.loads(archive.read("PACKAGE.json"))
+                tracked_manifest = json.loads((PACKAGE / "PACKAGE.json").read_text(encoding="utf-8"))
+                self.assertEqual(tracked_manifest, manifest)
                 members = names - {"PACKAGE.json"}
                 self.assertEqual(members, set(manifest["files"]))
                 self.assertFalse(names & FORBIDDEN_MEMBERS)

@@ -785,6 +785,43 @@ class AdapterTests(unittest.TestCase):
         finally:
             installer.SOURCE = source
 
+    def test_portable_package_install_resumes_after_atomic_file_interruption(self):
+        import install as installer
+        source = installer.SOURCE
+        try:
+            archive = self.root / "adapter.zip"
+            installer.package(archive)
+            extracted = self.root / "package"
+            with zipfile.ZipFile(archive) as bundle:
+                bundle.extractall(extracted)
+            installer.SOURCE = extracted
+            options = {"python": sys.executable, "node": shutil.which("node")}
+            target = self.root / ".aiverse/extensions" / ID
+            shutil.rmtree(target)
+            hooks = self.root / ".codex/hooks.json"
+            hooks.parent.mkdir(parents=True, exist_ok=True)
+            hooks.write_text(json.dumps({"hooks": {}}))
+            registry = self.root / ".aiverse/extensions/registry.json"
+            hooks_before = hooks.read_bytes()
+            registry_before = registry.read_bytes()
+            context_before = (self.root / "operator/context/CURRENT.md").read_bytes()
+
+            with patch("install.os.replace", side_effect=KeyboardInterrupt("simulated process interruption")):
+                with self.assertRaises(KeyboardInterrupt):
+                    installer.install(self.root, options)
+            self.assertFalse((target / "bridge.py").exists())
+            self.assertEqual(list(target.glob(".bridge.py.*.tmp")), [])
+            self.assertEqual(hooks.read_bytes(), hooks_before)
+            self.assertEqual(registry.read_bytes(), registry_before)
+            self.assertEqual((self.root / "operator/context/CURRENT.md").read_bytes(), context_before)
+
+            receipt = installer.install(self.root, options)
+            self.assertTrue(receipt["installed"])
+            self.assertEqual(json.loads(hooks.read_text())["hooks"].keys(), {"UserPromptSubmit", "SessionStart", "PostToolUse", "Stop", "Interrupt", "SessionEnd"})
+            self.assertEqual((self.root / "operator/context/CURRENT.md").read_bytes(), context_before)
+        finally:
+            installer.SOURCE = source
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

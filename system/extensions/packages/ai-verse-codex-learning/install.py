@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -146,7 +147,7 @@ def install(root, options):
         if not same:
             for name in FILES:
                 destination = safe(target / name, root)
-                destination.write_bytes((SOURCE / name).read_bytes())
+                _atomic_write_bytes(destination, (SOURCE / name).read_bytes())
         atomic_json(config_path, config, root)
         atomic_json(hooks_path, hooks, root)
         atomic_json(registry_path, registry, root)
@@ -174,6 +175,28 @@ def _restore_bytes(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".restore", dir=str(path.parent))
     try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_bytes(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        if mode is not None:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, mode)
+            else:
+                os.chmod(temporary, mode)
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()
@@ -324,11 +347,42 @@ def remove(root):
 
 def setup(root, codex=None):
     root = Path(root).resolve()
-    bridge = Bridge(root)
-    result = {"state": "setup-required", "installed": bridge.registered(),
+    bridge = Bridge(root, create_runtime=False)
+    package_files_verified = False
+    installed_version = None
+    extension_entry = {}
+    try:
+        registry = read_json(root / ".aiverse/extensions/registry.json", root)
+        entry = registry.get("extensions", {}).get(ID, {})
+        extension_entry = entry if isinstance(entry, dict) else {}
+        receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
+        installed_version = extension_entry.get("version")
+        expected_files = {name: sha(SOURCE / name) for name in FILES}
+        installed_files = {
+            name: sha(safe(root / f".aiverse/extensions/{ID}" / name, root, file=True))
+            for name in FILES
+        }
+        package_files_verified = (
+            extension_entry.get("id") == ID
+            and extension_entry.get("supported") is True
+            and extension_entry.get("installed") is True
+            and installed_version == VERSION
+            and receipt.get("version") == VERSION
+            and receipt.get("files") == expected_files
+            and installed_files == expected_files
+        )
+    except (OSError, ValueError):
+        pass
+    enabled = extension_entry.get("enabled") is True and bridge.config["enabled"] is True
+    result = {"state": "setup-required", "installed": extension_entry.get("installed") is True,
+              "enabled": enabled,
+              "version": VERSION, "installed_version": installed_version,
+              "package_files_verified": package_files_verified,
               "review_mode": bridge.config["review_mode"], "project": root.name,
               "approval_required": None, "execution_observed": False, "review_observed": False,
-              "guidance": (root / f".aiverse/extensions/{ID}/SETUP.md").read_text()}
+              "guidance": (SOURCE / "SETUP.md").read_text().replace(
+                  "[your AI-Verse project]", root.name
+              )}
     executable = codex or shutil.which("codex")
     if executable:
         from inspect_runtime import inspect
@@ -347,8 +401,12 @@ def setup(root, codex=None):
         rows = [json.loads(s) for s in events.read_text().splitlines()[-5000:]]
         build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
         result["execution_observed"] = any(r.get("build") == build and r.get("event") == "UserPromptSubmit" for r in rows)
-        result["review_observed"] = any(r.get("build") == build and r.get("event") == "review" for r in rows)
-    if result.get("handlers_enabled") and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]:
+        result["review_observed"] = any(
+            r.get("build") == build and r.get("event") == "review" and r.get("state") == "reviewed"
+            for r in rows
+        )
+    if (result["package_files_verified"] and result["enabled"] and result.get("handlers_enabled")
+            and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]):
         result["state"] = "ready"
     return result
 

@@ -12,7 +12,7 @@ function makeRoot() {
   fs.writeFileSync(path.join(root, 'AI-VERSE.yaml'), 'schema_version: "2.0"\n', 'utf8');
   fs.mkdirSync(path.join(root, 'operator', 'context'), { recursive: true });
   fs.writeFileSync(path.join(root, 'operator', 'context', 'CURRENT.md'), [
-    '## Current priorities', '', '- Ship owner-backed Purpose Context', '',
+    '## Current priority', '', '- Ship owner-backed Purpose Context', '',
     '## Current state', '', '- Phase 11 acceptance is active', '',
   ].join('\n'), 'utf8');
   return root;

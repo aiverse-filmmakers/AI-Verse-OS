@@ -73,4 +73,21 @@ for (const domain of PURPOSE_OPTIONAL_OWNER_BACKED_DOMAIN_NAMES) {
   assert.equal(sanitizeOwnerBackedOptionalDomains(oversized)[domain].length, 64);
 }
 
+// Workspace identities accepted by the OS schema must retain their same-scope evidence.
+for (const id of ['a', 'client-a-', 'a'.repeat(127) + '-']) {
+  const scoped = 'workspace:' + id;
+  const ref = (kind, refId) => ({ owner: 'ai-verse-brain', scope: scoped, kind, id: refId });
+  const envelope = {
+    ...base, scope: scoped, identity: { kind: 'workspace', id },
+    risks: [{ canonical_ref: ref('risk', 'risk-1') }],
+    trajectory: [{ relation: 'advances', from_ref: ref('intent', 'goal'), to_ref: ref('intent', 'mission'), source_refs: [ref('intent', 'goal')] }],
+  };
+  const projected = applyPurposeProfile(envelope, { profile: 'rich' });
+  assert.equal(projected.risks?.length, 1, 'valid workspace ' + id + ' lost risk evidence');
+  assert.equal(projected.trajectory.length, 1, 'valid workspace ' + id + ' lost a relationship');
+}
+for (const scoped of ['workspace:bad.name', 'workspace:bad_name', 'workspace:../bad', 'workspace:-bad', 'workspace:' + 'a'.repeat(129)]) {
+  const envelope = { ...base, scope: scoped, risks: [{ canonical_ref: { owner: 'ai-verse-data', scope: scoped, kind: 'risk', id: 'bad' } }] };
+  assert.equal(sanitizeOwnerBackedOptionalDomains(envelope).risks, undefined);
+}
 process.stdout.write('Purpose Context optional owner-backed rich domains: PASS\n');

@@ -156,7 +156,7 @@ function readOsProjection(resolved, current) {
   const ref = current.canonical_ref ?? null;
 
   if (resolved.scope_kind === 'operator') {
-    const priorities = sectionItems(sections, ['current priorities', 'priorities'], 'priority', ref);
+    const priorities = sectionItems(sections, ['current priority', 'current priorities', 'priorities'], 'priority', ref);
     if (priorities.length) projection.priorities = priorities;
   } else {
     const goals = sectionItems(sections, ['objective'], 'workspace_objective', ref);
@@ -274,24 +274,22 @@ function listAtPath(envelope, pathName) {
 
 function collectRetainedCanonicalRefKeys(envelope) {
   const keys = new Set();
-  const visit = (value, insideProvenance = false) => {
+  const visit = (value) => {
     if (!value) return;
     if (Array.isArray(value)) {
-      for (const item of value) visit(item, insideProvenance);
+      for (const item of value) visit(item);
       return;
     }
     if (typeof value !== 'object') return;
-    if (!insideProvenance) {
-      const ownKey = canonicalRefKey(value);
-      if (ownKey) keys.add(ownKey);
-    }
+    const ownKey = canonicalRefKey(value);
+    if (ownKey) keys.add(ownKey);
     for (const [key, child] of Object.entries(value)) {
       if (key === 'provenance') continue;
-      visit(child, insideProvenance || key === 'provenance');
+      visit(child);
     }
   };
   for (const [key, value] of Object.entries(envelope)) {
-    if (key !== 'provenance') visit(value, false);
+    if (key !== 'provenance') visit(value);
   }
   return keys;
 }

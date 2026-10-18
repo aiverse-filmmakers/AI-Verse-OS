@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import path from 'node:path';
+import { createBrainPurposeReader } from './brain-purpose-reader.mjs';
+import { createDataPurposeReader } from './data-purpose-reader.mjs';
 import { pathToFileURL } from 'node:url';
 
 import { explainPurposeContext } from './purpose-context-explain.mjs';
@@ -19,6 +21,7 @@ function parse(argv) {
   let maxBytes;
   let profile = 'auto';
   let ref;
+  let readDataBindings = false;
   const relevantDomains = [];
 
   while (args.length) {
@@ -41,16 +44,22 @@ function parse(argv) {
       relevantDomains.push(value);
     } else if (token === '--ref') {
       ref = args.shift() || fail('--ref requires an exact semantic ref such as initiative:<id>', 2);
+    } else if (token === '--data-bindings') {
+      if (readDataBindings) fail('--data-bindings may appear only once', 2);
+      readDataBindings = true;
     } else {
       fail(`unknown option: ${token}`, 2);
     }
   }
 
-  return { command, root: path.resolve(root), scope, maxBytes, profile, relevantDomains, ref };
+  return { command, root: path.resolve(root), scope, maxBytes, profile, relevantDomains, ref, readDataBindings };
 }
 
 function projectionOptions(options) {
   return {
+    readBrainPurposeSnapshot: options.readBrainPurposeSnapshot ?? createBrainPurposeReader(options.root),
+    readPurposeDataCurrentState: options.readPurposeDataCurrentState ?? createDataPurposeReader(options.root, { scope: options.scope, bindings: options.dataBindings, now: options.now }),
+    now: options.now,
     maxBytes: options.maxBytes,
     profile: options.profile,
     relevantDomains: options.relevantDomains,
@@ -66,11 +75,21 @@ export function explainPurposeContextCli(options) {
   return explainPurposeContext(options.root, options.scope, options.ref, projectionOptions(options));
 }
 
-function runCli() {
+async function runCli() {
   const options = parse(process.argv.slice(2));
   if (!['read', 'explain'].includes(options.command)) fail(`unknown command: ${options.command}`, 2);
 
   try {
+    if (options.readDataBindings) {
+      const chunks = [];
+      let bytes = 0;
+      for await (const chunk of process.stdin) {
+        bytes += chunk.length;
+        if (bytes > 65_536) throw new Error('Purpose Data bindings exceed byte limit');
+        chunks.push(chunk);
+      }
+      options.dataBindings = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    }
     const result = options.command === 'read'
       ? readPurposeContextCli(options)
       : explainPurposeContextCli(options);

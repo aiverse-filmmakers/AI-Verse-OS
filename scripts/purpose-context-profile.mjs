@@ -1,6 +1,7 @@
 import { composePurposeContext as composeBasePurposeContext } from './purpose-context-core.mjs';
 import { applyPurposeDataCurrentState } from './purpose-data-current-state.mjs';
 import { applyFinalPurposeBudget } from './purpose-context-final-budget.mjs';
+import { validateDirectionScope } from './direction-owner-core.mjs';
 import {
   PURPOSE_OPTIONAL_OWNER_BACKED_DOMAINS,
   PURPOSE_OPTIONAL_OWNER_BACKED_DOMAIN_NAMES,
@@ -26,12 +27,10 @@ function serializedBytes(value) {
 }
 
 function canonicalScope(scope) {
-  if (scope === 'operator') return true;
-  if (typeof scope !== 'string' || !scope.startsWith('workspace:')) return false;
-  const id = scope.slice('workspace:'.length);
-  return /^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$/.test(id) && id.length <= 128;
+  if (typeof scope !== 'string') return false;
+  try { validateDirectionScope(scope); return true; }
+  catch { return false; }
 }
-
 function canonicalRefKey(ref) {
   if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
   const { owner, scope, kind, id } = ref;

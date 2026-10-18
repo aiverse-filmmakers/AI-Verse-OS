@@ -13,11 +13,12 @@ For substantial work inside AI-Verse OS:
 3. If `.aiverse/extensions/registry.json` exists, read it and load only task-relevant extension instructions from entries that are explicitly supported, installed, and enabled. Registration is not proof of health, permission, approval, or execution readiness.
 4. When operator current context matters, resolve it with `node scripts/current-context.mjs read --scope operator`; do not bypass that resolver with a raw `operator/context/CURRENT.md` read.
 5. Identify whether the request belongs to a workspace. If it does, read that workspace's `WORKSPACE.yaml`, then resolve current context with `node scripts/current-context.mjs read --scope workspace:<id>` before deeper retrieval.
-6. Select the smallest relevant skill or deterministic script.
-7. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
-8. Execute at the lowest autonomy level that reliably works.
-9. Validate before handing output to another step or taking an external action.
-10. Write back only information that deserves to become durable state.
+6. For work where current direction materially affects the answer (goals, priorities, strategy, purpose, trade-offs, or progress), also read the bounded owner-backed projection with `node scripts/purpose-context.mjs read --scope <same-scope>`. Skip it for routine requests. It supplements the current-context resolver and must not bypass its scope or ownership rules. If exact Data fields are explicitly linked by retained, same-scope evidence, pass only those bindings through the bounded `--data-bindings` input; never infer metrics, open Data storage directly, or initialize a workspace database.
+7. Select the smallest relevant skill or deterministic script. Before concluding that a skill is unavailable or choosing a fallback, search the authorized capability providers with `scripts/capability-resolver.mjs` (`os`, installed `aiverse-skills`, personal `local`, and only the explicitly bound workspace). For example, call `discoverCapabilities({ scope: "workspace:<id>", query: "<task or skill description>" })` from the resolver module, or use `scope: "operator"` when no workspace applies. Use the returned qualified ID and package locator, then read that package's `SKILL.md`; do not guess paths or treat discovery as permission to execute. A direct request for a protected bare OS entrypoint such as `grill-me` still resolves to the OS capability; use an explicitly qualified package when the user names another provider's skill.
+8. Retrieve only the knowledge, memory, assets, and connected data needed for the task.
+9. Execute at the lowest autonomy level that reliably works.
+10. Validate before handing output to another step or taking an external action.
+11. Write back only information that deserves to become durable state.
 
 ### Core update request rule
 

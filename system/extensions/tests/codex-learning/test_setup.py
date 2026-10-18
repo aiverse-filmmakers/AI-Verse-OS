@@ -126,11 +126,24 @@ class SetupTests(unittest.TestCase):
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
             registry["extensions"][ID]["enabled"] = False
             registry_path.write_text(json.dumps(registry), encoding="utf-8")
-            with patch("install.shutil.which", return_value=None):
+            runtime = root / "runtime/codex-learning"
+            runtime.mkdir(parents=True)
+            build = hashlib.sha256((extension / "bridge.py").read_bytes()).hexdigest()
+            (runtime / "events.jsonl").write_text("\n".join([
+                json.dumps({"build": build, "event": "UserPromptSubmit", "turn": "turn-1"}),
+                json.dumps({"build": build, "event": "review", "turn": "turn-1", "state": "reviewed"}),
+            ]) + "\n", encoding="utf-8")
+            with patch("install.shutil.which", return_value="codex"), patch(
+                "inspect_runtime.inspect", return_value=self.observed_hooks(root)
+            ):
                 result = setup(root)
             self.assertTrue(result["installed"])
             self.assertFalse(result["enabled"])
             self.assertTrue(result["package_files_verified"])
+            self.assertTrue(result["handlers_enabled"])
+            self.assertFalse(result["approval_required"])
+            self.assertTrue(result["execution_observed"])
+            self.assertTrue(result["review_observed"])
             self.assertEqual(result["state"], "setup-required")
 
 

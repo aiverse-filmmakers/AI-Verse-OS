@@ -31,6 +31,7 @@ function canonicalScope(scope) {
   try { validateDirectionScope(scope); return true; }
   catch { return false; }
 }
+
 function canonicalRefKey(ref) {
   if (!ref || typeof ref !== 'object' || Array.isArray(ref)) return null;
   const { owner, scope, kind, id } = ref;

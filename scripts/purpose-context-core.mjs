@@ -156,7 +156,7 @@ function readOsProjection(resolved, current) {
   const ref = current.canonical_ref ?? null;
 
   if (resolved.scope_kind === 'operator') {
-    const priorities = sectionItems(sections, ['current priorities', 'priorities'], 'priority', ref);
+    const priorities = sectionItems(sections, ['current priority', 'current priorities', 'priorities'], 'priority', ref);
     if (priorities.length) projection.priorities = priorities;
   } else {
     const goals = sectionItems(sections, ['objective'], 'workspace_objective', ref);

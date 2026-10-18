@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -146,7 +147,7 @@ def install(root, options):
         if not same:
             for name in FILES:
                 destination = safe(target / name, root)
-                destination.write_bytes((SOURCE / name).read_bytes())
+                _atomic_write_bytes(destination, (SOURCE / name).read_bytes())
         atomic_json(config_path, config, root)
         atomic_json(hooks_path, hooks, root)
         atomic_json(registry_path, registry, root)
@@ -174,6 +175,25 @@ def _restore_bytes(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".restore", dir=str(path.parent))
     try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_bytes(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        if mode is not None:
+            os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as handle:
             handle.write(payload)
             handle.flush()

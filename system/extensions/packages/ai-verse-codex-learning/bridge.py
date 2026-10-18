@@ -285,7 +285,7 @@ INTENT_ENGINE_SHA256 = "0cca697b22ded1ad54f8dc1fa2903a82c3511aa04ab04965c9d11155
 
 
 class Bridge:
-    def __init__(self, root):
+    def __init__(self, root, *, create_runtime=True):
         self.root = Path(root).resolve()
         manifest = safe(self.root / "AI-VERSE.yaml", self.root, file=True).read_text()
         if not re.search(r'^architecture:\s*["\']?unified-workspace', manifest, re.M):
@@ -311,9 +311,10 @@ class Bridge:
         if self.config["review_mode"] not in {"all", "meaningful", "off"}:
             raise Refused("invalid review mode")
         self.runtime = safe(self.root / "runtime/codex-learning", self.root)
-        self.runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.state_root = safe(self.runtime / "sessions", self.root)
-        self.state_root.mkdir(exist_ok=True, mode=0o700)
+        if create_runtime:
+            self.runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+            self.state_root.mkdir(exist_ok=True, mode=0o700)
         self.env = dict(os.environ)
         if self.config["runtime_path"]:
             self.env["PATH"] = self.config["runtime_path"] + os.pathsep + self.env.get("PATH", "")

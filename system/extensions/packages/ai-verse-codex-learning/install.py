@@ -347,7 +347,7 @@ def remove(root):
 
 def setup(root, codex=None):
     root = Path(root).resolve()
-    bridge = Bridge(root)
+    bridge = Bridge(root, create_runtime=False)
     result = {"state": "setup-required", "installed": bridge.registered(),
               "review_mode": bridge.config["review_mode"], "project": root.name,
               "approval_required": None, "execution_observed": False, "review_observed": False,
@@ -370,7 +370,10 @@ def setup(root, codex=None):
         rows = [json.loads(s) for s in events.read_text().splitlines()[-5000:]]
         build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
         result["execution_observed"] = any(r.get("build") == build and r.get("event") == "UserPromptSubmit" for r in rows)
-        result["review_observed"] = any(r.get("build") == build and r.get("event") == "review" for r in rows)
+        result["review_observed"] = any(
+            r.get("build") == build and r.get("event") == "review" and r.get("state") == "reviewed"
+            for r in rows
+        )
     if result.get("handlers_enabled") and result["approval_required"] is False and result["execution_observed"] and result["review_observed"]:
         result["state"] = "ready"
     return result

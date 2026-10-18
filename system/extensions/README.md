@@ -70,6 +70,10 @@ After a recognized migration from a previously clean OS checkout, tracked OS fil
 
 AI-Verse OS owns this contract and the stable runtime hook. Each extension owns only its local registry entry and its own installed files. OS updates must not delete the local registry, and extension updates must not edit unrelated registrations.
 
+### Maintained optional package sources
+
+Portable optional package source is kept under `system/extensions/packages/`. A source package remains inert in an OS checkout: it is not installed, enabled, trusted, or granted access by being present. Distribution may offer it only from an exact admitted OS revision with an exact file allowlist and package digest. Optional package add/remove uses Distribution's explicit `aiverse upgrade --apply` lifecycle. Ordinary `aiverse update` does not change installed optional packages or Codex hook trust.
+
 
 ## Public-beta lifecycle projection
 

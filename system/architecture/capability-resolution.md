@@ -95,7 +95,7 @@ Qualified identities are preserved:
 - `local:<name>`
 - `workspace:<workspace-id>:<name>`
 
-The protected bare OS aliases are `onboard`, `workspace`, `grill-me`, `link`, `audit`, `level-up`, and `3d-brain`. A personal, workspace, or distributed capability may keep the same name under its qualified identity, but a bare request for one of those aliases always resolves to OS or fails if the OS capability is unavailable.
+The protected bare OS aliases are `onboard`, `workspace`, `grill-me`, `link`, `audit`, `level-up`, `3d-brain`, and `version`. A personal, workspace, or distributed capability may keep the same name under its qualified identity, but a bare request for one of those aliases always resolves to OS or fails if the OS capability is unavailable.
 
 For other exact bare-name matches, precedence is active workspace, then personal local, then distributed Skills, then OS. Explicit qualified requests never fall back to a different provider except when an active OS-owned promotion compatibility receipt explicitly records that the retired Workspace identity was promoted to a specific personal identity. That compatibility result reports the new identity and the relationship; it is not ordinary fallback.
 

@@ -27,6 +27,7 @@ function setupOs(base) {
   fs.writeFileSync(path.join(root, 'AI-VERSE.yaml'), 'schema_version: "2.0"\narchitecture: unified-workspace\n', 'utf8');
   skill(path.join(root, 'system', 'capabilities', 'onboard'), 'onboard', 'Protected system onboarding');
   skill(path.join(root, 'system', 'capabilities', 'audit'), 'audit', 'System audit');
+  skill(path.join(root, 'system', 'capabilities', 'version'), 'version', 'Protected OS version check');
   return root;
 }
 
@@ -131,11 +132,14 @@ withFixture((base) => {
 
   skill(path.join(local, 'shared-tool'), 'shared-tool', 'Personal shared tool');
   skill(path.join(local, 'onboard'), 'onboard', 'Attempted personal alias shadow');
+  skill(path.join(local, 'version'), 'version', 'Attempted personal version alias shadow');
   skill(path.join(alpha, 'skills', 'shared-tool'), 'shared-tool', 'Alpha workspace tool');
   skill(path.join(alpha, 'skills', 'onboard'), 'onboard', 'Attempted workspace alias shadow');
+  skill(path.join(alpha, 'skills', 'version'), 'version', 'Attempted workspace version alias shadow');
   skill(path.join(beta, 'skills', 'beta-secret'), 'beta-secret', 'Must never leak into alpha');
 
   const ids = Array.from({ length: 58 }, (_, i) => `catalog-${String(i).padStart(2, '0')}`);
+  ids.push('version');
   ids.push('shared-tool', 'onboard', 'needle-capability');
   setupDistributed(distributed, ids);
 
@@ -151,6 +155,7 @@ withFixture((base) => {
   assert.equal(provider(discovered, 'local').state, 'healthy');
   assert.equal(provider(discovered, 'workspace:alpha').state, 'healthy');
   assert(discovered.candidates.some((item) => item.id === 'os:audit'));
+  assert(discovered.candidates.some((item) => item.id === 'os:version'));
   assert(discovered.candidates.some((item) => item.id === 'aiverse-skills:catalog-00'));
   assert(discovered.candidates.some((item) => item.id === 'local:shared-tool'));
   assert(discovered.candidates.some((item) => item.id === 'workspace:alpha:shared-tool'));
@@ -174,6 +179,16 @@ withFixture((base) => {
     localSkillsRoot: local,
   });
   assert.equal(operatorChoice.selection.id, 'local:shared-tool');
+
+  const versionChoice = selectCapability({
+    osRoot: root,
+    scope: 'workspace:alpha',
+    query: 'version',
+    skillsRoot: distributed,
+    localSkillsRoot: local,
+  });
+  assert.equal(versionChoice.status, 'selected');
+  assert.equal(versionChoice.selection.id, 'os:version');
 
   const explicitDistributed = selectCapability({
     osRoot: root,

@@ -36,7 +36,7 @@ Qualified IDs have one of these forms (segments use lowercase letters, digits, a
 
 Package version and content digest are separate from ID. Never infer first-party ownership from an ID alone. Resolve a package using `(qualified_id, generation_id, content digest)` and record that binding for execution.
 
-Reserve bare OS entrypoints `onboard`, `workspace`, `grill-me`, `link`, `audit`, `level-up`, and `3d-brain`. A non-OS package may retain its qualified name, but cannot capture those bare aliases. Other bare names prefer an authorized active-workspace match, then personal local, then distributed. Ambiguity within a provider is an error. An explicitly qualified request selects that provider only after scope and trust checks; arbitrary paths never bypass checks.
+Reserve bare OS entrypoints `onboard`, `workspace`, `grill-me`, `link`, `audit`, `level-up`, `3d-brain`, and `version`. A non-OS package may retain its qualified name, but cannot capture those bare aliases. Other bare names prefer an authorized active-workspace match, then personal local, then distributed. Ambiguity within a provider is an error. An explicitly qualified request selects that provider only after scope and trust checks; arbitrary paths never bypass checks.
 
 Provider identities are `os`, `aiverse-skills`, `local`, or `workspace:<workspace-id>`. A capability ID must have its provider identity as prefix. Visibility is `system` for OS, `shared` for distributed/personal, or the exact workspace identity. Visibility is availability for discovery, not execution permission.
 

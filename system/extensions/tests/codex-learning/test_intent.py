@@ -254,6 +254,8 @@ class IntentTests(unittest.TestCase):
             return link_workspace_intent(*args,**kwargs)
         self.service.controller.link_workspace_intent=fail_once
         with self.assertRaises(OSError): self.service.capture('operator',data,'fixture:correction','correction-transfer')
+        interrupted_view=self.service.relevant('workspace:alpha','Plan substantial work against the corrected overall research goal.')
+        self.assertNotIn('linked_operator_intents',interrupted_view)
         self.service.controller.link_workspace_intent=link_workspace_intent
         saved=self.service.capture('operator',data,'fixture:correction','correction-transfer')
         view=self.service.relevant('workspace:alpha','Plan substantial work against the corrected overall research goal.')

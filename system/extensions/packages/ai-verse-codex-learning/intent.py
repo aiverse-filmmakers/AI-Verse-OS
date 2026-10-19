@@ -152,14 +152,16 @@ class IntentService:
                         item = self.controller.create("intent", scope, "PROPOSED", {
                             "subtype": subtype, "statement": statement,
                             "codex_capture": {"operation": operation, "fingerprint": fp,
-                                              "expected_prior_version": expected, "explicit": confirmed}},
+                                              "expected_prior_version": expected, "explicit": confirmed,
+                                              "source_ref": source_ref}},
                             source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
                             actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
                 else:
                     item = self.controller.create("intent", scope, "PROPOSED", {
                         "subtype": subtype, "statement": statement,
                         "codex_capture": {"operation": operation, "fingerprint": fp,
-                                          "expected_prior_version": expected, "explicit": confirmed}},
+                                          "expected_prior_version": expected, "explicit": confirmed,
+                                          "source_ref": source_ref}},
                         source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
                         actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
             if confirmed:
@@ -174,6 +176,11 @@ class IntentService:
                 if item.status == "CONFIRMED":
                     item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor="codex:intent")
                 if prior_id:
+                    # Reuse the original evidence reference with the operation key on retry.
+                    capture_meta = item.payload.get("codex_capture", {})
+                    link_evidence_ref = capture_meta.get("source_ref")
+                    if not isinstance(link_evidence_ref, str) or not link_evidence_ref:
+                        link_evidence_ref = next(iter(item.source_refs), source_ref)
                     # Preserve only relationships already present on the exact superseded
                     # Brain intent, and recreate each through Brain's public owner API.
                     # Link scopes stay out of prompts and are never inferred or expanded.
@@ -184,7 +191,7 @@ class IntentService:
                              "intent": item.id, "scope": workspace_scope})
                         item = self.controller.link_workspace_intent(
                             item.id, workspace_scope, expected_revision=item.revision,
-                            operation_id=link_operation, evidence_ref=source_ref, source=USER)
+                            operation_id=link_operation, evidence_ref=link_evidence_ref, source=USER)
             return {"state": "saved" if confirmed else "awaiting-confirmation", "ref": canonical_ref(item),
                     "status": item.status, "supersedes": item.supersedes}
 

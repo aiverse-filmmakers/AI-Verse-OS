@@ -147,5 +147,18 @@ class SetupTests(unittest.TestCase):
             self.assertEqual(result["state"], "setup-required")
 
 
+    def test_setup_guidance_decodes_utf8_on_every_platform(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "AI-Verse"
+            self.fixture(root)
+            root = root.resolve()
+            expected = (SOURCE / "SETUP.md").read_text(encoding="utf-8").replace(
+                "[your AI-Verse project]", root.name
+            )
+            with patch("install.shutil.which", return_value=None):
+                result = setup(root)
+            self.assertEqual(result["guidance"], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

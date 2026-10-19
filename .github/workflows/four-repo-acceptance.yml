@@ -14,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      MEMORY_COMMIT: 2606bf6524fd67b4a3930fb7d98de54a3d483fb1
-      BRAIN_COMMIT: 107100e850f31c6720f69ae47f27c1d8d34b3abf
-      SKILLS_COMMIT: fb0c138ef424734cd2e5359040f376e35c4c5875
+      MEMORY_COMMIT: f1327be48ba2ee0043959021365e6dbb9dcb1d3a
+      BRAIN_COMMIT: f746806e4361c2b1cd67ee97810071cc86db7b9a
+      SKILLS_COMMIT: afde5c06307fba7d074de2929c2eb6c3dc6bdab8
 
     steps:
       - name: Checkout AI-Verse OS under test
@@ -70,6 +70,8 @@ jobs:
           test -f .agents/skills/ai-verse-memory/SKILL.md
           test -f .aiverse/extensions/registry.json
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
+          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json setup > "$RUNNER_TEMP/memory-setup.json"
+          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json doctor > "$RUNNER_TEMP/memory-doctor.json"
           test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Attach and initialize Brain through the local extension contract

@@ -45,6 +45,21 @@ class IntentTests(unittest.TestCase):
         data={'classification':'operator-goal','statement':statement,'quote':statement,'explicit_user_declaration':True, **extra}
         return self.bridge.intent('capture','operator',data,session,turn['id'],turn['token'])
 
+    def test_plan_requires_current_turn_and_respects_workspace_scope(self):
+        with self.assertRaises(Refused):
+            self.bridge.intent('plan', 'operator', {}, None)
+
+        session, turn, _ = self.start('Please show my overall intent handover plan for review.', 'workspace:alpha')
+        with self.assertRaises(Refused):
+            self.bridge.intent('plan', 'operator', {}, session, turn['id'], turn['token'])
+        with self.assertRaises(Refused):
+            self.bridge.intent('plan', 'workspace:beta', {}, session, turn['id'], turn['token'])
+
+        quote = 'Work on workspace:alpha. Please show my overall intent handover plan for review.'
+        payload = {'explicit_operator_scope': True, 'quote': quote}
+        plan = self.bridge.intent('plan', 'operator', payload, session, turn['id'], turn['token'])
+        self.assertTrue(plan)
+
     def test_bridge_handover_requires_current_user_confirmation_for_exact_plan(self):
         plan = self.service.plan('operator')
         fingerprint = plan['fingerprint']

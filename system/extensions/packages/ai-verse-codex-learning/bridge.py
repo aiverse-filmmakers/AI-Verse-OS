@@ -387,7 +387,24 @@ class Bridge:
 
     def intent(self, action, scope, payload, session=None, turn_id=None, token=None):
         if action == "plan":
-            return self.intent_service().plan(scope)
+            if not self.registered():
+                raise Refused("Codex learning connection disabled")
+            with self.lock(session):
+                state = self.state(session)
+                turn = state.get("turn") or {}
+                if (turn.get("id") != turn_id or turn.get("token") != token or turn.get("state") != "active"
+                        or self.cancelled(session, turn_id)
+                        or time.time() - turn.get("created", 0) > self.config["state_ttl_seconds"]):
+                    raise Refused("Intent plan requires this active original user turn")
+                if scope != state["scope"]:
+                    if scope != "operator":
+                        raise Refused("Intent plan outside bound scope")
+                    if payload.get("explicit_operator_scope") is not True:
+                        raise Refused("Operator intent plan needs an explicit operator-wide request")
+                    quote = bounded_text(payload.get("quote"), 1200)
+                    no_secrets(quote)
+                    self.evidence(turn, [{"source_id": "user", "quote": quote}])
+                return self.intent_service().plan(scope)
         if action == "read":
             state = self.state(session)
             service = self.intent_service()

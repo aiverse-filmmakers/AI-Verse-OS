@@ -8,7 +8,7 @@ export const PROVIDER_CONTRACT = 'aiverse-capability-provider-v1';
 export const DISTRIBUTED_PROVIDER = 'aiverse-skills';
 export const PACKAGE_DIGEST_ALGORITHM = 'aiverse-package-sha256-v1';
 export const RESERVED_OS_ALIASES = new Set([
-  'onboard', 'workspace', 'grill-me', 'link', 'audit', 'level-up', '3d-brain',
+  'onboard', 'workspace', 'grill-me', 'link', 'audit', 'level-up', '3d-brain', 'version',
 ]);
 
 const SEGMENT = /^[a-z0-9][a-z0-9-]*$/;

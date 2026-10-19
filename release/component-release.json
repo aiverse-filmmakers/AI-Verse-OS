@@ -1,8 +1,8 @@
 {
   "schema_version": "ai-verse.component-release/v1",
   "component_id": "ai-verse-os",
-  "version": "0.2.0",
-  "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b",
+  "version": "0.3.0",
+  "revision": "1f90aa75401dd27e89f7cf466bed14db311a4db1",
   "release_status": "accepted",
   "package": {
     "repository": "aiverse-filmmakers/AI-Verse-OS",
@@ -10,15 +10,70 @@
     "package_name": "ai-verse-os",
     "integrity": null
   },
-  "supported_platforms": ["linux", "macos", "windows"],
-  "runtime_requirements": {"python": null, "node": ">=18", "other": []},
-  "lifecycle": {"install": true, "setup": true, "status": true, "doctor": true, "enable": false, "disable": false, "update": true, "uninstall": false},
-  "state": {"canonical_state_owned": true, "preserve_on_update": true, "preserve_on_uninstall": true, "preserve_unknown_user_files": true, "state_format": "unified-workspace-v2"},
-  "migration": {"change_classification": "non-breaking", "compatibility": "none-required", "from_versions": [], "requires_explicit_migration": false, "owner_controlled": true, "checkpoint_policy": "not-required"},
-  "authority": {"grants_permissions": false, "changes_direction_owner": false, "changes_scope": false, "enables_disabled_component": false, "exposes_remote_listener": false},
-  "evidence": {
-    "ci": [{"kind": "owner-native-ci", "status": "pass", "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b", "run_id": "38228297973", "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/38228297973"}],
-    "acceptance": [{"kind": "owner-local-native-workflow-acceptance", "status": "pass", "revision": "64f7325444d18f94c9d4755d32eb89f3468bda6b", "run_id": "38228297973", "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/38228297973"}]
+  "supported_platforms": [
+    "linux",
+    "macos",
+    "windows"
+  ],
+  "runtime_requirements": {
+    "python": null,
+    "node": ">=18",
+    "other": []
   },
-  "semantics": {"release_metadata_only": true, "live_health_truth": false}
+  "lifecycle": {
+    "install": true,
+    "setup": true,
+    "status": true,
+    "doctor": true,
+    "enable": false,
+    "disable": false,
+    "update": true,
+    "uninstall": false
+  },
+  "state": {
+    "canonical_state_owned": true,
+    "preserve_on_update": true,
+    "preserve_on_uninstall": true,
+    "preserve_unknown_user_files": true,
+    "state_format": "unified-workspace-v2"
+  },
+  "migration": {
+    "change_classification": "non-breaking",
+    "compatibility": "none-required",
+    "from_versions": [],
+    "requires_explicit_migration": false,
+    "owner_controlled": true,
+    "checkpoint_policy": "not-required"
+  },
+  "authority": {
+    "grants_permissions": false,
+    "changes_direction_owner": false,
+    "changes_scope": false,
+    "enables_disabled_component": false,
+    "exposes_remote_listener": false
+  },
+  "evidence": {
+    "ci": [
+      {
+        "kind": "owner-native-ci",
+        "status": "pass",
+        "revision": "1f90aa75401dd27e89f7cf466bed14db311a4db1",
+        "run_id": "39177573973",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/39177573973"
+      }
+    ],
+    "acceptance": [
+      {
+        "kind": "owner-local-native-workflow-acceptance",
+        "status": "pass",
+        "revision": "1f90aa75401dd27e89f7cf466bed14db311a4db1",
+        "run_id": "39177574012",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/39177574012"
+      }
+    ]
+  },
+  "semantics": {
+    "release_metadata_only": true,
+    "live_health_truth": false
+  }
 }

@@ -31,7 +31,7 @@ def metadata_for(root, explicit=None):
     for path in candidates:
         if path.stat().st_size > 1_000_000:
             continue
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         if value.get("schema_version") == 1 and Path(value.get("project", "")).resolve() == root:
             matches.append((path, value))
     if len(matches) > 1:
@@ -89,13 +89,13 @@ def package(output):
 
 def install(root, options):
     root = Path(root).resolve()
-    manifest = safe(root / "AI-VERSE.yaml", root, file=True).read_text()
+    manifest = safe(root / "AI-VERSE.yaml", root, file=True).read_text(encoding="utf-8")
     if "unified-workspace" not in manifest:
         raise ValueError("target is not a compatible AI-Verse OS")
     target = root / ".aiverse/extensions" / ID
     same = SOURCE == target
     if not same:
-        admitted = json.loads((SOURCE / "PACKAGE.json").read_text())
+        admitted = json.loads((SOURCE / "PACKAGE.json").read_text(encoding="utf-8"))
         if admitted.get("id") != ID or admitted.get("version") != VERSION or set(admitted.get("files", {})) != set(FILES):
             raise ValueError("invalid package manifest")
         if any(sha(safe(SOURCE / name, SOURCE, file=True)) != admitted["files"][name] for name in FILES):
@@ -380,7 +380,7 @@ def setup(root, codex=None):
               "package_files_verified": package_files_verified,
               "review_mode": bridge.config["review_mode"], "project": root.name,
               "approval_required": None, "execution_observed": False, "review_observed": False,
-              "guidance": (SOURCE / "SETUP.md").read_text().replace(
+              "guidance": (SOURCE / "SETUP.md").read_text(encoding="utf-8").replace(
                   "[your AI-Verse project]", root.name
               )}
     executable = codex or shutil.which("codex")
@@ -398,7 +398,7 @@ def setup(root, codex=None):
             result["discovery"] = "unavailable; keep setup pending"
     events = root / "runtime/codex-learning/events.jsonl"
     if events.exists() and events.stat().st_size <= 4_000_000:
-        rows = [json.loads(s) for s in events.read_text().splitlines()[-5000:]]
+        rows = [json.loads(s) for s in events.read_text(encoding="utf-8").splitlines()[-5000:]]
         build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
         result["execution_observed"] = any(r.get("build") == build and r.get("event") == "UserPromptSubmit" for r in rows)
         result["review_observed"] = any(

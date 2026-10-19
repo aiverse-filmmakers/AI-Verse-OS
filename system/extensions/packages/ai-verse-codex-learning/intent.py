@@ -135,14 +135,33 @@ class IntentService:
                     return {"state": "unchanged", "ref": canonical_ref(duplicate), "status": duplicate.status}
                 if prior_id:
                     prior = self.controller.store.load("intent", scope, prior_id)
-                    if prior.revision != expected or prior.status not in CURRENT or prior.payload.get("subtype") != subtype:
+                    if prior.payload.get("subtype") != subtype:
                         raise ValueError("Stale version, inactive, or incompatible correction target")
-                item = self.controller.create("intent", scope, "PROPOSED", {
-                    "subtype": subtype, "statement": statement,
-                    "codex_capture": {"operation": operation, "fingerprint": fp,
-                                      "expected_prior_version": expected, "explicit": confirmed}},
-                    source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
-                    actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
+                    resumable = [o for o in existing if o.supersedes == prior_id
+                                 and o.status in {"PROPOSED", "CONFIRMED", "ACTIVE"}
+                                 and o.payload.get("codex_capture", {}).get("fingerprint") == fp
+                                 and o.payload.get("codex_capture", {}).get("expected_prior_version") == expected
+                                 and o.payload.get("codex_capture", {}).get("explicit") is True]
+                    if len(resumable) > 1:
+                        raise ValueError("Multiple matching corrections exist; refusing ambiguous recovery")
+                    if resumable:
+                        item = resumable[0]
+                    else:
+                        if prior.revision != expected or prior.status not in CURRENT:
+                            raise ValueError("Stale version, inactive, or incompatible correction target")
+                        item = self.controller.create("intent", scope, "PROPOSED", {
+                            "subtype": subtype, "statement": statement,
+                            "codex_capture": {"operation": operation, "fingerprint": fp,
+                                              "expected_prior_version": expected, "explicit": confirmed}},
+                            source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
+                            actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
+                else:
+                    item = self.controller.create("intent", scope, "PROPOSED", {
+                        "subtype": subtype, "statement": statement,
+                        "codex_capture": {"operation": operation, "fingerprint": fp,
+                                          "expected_prior_version": expected, "explicit": confirmed}},
+                        source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
+                        actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
             if confirmed:
                 if prior_id:
                     prior = self.controller.store.load("intent", scope, prior_id)
@@ -161,7 +180,8 @@ class IntentService:
                     prior = self.controller.store.load("intent", scope, prior_id)
                     for workspace_scope in self._workspace_link_scopes(prior):
                         link_operation = "codex-correction-link:" + fingerprint(
-                            {"operation": operation, "intent": item.id, "scope": workspace_scope})
+                            {"operation": item.payload["codex_capture"]["operation"],
+                             "intent": item.id, "scope": workspace_scope})
                         item = self.controller.link_workspace_intent(
                             item.id, workspace_scope, expected_revision=item.revision,
                             operation_id=link_operation, evidence_ref=source_ref, source=USER)

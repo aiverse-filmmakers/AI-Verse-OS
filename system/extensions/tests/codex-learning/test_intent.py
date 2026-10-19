@@ -45,6 +45,46 @@ class IntentTests(unittest.TestCase):
         data={'classification':'operator-goal','statement':statement,'quote':statement,'explicit_user_declaration':True, **extra}
         return self.bridge.intent('capture','operator',data,session,turn['id'],turn['token'])
 
+    def test_bridge_handover_requires_current_user_confirmation_for_exact_plan(self):
+        plan = self.service.plan('operator')
+        fingerprint = plan['fingerprint']
+        prompt = f"I reviewed the handover plan {fingerprint} and confirm importing it to Brain."
+        session, turn, _ = self.start(prompt)
+        payload = {'plan_fingerprint': fingerprint, 'confirm_import': True,
+                   'explicit_user_confirmation': True, 'quote': prompt}
+
+        with self.assertRaises(Refused):
+            self.bridge.intent('handover', 'operator', payload, session, turn['id'], 'wrong-token')
+        self.assertEqual(self.service.ownership.owner('operator'), 'os')
+
+        unquoted = dict(payload, quote="I approve the handover.")
+        with self.assertRaises(Refused):
+            self.bridge.intent('handover', 'operator', unquoted, session, turn['id'], turn['token'])
+        self.assertEqual(self.service.ownership.owner('operator'), 'os')
+
+        inferred = dict(payload, explicit_user_confirmation=False)
+        with self.assertRaises(Refused):
+            self.bridge.intent('handover', 'operator', inferred, session, turn['id'], turn['token'])
+        self.assertEqual(self.service.ownership.owner('operator'), 'os')
+
+        result = self.bridge.intent('handover', 'operator', payload, session, turn['id'], turn['token'])
+        self.assertEqual(self.service.ownership.owner('operator'), 'brain')
+        self.assertEqual(result['owner'], 'brain')
+
+    def test_handover_from_old_turn_is_refused(self):
+        plan = self.service.plan('operator')
+        fingerprint = plan['fingerprint']
+        prompt = f"I reviewed the handover plan {fingerprint} and confirm importing it to Brain."
+        session, turn, _ = self.start(prompt)
+        self.bridge.hook({'hook_event_name': 'UserPromptSubmit', 'session_id': session,
+                          'turn_id': 'new-turn', 'cwd': str(self.root),
+                          'prompt': 'Continue with a separate task.'})
+        payload = {'plan_fingerprint': fingerprint, 'confirm_import': True,
+                   'explicit_user_confirmation': True, 'quote': prompt}
+        with self.assertRaises(Refused):
+            self.bridge.intent('handover', 'operator', payload, session, turn['id'], turn['token'])
+        self.assertEqual(self.service.ownership.owner('operator'), 'os')
+
     def test_heading_alias_handover_and_frozen_sources(self):
         file=self.root/'operator/context/CURRENT.md'
         original='# Context\n\n## Current priority\n\n- Build a durable research practice.\n\n## Current facts\n\n- Available on weekdays.\n'

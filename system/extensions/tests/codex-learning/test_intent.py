@@ -297,6 +297,35 @@ class IntentTests(unittest.TestCase):
         self.assertEqual(replacement.payload['workspace_links'],['workspace:alpha','workspace:beta'])
         self.assertEqual(len(replacement.payload['workspace_link_operations']),2)
 
+    def test_correction_link_transfer_resumes_in_a_new_turn(self):
+        self.handover()
+        old=self.capture('My overall goal is a research practice.')['ref']
+        self.service.link('alpha',old['id'],'fixture:user','link-alpha-before-correction')
+        self.service.link('beta',old['id'],'fixture:user','link-beta-before-correction')
+        prior=self.service.controller.store.load('intent','operator',old['id'])
+        data={'classification':'correction','statement':'My overall goal is a research studio.',
+              'supersedes':old['id'],'expected_version':prior.revision,'explicit_user_declaration':True}
+        link_workspace_intent=self.service.controller.link_workspace_intent
+        calls=[0]
+        def fail_after_one_success(*args,**kwargs):
+            calls[0]+=1
+            if calls[0]==2:
+                raise OSError('synthetic interruption after one workspace transfer')
+            return link_workspace_intent(*args,**kwargs)
+        self.service.controller.link_workspace_intent=fail_after_one_success
+        with self.assertRaises(OSError): self.service.capture('operator',data,'fixture:correction-turn-1','turn-1')
+        self.service.controller.link_workspace_intent=link_workspace_intent
+
+        # A later explicit correction carries a new operation ID, as a fresh turn does.
+        saved=self.service.capture('operator',data,'fixture:correction-turn-2','turn-2')
+        alpha=self.service.relevant('workspace:alpha','Plan substantial work against the corrected overall research goal.')
+        beta=self.service.relevant('workspace:beta','Plan substantial work against the corrected overall research goal.')
+        self.assertEqual(alpha['linked_operator_intents'][0]['id'],saved['ref']['id'])
+        self.assertEqual(beta['linked_operator_intents'][0]['id'],saved['ref']['id'])
+        self.assertEqual(len(self.service.controller.store.list('intent','operator')),2)
+        replacement=self.service.controller.store.load('intent','operator',saved['ref']['id'])
+        self.assertEqual(len(replacement.payload['workspace_link_operations']),2)
+
     def test_cross_scope_read_needs_explicit_request_or_link(self):
         self.handover()
         self.capture('My overall goal is a research practice.')

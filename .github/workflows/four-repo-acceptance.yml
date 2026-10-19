@@ -70,6 +70,8 @@ jobs:
           test -f .agents/skills/ai-verse-memory/SKILL.md
           test -f .aiverse/extensions/registry.json
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
+          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" setup --json > "$RUNNER_TEMP/memory-setup.json"
+          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" doctor --json > "$RUNNER_TEMP/memory-doctor.json"
           test -z "$(git status --porcelain --untracked-files=no)"
 
       - name: Attach and initialize Brain through the local extension contract

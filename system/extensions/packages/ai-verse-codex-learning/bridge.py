@@ -387,7 +387,24 @@ class Bridge:
 
     def intent(self, action, scope, payload, session=None, turn_id=None, token=None):
         if action == "plan":
-            return self.intent_service().plan(scope)
+            if not self.registered():
+                raise Refused("Codex learning connection disabled")
+            with self.lock(session):
+                state = self.state(session)
+                turn = state.get("turn") or {}
+                if (turn.get("id") != turn_id or turn.get("token") != token or turn.get("state") != "active"
+                        or self.cancelled(session, turn_id)
+                        or time.time() - turn.get("created", 0) > self.config["state_ttl_seconds"]):
+                    raise Refused("Intent plan requires this active original user turn")
+                if scope != state["scope"]:
+                    if scope != "operator":
+                        raise Refused("Intent plan outside bound scope")
+                    if payload.get("explicit_operator_scope") is not True:
+                        raise Refused("Operator intent plan needs an explicit operator-wide request")
+                    quote = bounded_text(payload.get("quote"), 1200)
+                    no_secrets(quote)
+                    self.evidence(turn, [{"source_id": "user", "quote": quote}])
+                return self.intent_service().plan(scope)
         if action == "read":
             state = self.state(session)
             service = self.intent_service()
@@ -403,9 +420,6 @@ class Bridge:
             result = service.snapshot(scope)
             result["pending_intents"] = [o.to_dict() for o in service.controller.store.list("intent", scope, {"PROPOSED"})]
             return result
-        if action == "handover":
-            return self.intent_service().handover(scope, payload.get("plan_fingerprint"),
-                                                 payload.get("confirm_import") is True)
         if not self.registered():
             raise Refused("Codex learning connection disabled")
         with self.lock(session):
@@ -424,6 +438,20 @@ class Bridge:
                 raise Refused("Intent write outside bound scope")
             if scope == "operator" and state["scope"] != "operator" and payload.get("explicit_operator_scope") is not True:
                 raise Refused("Cross-project intent needs explicit operator-wide scope")
+            if action == "handover":
+                if (payload.get("confirm_import") is not True
+                        or payload.get("explicit_user_confirmation") is not True):
+                    raise Refused("Brain handover requires explicit confirmation in this original user turn")
+                fingerprint = bounded_text(payload.get("plan_fingerprint"), 128)
+                if not fingerprint or fingerprint not in quote:
+                    raise Refused("Confirmation must quote the exact reviewed handover plan fingerprint")
+                service = self.intent_service()
+                from aiverse_brain.write_gate import require_write_ready
+                require_write_ready(str(self.root))
+                result = service.handover(scope, fingerprint, True)
+                turn.setdefault("intent_effects", []).append(result)
+                self.save(state)
+                return result
             source_ref = f"codex:{session}:{turn_id}:user#sha256:{turn['sources']['user']['sha256']}"
             operation = "codex-intent:" + digest(json.dumps([session, turn_id, action, payload.get("operation_key", "default")]))
             try:

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "contract_id": "ai-verse-os/local-source-adoption-v1",
+  "owner": "ai-verse-os",
+  "software_files": ["AGENTS.md", "CLAUDE.md", "AI-VERSE.yaml", "SKILL-AUTHORING.md", "skills/registry.yaml"],
+  "software_prefixes": ["scripts/", "system/"],
+  "generated_prefixes": [".agents/skills/", ".claude/skills/"],
+  "ignore_additions": {"source": ".gitignore", "destination": "git-local-exclude", "allow_negations": false},
+  "append_only_documents": {"knowledge/README.md": "knowledge/local-customizations.md"},
+  "default_source_policy": "preserve",
+  "explicit_source_policy": "official",
+  "recovery_required": true,
+  "untracked_policy": "preserve-and-check-target-collisions",
+  "staged_changes": "review-required",
+  "unknown_paths": "review-required"
+}

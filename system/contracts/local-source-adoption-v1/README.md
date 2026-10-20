@@ -17,6 +17,8 @@ Distribution packages this exact contract with an immutable OS source reference 
 - An append-only change to `knowledge/README.md` may move its exact appended material into the declared local knowledge file. Preserve an existing destination unchanged unless it is the exact output from this operation. Non-append-only document edits require review. The route and linked local documents remain accessible; they are not software patches to discard.
 - Preserve all other user/owner state. Examine untracked target collisions individually: equal regular-file content may be admitted by the transition; different content or unsafe types stop before mutation. Never recursively clean untracked or ignored content.
 
+Git activation can refuse even byte-identical untracked incoming files. The declared collision action therefore permits temporarily parking only those exact verified regular files after durable original capture. Restore them on preparation failure or Core rollback; successful activation supplies the identical files through the release. This is not authority to remove different or unknown content. Windows compares only platform-representable permission state; POSIX executable-bit differences remain conflicts.
+
 ## Transaction and recovery
 
 Use the existing lifecycle lock. Bind all planned changes to current bytes, modes, Git HEAD/index, target and destination state. Validate these again immediately before mutation. Write a durable preparation journal and verify exact originals before any change. A capture of a customized installation is a recovery snapshot, not a verified healthy Last-Known-Good release.

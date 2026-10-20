@@ -11,6 +11,7 @@
   "explicit_source_policy": "official",
   "recovery_required": true,
   "untracked_policy": "preserve-and-check-target-collisions",
+  "target_collision_action": "capture-and-park-exact-target-files",
   "staged_changes": "review-required",
   "unknown_paths": "review-required"
 }

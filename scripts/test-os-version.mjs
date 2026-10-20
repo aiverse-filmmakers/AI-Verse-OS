@@ -92,6 +92,37 @@ try {
   assert.equal(mismatch.latest.version, null);
   assert.equal(mismatch.update, 'up-to-date');
 
+  const requests = [];
+  const fallback = remoteFetch();
+  const postCommitMetadata = await getVersionReport({ root, run: commands(root), fetchImpl: async (url) => {
+    requests.push(url);
+    if (url.includes(`/${CURRENT_REVISION}/release/`)) {
+      return { ok: true, json: async () => ({ component_id: 'ai-verse-os', revision: OLD_REVISION, version: '0.9.0', release_status: 'accepted' }) };
+    }
+    return fallback(url);
+  } });
+  assert.equal(postCommitMetadata.latest.version, '1.0.0');
+  assert.equal(postCommitMetadata.installed.version, '1.0.0');
+  assert.equal(postCommitMetadata.latest.descriptorWarning, null);
+  assert.ok(requests.some((url) => url.includes('/main/release/component-release.json')));
+
+  const newerOwnerMetadata = await getVersionReport({ root, run: commands(root), fetchImpl: async (url) => {
+    if (url.includes('/release/component-release.json')) return { ok: true, json: async () => ({
+      component_id: 'ai-verse-os', revision: OLD_REVISION, version: '99.0.0', release_status: 'accepted',
+    }) };
+    return fallback(url);
+  } });
+  assert.equal(newerOwnerMetadata.latest.version, null);
+  assert.ok(newerOwnerMetadata.latest.descriptorWarning);
+
+  const blockedOwnerMetadata = await getVersionReport({ root, run: commands(root), fetchImpl: async (url) => {
+    if (url.includes('/release/component-release.json')) return { ok: true, json: async () => ({
+      component_id: 'ai-verse-os', revision: CURRENT_REVISION, version: '99.0.0', release_status: 'blocked',
+    }) };
+    return fallback(url);
+  } });
+  assert.equal(blockedOwnerMetadata.latest.version, null);
+
   const invalidCatalog = await getVersionReport({
     root,
     fetchImpl: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('invalid JSON'); } }),
@@ -125,7 +156,7 @@ try {
   }));
   const staleLocalDescriptor = await getVersionReport({ root, fetchImpl: remoteFetch(), run: commands(root) });
   assert.equal(staleLocalDescriptor.installed.revision, CURRENT_REVISION);
-  assert.equal(staleLocalDescriptor.installed.version, null);
+  assert.equal(staleLocalDescriptor.installed.version, '1.0.0');
   assert.equal(staleLocalDescriptor.update, 'up-to-date');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

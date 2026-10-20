@@ -94,21 +94,31 @@ async function latestAcceptedCore(fetchImpl) {
   }
 
   const latest = { releaseSet: releaseId, version: null, revision: osComponent.revision, descriptorWarning: null };
-  const descriptorUrl = `https://raw.githubusercontent.com/${OS_REPO}/${osComponent.revision}/release/component-release.json`;
-  try {
-    const descriptor = await getJson(descriptorUrl, fetchImpl);
-    if (
-      descriptor.component_id !== 'ai-verse-os' ||
-      descriptor.revision !== osComponent.revision ||
-      descriptor.release_status !== 'accepted' ||
-      typeof descriptor.version !== 'string' || !descriptor.version
-    ) {
-      latest.descriptorWarning = 'the pinned release descriptor does not match the accepted OS revision';
-    } else {
-      latest.version = descriptor.version;
+  // Release metadata is published after the source commit it describes. A commit
+  // cannot contain a descriptor naming its own hash. Prefer immutable metadata
+  // when present, then consult the owner's current descriptor with the SAME exact
+  // revision check. A newer descriptor can never relabel a different revision.
+  const descriptorUrls = [
+    `https://raw.githubusercontent.com/${OS_REPO}/${osComponent.revision}/release/component-release.json`,
+    `https://raw.githubusercontent.com/${OS_REPO}/main/release/component-release.json`,
+  ];
+  latest.descriptorWarning = 'the accepted OS version label could not be verified';
+  for (const descriptorUrl of descriptorUrls) {
+    try {
+      const descriptor = await getJson(descriptorUrl, fetchImpl);
+      if (
+        descriptor.component_id === 'ai-verse-os' &&
+        descriptor.revision === osComponent.revision &&
+        descriptor.release_status === 'accepted' &&
+        typeof descriptor.version === 'string' && descriptor.version
+      ) {
+        latest.version = descriptor.version;
+        latest.descriptorWarning = null;
+        break;
+      }
+    } catch {
+      // Keep the exact release/revision report available when metadata is offline.
     }
-  } catch {
-    latest.descriptorWarning = 'the pinned release descriptor could not be verified';
   }
   return latest;
 }
@@ -172,6 +182,10 @@ export async function getVersionReport({ root = DEFAULT_ROOT, fetchImpl = global
     latest = await latestAcceptedCore(fetchImpl);
   } catch (error) {
     latestError = error instanceof Error ? error.message : String(error);
+  }
+
+  if (installedReport && latest?.version && installedReport.revision === latest.revision) {
+    installedReport.version = latest.version;
   }
 
   const report = {

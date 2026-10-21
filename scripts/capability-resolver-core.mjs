@@ -312,6 +312,7 @@ function distributedProvider(root) {
     }
 
     const candidates = [];
+    const privacyDiagnostics = [];
     const seen = new Set();
     for (const record of index.capabilities) {
       if (!hasExactKeys(record, RECORD_FIELDS)) throw new Error('Skills capability index record has missing or unknown fields');
@@ -335,6 +336,10 @@ function distributedProvider(root) {
       if (!isDeepStrictEqual(record, expected)) throw new Error(`Skills capability index record does not match manifest: ${record.id}`);
       validateRelativePackagePath(realGeneration, record.path);
       if (record.package_state !== 'valid') continue;
+      if (packageItem.ownership === 'workspace_local') {
+        privacyDiagnostics.push('Legacy workspace-local learned package withheld until its owner records safe scoped placement.');
+        continue;
+      }
       const bareId = record.id.slice(provider.length + 1);
       if (!SEGMENT.test(bareId) || !validDigest(record.digest) || !validStringList(record.operators) || !validStringList(record.dependencies)) {
         throw new Error(`Skills capability index record has invalid metadata: ${record.id}`);
@@ -357,7 +362,7 @@ function distributedProvider(root) {
     }
     if (seen.size !== manifestCaps.size) throw new Error('Skills capability index is missing installed manifest capabilities');
     candidates.sort((a, b) => a.id.localeCompare(b.id));
-    return { provider, state: 'healthy', candidates, diagnostics: [], generation_id: generationId };
+    return { provider, state: 'healthy', candidates, diagnostics: [...new Set(privacyDiagnostics)], generation_id: generationId };
   } catch (error) {
     return { provider, state: 'degraded', candidates: [], diagnostics: [error.message] };
   }

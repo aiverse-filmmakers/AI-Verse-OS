@@ -12,7 +12,7 @@ export function capabilityConfiguration(osRoot, overrides = {}) {
       throw new Error('installation capability configuration is redirected or oversized');
     }
     stored = readCapabilityJson(file, 8192);
-    if (!stored || typeof stored !== 'object' || Array.isArray(stored) || stored.schema_version !== 1 || Object.keys(stored).some(key => !['schema_version', 'skills_root', 'local_skills_root'].includes(key))) {
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored) || stored.schema_version !== 1 || Object.keys(stored).some(key => !['schema_version', 'skills_root', 'local_skills_root', 'skills_entrypoint'].includes(key))) {
       throw new Error('unsupported installation capability configuration');
     }
     for (const key of ['skills_root', 'local_skills_root']) {
@@ -21,6 +21,7 @@ export function capabilityConfiguration(osRoot, overrides = {}) {
       }
     }
   }
+  if (stored.skills_entrypoint != null && (typeof stored.skills_entrypoint !== 'string' || !path.isAbsolute(stored.skills_entrypoint) || stored.skills_entrypoint.includes('\0'))) throw new Error('invalid configured Skills entrypoint');
   const result = {};
   for (const [key, argument, fallback] of [
     ['skills_root', 'skillsRoot', path.join(os.homedir(), '.aiverse/skills')],
@@ -37,5 +38,5 @@ export function capabilityConfiguration(osRoot, overrides = {}) {
   const a = physical(result.skillsRoot), b = physical(result.localSkillsRoot);
   const overlap = (x, y) => { const rel = path.relative(x, y); return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel)); };
   if (overlap(a, b) || overlap(b, a)) throw new Error('managed and member provider roots must be separate');
-  return { schema_version: 1, configured: stored.schema_version === 1, ...result };
+  return { schema_version: 1, configured: stored.schema_version === 1, ...result, ...(stored.skills_entrypoint ? { skillsEntrypoint: stored.skills_entrypoint } : {}) };
 }

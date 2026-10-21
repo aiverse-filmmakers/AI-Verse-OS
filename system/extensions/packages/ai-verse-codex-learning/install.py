@@ -60,6 +60,17 @@ def discover(root, options):
     if not node or not Path(node).is_file():
         raise ValueError("setup requires the project's admitted Node runtime")
     node = Path(node).resolve()
+    binding_cli = root / "scripts/capability-configuration-cli.mjs"
+    if binding_cli.is_file():
+        result = subprocess.run([str(node), str(binding_cli), "--root", str(root)], input=json.dumps({"operation": "read"}), capture_output=True, text=True, check=True)
+        binding = json.loads(result.stdout)
+        if binding.get("configured"):
+            options = dict(options)
+            for key, value in (("skills_root", binding["skillsRoot"]), ("skills_entrypoint", binding.get("skillsEntrypoint"))):
+                if value:
+                    if options.get(key) and Path(options[key]).resolve() != Path(value).resolve():
+                        raise ValueError("helper runtime options differ from the installation Skills binding")
+                    options[key] = value
     skills = components.get("ai-verse-skills", {}).get("argv", [])
     skills_root = options.get("skills_root")
     if not skills_root and "--root" in skills:

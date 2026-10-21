@@ -40,6 +40,8 @@ export function readMemberLibrary({ root, scope, digestPackage, metadataFor = nu
       if (!SEGMENT.test(id) || !record || record.id !== id || !record.revisions || typeof record.revisions !== 'object' || Array.isArray(record.revisions)) {
         throw new Error('invalid member skill identity');
       }
+      if (record.enabled != null && typeof record.enabled !== 'boolean') throw new Error('invalid member activation state');
+      if (record.enabled === false) continue;
       const active = record.revisions[record.active_revision];
       if (!active || ['name', 'description', 'visibility'].some(key => record[key] !== active[key])) throw new Error('member active metadata mismatch');
       if (revisionFor && revisionFor.id !== `local:${id}`) continue;

@@ -6,6 +6,7 @@ import { TextDecoder } from 'node:util';
 import { parseCapabilityJson } from './capability-json.mjs';
 import {
   applyCapabilityPromotion,
+  validateCapabilityScope,
   planCapabilityBinding,
   applyCapabilityBinding,
   discoverCapabilities,
@@ -72,7 +73,9 @@ const options = {
   skillsRoot: request.skills_root,
   localSkillsRoot: request.local_skills_root,
 };
-if (operation === 'discover') {
+if (operation === 'scope-check') {
+  process.stdout.write(`${JSON.stringify(validateCapabilityScope(options))}\n`);
+} else if (operation === 'discover') {
   const result = discoverCapabilities({
     ...options,
     query: request.query,

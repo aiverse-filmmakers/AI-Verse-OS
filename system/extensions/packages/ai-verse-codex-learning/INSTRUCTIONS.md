@@ -29,3 +29,9 @@ The hook command contains the script SHA-256. Code changes require regenerating 
 Session proofs and receipts live under runtime/codex-learning. Canonical Memory/digests/profile/current state stay with their owners. Review admission expires after 24 hours. Diagnostics exclude prompt, response, tool result, quote and candidate text.
 
 `INTENT.md` describes the Codex adapter's integration with Brain's existing strategic intent owner after explicit handover. Task-continuation Goals are separate. Overall intent is injected only for relevant work; workspace context receives only explicitly linked goals. Strategic reads and writes respect bound sessions, original-user evidence, owner state and confirmation. Workspace links and correction transfer use Brain's owner API; workspace-scoped public snapshots expose only matching goals and redact link metadata. `scripts/purpose-context.mjs` can use the registered read-only Brain public reader. Hook code updates require renewed human trust.
+
+Member skill creation uses the installation-bound Skills library lifecycle. Shared
+availability never includes the source workspace's private context, settings or
+Connections. Preserve explicit private intent and existing proposal approval.
+Use OS scoped discovery and exact identities for same-named alternatives; never
+silently prefer a generated built-in copy over an explicitly requested package.

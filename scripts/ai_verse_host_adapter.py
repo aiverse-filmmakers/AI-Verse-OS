@@ -214,6 +214,22 @@ class AIverseOSHost:
             if local_skills_root is not None
             else _DEFAULT_LOCAL_SKILLS_ROOT.expanduser().resolve()
         )
+        configuration_cli = self.root / "scripts/capability-configuration-cli.mjs"
+        if configuration_cli.is_file():
+            config = _run_json(["node", str(configuration_cli), "--root", str(self.root)], {"operation": "read"}, "OS provider configuration")
+            configured_skills = Path(config["skillsRoot"]).resolve()
+            configured_local = Path(config["localSkillsRoot"]).resolve()
+            if config.get("configured"):
+                if skills_root is not None and self.skills_root != configured_skills:
+                    raise AdapterError("Skills root differs from the installation binding")
+                if local_skills_root is not None and self.local_skills_root != configured_local:
+                    raise AdapterError("Personal skills root differs from the installation binding")
+                self.skills_root, self.local_skills_root = configured_skills, configured_local
+                if config.get("skillsEntrypoint"):
+                    owner_entrypoint = Path(config["skillsEntrypoint"]).resolve()
+                    if self.skills_entrypoint is not None and self.skills_entrypoint != owner_entrypoint:
+                        raise AdapterError("Skills owner entrypoint differs from the installation binding")
+                    self.skills_entrypoint = owner_entrypoint
         self.after_pin = after_pin
         manifest = self.root / "AI-VERSE.yaml"
         if not manifest.is_file() or manifest.is_symlink():
@@ -733,19 +749,23 @@ class AIverseOSHost:
         if selected.get("status") != "selected" or not isinstance(selected.get("selection"), dict):
             raise AdapterError(f"requested capability is unavailable: {capability_id}")
         selection = dict(selected["selection"])
-        if selection.get("provider") != "aiverse-skills":
-            raise AdapterError("capability.read_instructions is currently limited to the immutable Skills provider")
         locator = selection.get("locator")
         if not isinstance(locator, dict):
-            raise AdapterError("selected Skills capability is missing locator metadata")
+            raise AdapterError("selected capability is missing locator metadata")
         package_path = Path(str(locator.get("package_path", ""))).resolve()
-        generation_path = Path(str(locator.get("generation_root", ""))).resolve()
+        if selection.get("provider") == "aiverse-skills":
+            generation_path = Path(str(locator.get("generation_root", ""))).resolve()
+        elif locator.get("kind") in {"directory", "external-directory-v1"}:
+            generation_path = Path(str(locator.get("provider_root", ""))).resolve()
+        else:
+            raise AdapterError("unsupported capability locator")
         try:
             package_path.relative_to(generation_path)
         except ValueError as exc:
-            raise AdapterError("selected Skills package escapes its immutable generation") from exc
+            raise AdapterError("selected package escapes its provider root") from exc
         if not package_path.is_dir() or package_path.is_symlink():
-            raise AdapterError("selected Skills package path is missing or unsafe")
+            raise AdapterError("selected package path is missing or unsafe")
+        selection["scoped_inputs"] = dict(selected.get("workspace_binding", {}).get("inputs", {}))
         if self.after_pin is not None:
             self.after_pin(
                 {
@@ -800,6 +820,12 @@ class AIverseOSHost:
     ) -> Dict[str, Any]:
         if not isinstance(parameters, Mapping):
             raise AdapterError("skills.learning-candidate parameters must be an object")
+        if self._resolver({"operation": "scope-check", "scope": scope}).get("state") != "valid":
+            raise AdapterError("learning requires a valid bound scope")
+        authorization = self.authorize_action({**request, "request_fingerprint": _fingerprint(request)})
+        if authorization.get("decision") != "allow":
+            return {"status": "blocked", "effect_occurred": False, "result": {"authorization": authorization}}
+
         allowed = {"candidate", "skill_md", "task_evidence"}
         extras = set(parameters) - allowed
         missing = {"candidate", "skill_md", "task_evidence"} - set(parameters)
@@ -3160,6 +3186,47 @@ class AIverseOSHost:
             },
         }
 
+    def _request_member_skill(self, request, scope, operation, parameters):
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("skill parameters must be an object")
+        decision = self.authorize_action({**request, "request_fingerprint": _fingerprint(request)})
+        if decision.get("decision") != "allow":
+            return {"status": "blocked", "effect_occurred": False, "result": {"authorization": decision}}
+        if operation == "skills.binding-save":
+            if set(parameters) != {"plan"}:
+                raise AdapterError("binding save needs the exact scoped preview")
+            result = self._resolver({"operation": "apply-binding", "scope": scope, "plan": parameters["plan"]})
+        else:
+            if set(parameters) - {"source_relative", "admission", "provenance", "plan", "visibility"} or "source_relative" not in parameters:
+                raise AdapterError("invalid member import parameters")
+            if self._resolver({"operation": "scope-check", "scope": scope}).get("state") != "valid":
+                raise AdapterError("member import requires a valid owning scope")
+            relative = parameters["source_relative"]
+            if not isinstance(relative, str):
+                raise AdapterError("member source must be a scoped relative path")
+            source = self.root / relative
+            allowed = self.root / ("workspaces/" + scope[10:] if scope.startswith("workspace:") else "operator")
+            if not _inside(allowed.resolve(), self.root) or allowed.resolve() != allowed:
+                raise AdapterError("member source scope is redirected")
+            if Path(relative).is_absolute() or ".." in Path(relative).parts or not _inside(source.resolve(), allowed.resolve()):
+                raise AdapterError("member source escapes the current scope")
+            if not source.is_dir() or source.is_symlink():
+                raise AdapterError("member source must be a real directory")
+            admission = parameters.get("admission", {})
+            visibility = parameters.get("visibility") or ("shared" if admission else scope)
+            with tempfile.TemporaryDirectory(prefix="aiverse-member-import-") as temporary:
+                args = ["library", "--library-root", str(self.local_skills_root), "import", "--source", str(source), "--source-scope", scope, "--visibility", visibility]
+                for key, flag in (("admission", "--admission-json"), ("provenance", "--provenance-json"), ("plan", "--apply-plan")):
+                    if key not in parameters and key != "admission":
+                        continue
+                    file = Path(temporary) / (key + ".json")
+                    file.write_text(json.dumps(parameters.get(key, {}), allow_nan=False), encoding="utf-8")
+                    args.extend([flag, str(file)])
+                result = self._run_skills_owner_cli(args, "Skills member import")
+        return {"status": "blocked" if result.get("owner_refused") else "succeeded",
+                "effect_occurred": result.get("state") in {"imported", "saved"}, "result": result,
+                "execution_binding": {"scope": scope, "operation": operation, "request_fingerprint": _fingerprint(request)}}
+
     def request_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(request, Mapping):
             raise AdapterError("action request must be an object")
@@ -3180,6 +3247,12 @@ class AIverseOSHost:
             return self._request_memory_capture(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.session_digest":
             return self._request_memory_session_digest(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation in {"skills.library-import", "skills.binding-save"}:
+            return self._request_member_skill(request, scope, operation, parameters)
+        if action_class == "read_local" and operation == "skills.binding-plan":
+            if not isinstance(parameters, Mapping) or set(parameters) - {"qualified_id", "alias", "binding"}:
+                raise AdapterError("invalid binding preview parameters")
+            return {"status": "succeeded", "effect_occurred": False, "result": self._resolver({"operation": "plan-binding", "scope": scope, **parameters})}
         if action_class == "write_local_reversible" and operation == "skills.learning-candidate":
             return self._request_skills_learning_candidate(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "data.structured-truth":
@@ -3217,8 +3290,8 @@ class AIverseOSHost:
         capability_id = parameters["capability_id"]
         expected_generation = parameters["expected_generation_id"]
         expected_digest = parameters["expected_package_digest"]
-        if not isinstance(capability_id, str) or not capability_id.startswith("aiverse-skills:"):
-            raise AdapterError("capability_id must be a qualified aiverse-skills id")
+        if not isinstance(capability_id, str) or not capability_id.startswith(("aiverse-skills:", "local:", "workspace:", "external:", "os:")):
+            raise AdapterError("capability_id must be a qualified supported capability id")
         if not isinstance(expected_generation, str) or not expected_generation:
             raise AdapterError("expected_generation_id is required")
         if (
@@ -3253,13 +3326,13 @@ class AIverseOSHost:
             "scope": scope,
             "action_class": "read_local",
             "operation": "capability.read_instructions",
-            "provider_id": "aiverse-skills",
+            "provider_id": selection["provider"],
             "capability_id": capability_id,
             "generation_id": expected_generation,
             "package_digest": dict(expected_digest),
         }
         receipt = {
-            "contract": "aiverse-execution-receipt-v2",
+            "contract": "aiverse-execution-receipt-v2" if selection["provider"] == "aiverse-skills" else "aiverse-capability-read-v1",
             "receipt_id": f"receipt-{uuid4()}",
             "status": "success",
             "summary": f"Read instructions from pinned capability {capability_id}",
@@ -3287,6 +3360,9 @@ class AIverseOSHost:
                 "receipt": receipt,
                 "instructions": instructions,
                 "instruction_sha256": hashlib.sha256(data).hexdigest(),
+                "skill_inputs": selection.get("scoped_inputs", {}),
+                "inputs_scope": scope,
+                "permission_granted": False,
             },
             "execution_binding": binding,
         }

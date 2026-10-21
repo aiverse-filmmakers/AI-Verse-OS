@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           MEMORY="$(cat "$RUNNER_TEMP/memory-repo.txt")"
-          python "$MEMORY/scripts/install.py" --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY"
+          python "$MEMORY/scripts/component.py" --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json install
           test -f scripts/ai-verse-memory/memory.py
           test -f scripts/ai-verse-memory/memory_engine.py
           test -f .claude/skills/ai-verse-memory/SKILL.md

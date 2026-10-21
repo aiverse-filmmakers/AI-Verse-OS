@@ -1,6 +1,6 @@
 # Runtime Compatibility
 
-AI-Verse OS treats capabilities as logically runtime-neutral while currently materializing canonical shared packages under `.claude/skills/` and synchronized Codex-compatible copies under `.agents/skills/`.
+AI-Verse OS treats capabilities as runtime-neutral. OS built-in sources live under `system/capabilities/`; `.claude/skills/` and `.agents/skills/` are generated peer adapters. Member and publisher packages retain their separate canonical owners and configured library locations.
 
 `skills/registry.yaml` describes the shared capability layer.
 

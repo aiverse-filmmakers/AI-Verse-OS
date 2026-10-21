@@ -1,8 +1,8 @@
 # Shared member skill discovery and workspace bindings
 
-Status: step 3 OS source implementation. Not yet admitted into a Core release.
+Status: steps 3–4 OS source implementation. Not yet admitted into a Core release.
 Skills owns package import/revisions; OS owns discovery, selection and bindings.
-Brain/native runtime and Distribution provisioning are step 4; platform/composed
+Brain/host and Distribution provisioning are implemented locally in step 4; native callbacks remain unqualified; platform/composed
 release qualification is step 5. No installed member files move automatically.
 
 ## One catalog, separate owners
@@ -33,16 +33,17 @@ workspace settings; each workspace binds its own non-secret values.
 Optional local metadata: `.aiverse/capability-providers.json`:
 
 ```json
-{"schema_version":1,"skills_root":"/absolute/managed-root","local_skills_root":"/absolute/personal-root"}
+{"schema_version":1,"skills_root":"/absolute/managed-root","local_skills_root":"/absolute/personal-root","skills_entrypoint":"/absolute/owner/installer/aiverse_skills.py"}
 ```
 
-Both paths are required in this file. Explicit caller paths must agree; missing
+Both provider roots are required; the optional Skills mutation entrypoint is an exact owner-established file. Explicit caller paths must agree; missing
 configured providers remain absent/degraded rather than switching to another
 installation. Managed/member roots must not overlap. With no file, existing
 explicit arguments and legacy home defaults remain supported for compatibility.
-Writing this binding through installation owners and converging Python/native/
-Brain callers is step 4. Node reads are complete here; do not claim all runtimes
-already honor it.
+Distribution calls the OS configuration owner preview/apply CLI during matching
+Skills setup/reconcile. Python/Brain host construction and the optional adapter
+installer now read this binding. Conflicting roots or entrypoints refuse. Native
+callbacks and composed release behavior still require step 5 qualification.
 
 ## Selection
 
@@ -136,3 +137,38 @@ then Node selection/bindings against its actual index, including retained revisi
 and private package refusals. It never invokes a personal launcher. This crossrepo
 check is run locally against the recorded step 2 commit; CI wiring to admitted
 crossrepo sources belongs to composed integration after those sources are published.
+
+## Step 4 host and learning routes
+
+The Python host accepts `skills.library-import` (scoped source folder, admission,
+optional provenance and exact preview), `skills.binding-plan` and
+`skills.binding-save`. Writes and learning enforce the OS permission floor and
+valid scope. A sibling workspace source or unsafe path is refused. Prepared
+ordinary skills and learned procedures use the same Skills-owned library API.
+
+`capability.read_instructions` now supports verified directory/member and explicit
+read-only external locators as well as managed generations. It rechecks bytes and
+returns only current-scope inputs. For nonmanaged packages the receipt is
+`aiverse-capability-read-v1`, not a forged managed Skills execution receipt. This
+is instruction retrieval: no scripts, connections or tool effects are executed.
+
+Configured new learning proposals use the member library after existing approval
+or eligible auto policy. Brain forwards explicit `portability` declarations;
+missing declarations do not imply portability. Workspace-only intent stays private.
+Unknown portability stays restricted/draft and does not bypass private auto policy.
+A configured member route does not modify the immutable managed generation.
+Learning rollback disables its unchanged imported identity without deleting bytes.
+Existing unconfigured owner flows remain backward compatible; historical managed
+packages tagged `workspace_local` without a safe scoped location are withheld by
+the OS catalog, with a diagnostic. Their originals/IDs are retained for explicit
+owner review; no automatic migration or unproven scope repair occurs.
+
+Fresh setup uses a private member-library sibling of the managed root. Existing
+installations without a binding preserve their prior canonical personal root;
+existing bindings cannot be silently rebound. Distribution preservation/recovery
+uses the configured personal root and preserves external registrations. No actual
+member installation is updated by these development changes.
+
+Local composition command:
+`python scripts/test-shared-skills-runtime.py --skills-source <checkout> --brain-source <checkout> --distribution-source <checkout>`.
+Run in an isolated process with Python 3.11 or newer, never the operator launcher.

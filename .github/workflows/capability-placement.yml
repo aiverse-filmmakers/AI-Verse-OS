@@ -31,6 +31,7 @@ jobs:
           node --check scripts/capability-bindings.mjs
           node --check scripts/capability-binding-plan.mjs
           node --check scripts/capability-configuration.mjs
+          node --check scripts/capability-configuration-cli.mjs
           node --check scripts/capability-external-sources.mjs
 
       - name: Test practical placement semantics

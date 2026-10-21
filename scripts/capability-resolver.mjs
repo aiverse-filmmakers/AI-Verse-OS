@@ -390,3 +390,10 @@ export function applyCapabilityBinding(options = {}) {
   validateBindingBoundary(options);
   return applyBinding(options);
 }
+
+export function validateCapabilityScope(options = {}) {
+  const scope = options.scope ?? 'operator';
+  if (scope === 'operator') return { state: 'valid', scope };
+  const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
+  return { ...boundary, scope };
+}

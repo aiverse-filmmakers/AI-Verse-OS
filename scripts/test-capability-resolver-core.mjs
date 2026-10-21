@@ -168,8 +168,8 @@ withFixture((base) => {
     skillsRoot: distributed,
     localSkillsRoot: local,
   });
-  assert.equal(workspaceChoice.status, 'selected');
-  assert.equal(workspaceChoice.selection.id, 'workspace:alpha:shared-tool');
+  assert.equal(workspaceChoice.status, 'ambiguous');
+  assert.deepEqual(new Set(workspaceChoice.alternatives.map(item => item.id)), new Set(['workspace:alpha:shared-tool', 'local:shared-tool', 'aiverse-skills:shared-tool']));
 
   const operatorChoice = selectCapability({
     osRoot: root,
@@ -178,7 +178,8 @@ withFixture((base) => {
     skillsRoot: distributed,
     localSkillsRoot: local,
   });
-  assert.equal(operatorChoice.selection.id, 'local:shared-tool');
+  assert.equal(operatorChoice.status, 'ambiguous');
+  assert.deepEqual(new Set(operatorChoice.alternatives.map(item => item.id)), new Set(['local:shared-tool', 'aiverse-skills:shared-tool']));
 
   const versionChoice = selectCapability({
     osRoot: root,

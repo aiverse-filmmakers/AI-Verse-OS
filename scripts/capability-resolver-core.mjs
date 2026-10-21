@@ -1,8 +1,11 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { readMemberLibrary } from './member-skill-library.mjs';
+import { capabilityConfiguration } from './capability-configuration.mjs';
+import { externalSources } from './capability-external-sources.mjs';
+import { readBindings } from './capability-bindings.mjs';
 
 export const PROVIDER_CONTRACT = 'aiverse-capability-provider-v1';
 export const DISTRIBUTED_PROVIDER = 'aiverse-skills';
@@ -362,14 +365,15 @@ function distributedProvider(root) {
 
 function workspaceIdFromScope(scope) {
   if (typeof scope !== 'string') throw new Error('scope must be a string');
-  if (!scope.startsWith('workspace:')) return null;
+  if (scope === 'operator') return null;
+  if (!scope.startsWith('workspace:')) throw new Error('scope must be operator or a trusted workspace');
   const id = scope.slice('workspace:'.length);
   if (!SEGMENT.test(id)) throw new Error(`invalid workspace scope: ${scope}`);
   return id;
 }
 
 function normalizeSearch(value) {
-  return String(value ?? '').trim().toLowerCase();
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function tokenize(value) {
@@ -424,8 +428,8 @@ export function discoverCapabilities({
   query = '',
   qualifiedId = null,
   limit = 20,
-  skillsRoot = path.join(os.homedir(), '.aiverse', 'skills'),
-  localSkillsRoot = path.join(os.homedir(), '.aiverse', 'local-skills'),
+  skillsRoot,
+  localSkillsRoot,
 } = {}) {
   const root = path.resolve(osRoot);
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml')) || !fs.existsSync(path.join(root, 'system', 'capabilities'))) {
@@ -433,15 +437,27 @@ export function discoverCapabilities({
   }
   if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('limit must be an integer from 1 to 200');
   const workspaceId = workspaceIdFromScope(scope);
+  ({ skillsRoot, localSkillsRoot } = capabilityConfiguration(root, { skillsRoot, localSkillsRoot }));
 
   const providers = [];
   providers.push(scanDirectoryProvider({
     root: path.join(root, 'system', 'capabilities'), provider: 'os', visibility: 'system', prefix: 'os',
   }));
   providers.push(distributedProvider(path.resolve(skillsRoot)));
-  providers.push(scanDirectoryProvider({
-    root: path.resolve(localSkillsRoot), provider: 'local', visibility: 'shared', prefix: 'local',
-  }));
+  const personalRoot = path.resolve(localSkillsRoot);
+  const personal = scanDirectoryProvider({ root: personalRoot, provider: 'local', visibility: 'shared', prefix: 'local' });
+  const member = readMemberLibrary({ root: personalRoot, scope, digestPackage: packageDigestV1, metadataFor: readSkillMetadata });
+  const legacyIds = new Set(personal.candidates.map((candidate) => candidate.id));
+  if (member.candidates.some((candidate) => legacyIds.has(candidate.id))) {
+    member.candidates = [];
+    member.diagnostics.push('member skill identity conflicts with legacy personal package');
+    member.state = 'degraded';
+  }
+  personal.candidates.push(...member.candidates);
+  personal.diagnostics.push(...member.diagnostics);
+  if (member.state === 'degraded') personal.state = 'degraded';
+  else if (member.state === 'healthy') personal.state = 'healthy';
+  providers.push(personal);
   if (workspaceId) {
     const workspaceRoot = path.join(root, 'workspaces', workspaceId);
     const realWorkspaces = safeRealpath(path.join(root, 'workspaces'), 'OS workspaces root');
@@ -468,6 +484,7 @@ export function discoverCapabilities({
     }
   }
 
+  providers.push(...externalSources({ osRoot: root, scope, digestPackage: packageDigestV1, metadataFor: readSkillMetadata, metadataFor: readSkillMetadata }));
   const all = providers.flatMap((provider) => provider.candidates);
   let effectiveQuery = query;
   if (qualifiedId) effectiveQuery = qualifiedId;
@@ -493,11 +510,35 @@ export function selectCapability(options = {}) {
   const scope = options.scope ?? 'operator';
   const workspaceId = workspaceIdFromScope(scope);
   const explicit = options.qualifiedId || (typeof options.query === 'string' && options.query.includes(':') ? options.query : null);
+  const root = options.osRoot ?? process.cwd();
+  let scoped, shared;
+  try {
+    scoped = readBindings(root, scope);
+    shared = scope === 'operator' ? scoped : readBindings(root, 'operator');
+  } catch (error) {
+    return { status: 'unavailable', reason: `skill bindings require review: ${error.message}` };
+  }
+  const selected = (candidate, providers, extra = {}) => {
+    const binding = scoped.skills[candidate.id];
+    if (binding?.revision && binding.revision !== candidate.digest.value) {
+      if (candidate.library_contract !== 'aiverse-member-skill-library-v1') return {
+        status: 'unavailable', requested: candidate.id, reason: 'the pinned skill revision is not active; use its owner lifecycle', providers,
+      };
+      const configuration = capabilityConfiguration(root, options);
+      const pinned = readMemberLibrary({ root: configuration.localSkillsRoot, scope,
+        digestPackage: packageDigestV1, metadataFor: readSkillMetadata, revisionFor: { id: candidate.id, revision: binding.revision } });
+      const revision = pinned.candidates.find(item => item.id === candidate.id && item.digest.value === binding.revision);
+      if (!revision) return { status: 'unavailable', requested: candidate.id, reason: 'pinned member revision is unavailable, restricted or damaged', providers };
+      candidate = revision;
+    }
+    return { status: 'selected', selection: candidate, providers, ...extra,
+      ...(binding ? { workspace_binding: { ...binding, scope, permission_granted: false } } : {}) };
+  };
   if (explicit) {
     const discovery = discoverCapabilities({ ...options, qualifiedId: explicit, query: options.query || explicit, limit: 200 });
     const match = discovery.candidates.find((candidate) => candidate.id === explicit);
     return match
-      ? { status: 'selected', selection: match, providers: discovery.providers }
+      ? selected(match, discovery.providers)
       : { status: 'unavailable', requested: explicit, reason: 'qualified capability is absent, out of scope, or its provider is unhealthy', providers: discovery.providers };
   }
 
@@ -510,14 +551,34 @@ export function selectCapability(options = {}) {
     const osId = `os:${normalizedBare}`;
     const match = discovery.candidates.find((candidate) => candidate.id === osId);
     return match
-      ? { status: 'selected', selection: match, providers: discovery.providers }
+      ? selected(match, discovery.providers, {
+          selection_reason: 'protected-os-entrypoint',
+          alternatives: discovery.candidates.filter((candidate) => candidate.id !== osId &&
+            (candidate.bare_id === normalizedBare || normalizeSearch(candidate.name) === query)) })
       : { status: 'unavailable', requested: normalizedBare, reason: `protected OS alias ${normalizedBare} is unavailable`, providers: discovery.providers };
   }
 
+  const preferred = scoped.preferences[query] ?? shared.preferences[query];
+  if (preferred) {
+    const configured = discoverCapabilities({ ...options, qualifiedId: preferred, limit: 200 });
+    const match = configured.candidates.find(candidate => candidate.id === preferred);
+    return match ? selected(match, configured.providers, { selection_reason: 'saved-preference' }) : {
+      status: 'unavailable', requested: preferred, reason: 'saved skill preference is unavailable; choose explicitly rather than silently replacing it', providers: configured.providers,
+    };
+  }
   const exact = discovery.candidates
-    .filter((candidate) => candidate.bare_id === normalizedBare)
+    .filter((candidate) => candidate.bare_id === normalizedBare || normalizeSearch(candidate.name) === query)
     .sort((a, b) => providerPreference(a, workspaceId) - providerPreference(b, workspaceId) || a.id.localeCompare(b.id));
-  if (exact.length) return { status: 'selected', selection: exact[0], providers: discovery.providers };
-  if (discovery.candidates.length) return { status: 'selected', selection: discovery.candidates[0], providers: discovery.providers };
+  if (exact.length > 1) return {
+    status: 'ambiguous', requested: options.query,
+    reason: 'Several available skills have this name. Choose an exact skill or save a scoped preference.',
+    alternatives: exact, providers: discovery.providers,
+  };
+  if (exact.length) return selected(exact[0], discovery.providers);
+  if (discovery.candidates.length > 1 && relevanceScore(discovery.candidates[0], query) === relevanceScore(discovery.candidates[1], query)) return {
+    status: 'ambiguous', requested: options.query, reason: 'Several skills match equally; choose an exact identity.',
+    alternatives: discovery.candidates.filter(item => relevanceScore(item, query) === relevanceScore(discovery.candidates[0], query)), providers: discovery.providers,
+  };
+  if (discovery.candidates.length) return selected(discovery.candidates[0], discovery.providers);
   return { status: 'unavailable', requested: query, reason: 'no authorized healthy capability matches the request', providers: discovery.providers };
 }

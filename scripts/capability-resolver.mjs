@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { capabilityConfiguration } from './capability-configuration.mjs';
+import { planBinding, applyBinding } from './capability-binding-plan.mjs';
 import * as core from './capability-resolver-core.mjs';
 import {
   CAPABILITY_PLACEMENT_CONTRACT,
@@ -135,12 +137,12 @@ function degradedWorkspaceProvider(boundary) {
 export function discoverCapabilities(options = {}) {
   const scope = options.scope ?? 'operator';
   const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
-  if (boundary.state !== 'invalid') return core.discoverCapabilities(options);
+  if (boundary.state !== 'invalid' && boundary.state !== 'absent') return core.discoverCapabilities(options);
   const result = core.discoverCapabilities({ ...options, scope: 'operator' });
   return {
     ...result,
     scope,
-    providers: [...result.providers, degradedWorkspaceProvider(boundary)],
+    providers: [...result.providers, boundary.state === 'absent' ? { ...degradedWorkspaceProvider(boundary), state: 'absent', diagnostics: [] } : degradedWorkspaceProvider(boundary)],
     candidates: result.candidates.filter((item) => item.provider !== `workspace:${boundary.workspaceId}`),
   };
 }
@@ -156,7 +158,7 @@ function compatibilitySelection(options, direct, requested, boundary) {
   let compatibility;
   try {
     compatibility = getPromotionCompatibility({
-      localSkillsRoot: options.localSkillsRoot,
+      localSkillsRoot: capabilityConfiguration(options.osRoot ?? process.cwd(), options).localSkillsRoot,
       requestedQualifiedId: requested,
     });
   } catch (error) {
@@ -194,6 +196,7 @@ function compatibilitySelection(options, direct, requested, boundary) {
 export function selectCapability(options = {}) {
   const scope = options.scope ?? 'operator';
   const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
+  if (boundary.state === 'invalid' || boundary.state === 'absent') return { status: 'unavailable', reason: 'workspace boundary requires review', providers: [degradedWorkspaceProvider(boundary)] };
   let result;
   if (boundary.state !== 'invalid') {
     result = core.selectCapability(options);
@@ -237,7 +240,7 @@ function alreadyPromoted(options, sourceQualifiedId) {
   let compatibility;
   try {
     compatibility = getPromotionCompatibility({
-      localSkillsRoot: options.localSkillsRoot,
+      localSkillsRoot: capabilityConfiguration(options.osRoot ?? process.cwd(), options).localSkillsRoot,
       requestedQualifiedId: sourceQualifiedId,
     });
   } catch (error) {
@@ -284,7 +287,7 @@ export function planCapabilityPromotion(options = {}) {
   return buildWorkspaceToLocalPromotionPlan({
     sourceQualifiedId,
     sourceSelection: source.selection,
-    localSkillsRoot: options.localSkillsRoot,
+    localSkillsRoot: capabilityConfiguration(options.osRoot ?? process.cwd(), options).localSkillsRoot,
   });
 }
 
@@ -312,7 +315,7 @@ export function applyCapabilityPromotion(options = {}) {
   return applyWorkspaceToLocalPromotion({
     sourceQualifiedId,
     sourceSelection: source.selection,
-    localSkillsRoot: options.localSkillsRoot,
+    localSkillsRoot: capabilityConfiguration(options.osRoot ?? process.cwd(), options).localSkillsRoot,
     expectedSourceGenerationId: options.expectedSourceGenerationId,
     expectedSourceDigest: options.expectedSourceDigest,
   });
@@ -371,4 +374,19 @@ export function planCapabilityPlacement(options = {}) {
     promotion,
     managed_distribution_writable_target: false,
   };
+}
+
+function validateBindingBoundary(options) {
+  const scope = options.scope ?? 'operator';
+  if (scope === 'operator') return;
+  const boundary = validateWorkspaceBoundary({ osRoot: options.osRoot, scope });
+  if (boundary.state !== 'valid') throw new Error('binding requires a valid trusted workspace');
+}
+export function planCapabilityBinding(options = {}) {
+  validateBindingBoundary(options);
+  return planBinding(options);
+}
+export function applyCapabilityBinding(options = {}) {
+  validateBindingBoundary(options);
+  return applyBinding(options);
 }

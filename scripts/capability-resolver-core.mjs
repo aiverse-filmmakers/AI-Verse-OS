@@ -89,18 +89,45 @@ function simpleScalar(raw) {
   return value;
 }
 
+function descriptionBlock(rows, style) {
+  const populated = rows.filter(line => line.trim());
+  if (!populated.length) return '';
+  const indent = Math.min(...populated.map(line => line.length - line.replace(/^ +/, '').length));
+  const body = rows.map(line => line.trim() ? line.slice(indent) : '');
+  let value = body[0], seen = Boolean(body[0]);
+  for (let i = 0; i + 1 < body.length; i += 1) {
+    const left = body[i], right = body[i + 1];
+    let separator = '\n';
+    if (style.startsWith('>')) {
+      if (left && right && !left.startsWith(' ') && !right.startsWith(' ')) separator = ' ';
+      else if (!left && right && seen) separator = '';
+    }
+    value += separator + right; seen ||= Boolean(right);
+  }
+  if (style.endsWith('-')) return value.replace(/\n+$/, '');
+  if (style.endsWith('+')) return value + '\n';
+  return value.replace(/\n+$/, '') + '\n';
+}
+
 export function readSkillMetadata(skillMd) {
-  const text = fs.readFileSync(skillMd, 'utf8');
-  const lines = text.split(/\r?\n/);
+  const lines = fs.readFileSync(skillMd, 'utf8').split(/\r?\n/);
   if (lines[0]?.trim() !== '---') return {};
   const out = {};
-  for (const line of lines.slice(1)) {
+  let i = 1;
+  while (i < lines.length) {
+    const line = lines[i++];
     if (line.trim() === '---') break;
     if (!line || /^\s/.test(line) || !line.includes(':')) continue;
     const at = line.indexOf(':');
     const key = line.slice(0, at).trim();
     if (!['name', 'description', 'version'].includes(key)) continue;
-    const value = simpleScalar(line.slice(at + 1));
+    const raw = line.slice(at + 1).trim();
+    let value;
+    if (key === 'description' && ['|', '>', '|-', '>-', '|+', '>+'].includes(raw)) {
+      const rows = [];
+      while (i < lines.length && (!lines[i].trim() || lines[i].startsWith(' '))) rows.push(lines[i++]);
+      value = descriptionBlock(rows, raw);
+    } else value = simpleScalar(raw);
     if (value) out[key] = value;
   }
   return out;

@@ -3197,7 +3197,7 @@ class AIverseOSHost:
                 raise AdapterError("binding save needs the exact scoped preview")
             result = self._resolver({"operation": "apply-binding", "scope": scope, "plan": parameters["plan"]})
         else:
-            if set(parameters) - {"source_relative", "admission", "provenance", "plan", "visibility"} or "source_relative" not in parameters:
+            if set(parameters) - {"source_relative", "admission", "provenance", "plan", "visibility", "security_review"} or "source_relative" not in parameters:
                 raise AdapterError("invalid member import parameters")
             if self._resolver({"operation": "scope-check", "scope": scope}).get("state") != "valid":
                 raise AdapterError("member import requires a valid owning scope")
@@ -3216,7 +3216,7 @@ class AIverseOSHost:
             visibility = parameters.get("visibility") or ("shared" if admission else scope)
             with tempfile.TemporaryDirectory(prefix="aiverse-member-import-") as temporary:
                 args = ["library", "--library-root", str(self.local_skills_root), "import", "--source", str(source), "--source-scope", scope, "--visibility", visibility]
-                for key, flag in (("admission", "--admission-json"), ("provenance", "--provenance-json"), ("plan", "--apply-plan")):
+                for key, flag in (("admission", "--admission-json"), ("provenance", "--provenance-json"), ("security_review", "--security-review-json"), ("plan", "--apply-plan")):
                     if key not in parameters and key != "admission":
                         continue
                     file = Path(temporary) / (key + ".json")

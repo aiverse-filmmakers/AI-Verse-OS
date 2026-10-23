@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: aiverse-filmmakers/AI-Verse-Skills
-          ref: 424e2a7b130011b715ff6c3fc3a5218c627765a1
+          ref: 390c6e1633afc809040bd1159840045f4f9ff27e
           path: runtime/qualification/skills
       - uses: actions/checkout@v4
         with:

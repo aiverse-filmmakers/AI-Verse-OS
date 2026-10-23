@@ -67,7 +67,7 @@ try:
         return host.request_action(payload)
     package = root / "workspaces/alpha/inbox/method"
     package.mkdir(parents=True)
-    (package / "SKILL.md").write_text('---\nname: reusable-method\ndescription: Verify a portable procedure\n---\nUse explicit inputs and verify the result.\n')
+    (package / "SKILL.md").write_text('---\nname: reusable-method\ndescription: >-\n  Verify a portable\n  procedure\n---\nUse explicit inputs and verify the result.\n')
     parameters = {"source_relative": "workspaces/alpha/inbox/method", "admission": library.PORTABILITY}
     preview = request("skills.library-import", parameters)
     assert preview["status"] == "succeeded" and not preview["effect_occurred"], preview
@@ -90,6 +90,27 @@ try:
     except module.AdapterError:
         pass
     checks += 1
+    # A maintainer review is exact content evidence, never execution permission.
+    reviewed_package = root / "workspaces/alpha/inbox/reviewed-method"
+    reviewed_package.mkdir(parents=True)
+    (reviewed_package / "SKILL.md").write_text('---\nname: reviewed-method\ndescription: |-\n  Review a documentation example.\n  Verify dependencies.\n---\nUse explicit inputs.\n')
+    (reviewed_package / "mocking.md").write_text('Example: const client = new StripeClient(process.env.STRIPE_KEY);\n')
+    reviewed_parameters = {"source_relative": "workspaces/alpha/inbox/reviewed-method", "admission": library.PORTABILITY}
+    refused = request("skills.library-import", reviewed_parameters)
+    assert refused["status"] != "succeeded", refused
+    inspection = subprocess.run([*command, "library", "--library-root", str(personal), "inspect", "--source", str(reviewed_package)], capture_output=True, text=True, check=True)
+    inspection = json.loads(inspection.stdout)
+    review = {"source_revision": inspection["source_revision"], "findings": [{"path": f["path"], "code": f["code"]} for f in inspection["scan"]["findings"]], "reviewer": "fixture-maintainer", "reason": "Reviewed inert documentation example; grants no execution authority."}
+    reviewed_parameters["security_review"] = review
+    reviewed_preview = request("skills.library-import", reviewed_parameters)
+    assert reviewed_preview["status"] == "succeeded", reviewed_preview
+    reviewed_apply = request("skills.library-import", {**reviewed_parameters, "plan": reviewed_preview["result"]})
+    assert reviewed_apply["status"] == "succeeded", reviewed_apply
+    reviewed_id = reviewed_apply["result"]["qualified_id"]
+    reviewed_candidate = next(x for x in host.list_capabilities("workspace:beta") if x["id"] == reviewed_id)
+    reviewed_read = request("capability.read_instructions", {"capability_id": reviewed_id, "expected_generation_id": reviewed_candidate["generation_id"], "expected_package_digest": reviewed_candidate["digest"]}, scope="workspace:beta", action="read_local")
+    assert reviewed_read["status"] == "succeeded" and reviewed_read["result"]["permission_granted"] is False, reviewed_read
+    checks += 1
     registry = root / ".aiverse/extensions/registry.json"
     registry.parent.mkdir(parents=True)
     registry.write_text(json.dumps({"schema_version": "1.0", "extensions": {"ai-verse-brain": {"id": "ai-verse-brain", "supported": True, "installed": True, "enabled": True}}}))
@@ -103,7 +124,7 @@ try:
     assert learned["status"] == "succeeded", learned
     result = learned["result"]
     assert result["skills_result"]["state"] == "pending_approval", result
-    assert len(library.read_index(personal)["skills"]) == 1
+    assert len(library.read_index(personal)["skills"]) == 2
     proposal_id = result["skills_submission"]["proposal_id"]
     promoted = subprocess.run([*command, "proposals", "apply", proposal_id, "--approved-by", "fixture-user", "--json"], capture_output=True, text=True, check=True)
     promoted = json.loads(promoted.stdout)

@@ -99,7 +99,7 @@ export function dependencyPlan(options) {
   }
   const python = path.join(venv,process.platform==='win32'?'Scripts':'bin',process.platform==='win32'?'python.exe':'python');
   const steps = fs.existsSync(venv) ? [] : [{command:process.platform==='win32'?'python':'python3',args:['-I','-m','venv',venv]}];
-  steps.push({command:python,args:['-I','-m','pip','--isolated','install',...specs]});
+  steps.push({command:python,args:['-I','-m','pip','--isolated','install','--prefix',venv,'--no-user',...specs]});
   return {...loc,steps};
 }
 export function installDependencies(options, run = spawnSync) {

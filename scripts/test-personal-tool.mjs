@@ -25,7 +25,7 @@ try {
  for(const scope of ['workspace:missing','workspace:../demo','bad'])reject(()=>initializeTool(opts('other','node',scope)));
  initializeTool({...opts('scoped','python','workspace:demo'),apply:true});checks++;
  const py=dependencyPlan({...opts('scoped','python','workspace:demo'),packages:['requests==2.32.3']});
- assert.equal(py.steps.length,2);assert.ok(py.steps[0].args.includes('-I'));assert.ok(py.steps[1].command.startsWith(path.join(root,'workspaces/demo/tools/scoped/.venv')));checks++;
+ assert.equal(py.steps.length,2);assert.ok(py.steps[1].args.includes('--prefix'));assert.ok(py.steps[1].args.includes('--no-user'));assert.ok(py.steps[0].args.includes('-I'));assert.ok(py.steps[1].command.startsWith(path.join(root,'workspaces/demo/tools/scoped/.venv')));checks++;
  const plan=dependencyPlan({...opts(),packages:['dotenv@16.4.5','@scope/pkg@1.0.0']});
  assert.ok(plan.steps[0].args.includes('--ignore-scripts'));assert.ok(plan.steps[0].args.includes('--global=false'));assert.ok(plan.steps[0].args.includes('--workspaces=false'));assert.equal(plan.steps[0].args[plan.steps[0].args.indexOf('--prefix')+1],path.join(root,'apps/example'));checks++;
  for(const spec of ['--prefix=/tmp','../local','file:foo','https://evil/pkg','pkg;echo','pkg\nname','-g'])reject(()=>dependencyPlan({...opts(),packages:[spec]}));

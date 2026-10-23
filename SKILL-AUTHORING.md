@@ -22,27 +22,38 @@ Not everything should become a skill.
 
 A workflow can produce several artifacts. Keep execution logic in the skill and deeper domain knowledge in references/knowledge so either can evolve without duplicating the other.
 
-## Current skill packaging
+## Canonical authoring and runtime packages
 
-The current materialized authoring source is:
+OS built-ins are authored under `system/capabilities/<name>/`. The OS runtime
+registry is `skills/registry.yaml`. `.agents/skills/` and `.claude/skills/` are
+generated runtime peers, never independent authoring sources.
+
+Reusable member procedures belong to the configured personal library, using the
+Skills owner's explicit create/import/revision lifecycle. A skill created while
+working in a workspace is shared after portability admission unless the member
+requests workspace-only use. Private/uncertain material stays restricted; do not
+copy workspace facts, credentials or implicit resource access into a shared method.
+Keep workspace-specific values in scoped bindings rather than another skill copy.
+
+Existing workspace and personal skill folders remain supported in place. Do not
+automatically move them. Published managed packages and registered external
+packages retain their original owners; never edit their installed bytes to
+customize a member procedure. Import a separate member-owned identity when needed.
+
+A package retains the normal anatomy:
 
 ```text
-.claude/skills/<skill-name>/
-├── SKILL.md
-├── agents/
-│   └── openai.yaml
-├── references/
-├── assets/
-└── scripts/
+SKILL.md
+references/
+assets/
+scripts/
+agents/  # optional runtime-specific metadata
 ```
 
-`skills/registry.yaml` is the runtime-neutral capability registry. Codex-compatible packages are synchronized to `.agents/skills/` with:
-
-```bash
-bash scripts/sync-codex-skills.sh <skill-name>
-```
-
-The capability contract should not depend on Claude-specific behavior unless the skill explicitly declares that limitation.
+See [shared member discovery and bindings](system/architecture/member-skills.md)
+for identity, exact selection, read-only source registration and the current
+implementation boundary. Runtime/learning installation integration is a later
+release step; these development APIs do not update the installed OS by themselves.
 
 ## Required anatomy
 

@@ -2,8 +2,13 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
+import { parseCapabilityJson } from './capability-json.mjs';
 import {
   applyCapabilityPromotion,
+  validateCapabilityScope,
+  planCapabilityBinding,
+  applyCapabilityBinding,
   discoverCapabilities,
   planCapabilityPlacement,
   planCapabilityPromotion,
@@ -31,11 +36,17 @@ function parseArgs(argv) {
 
 async function readPayload() {
   const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    size += chunk.length; if (size > 262144) fail('request is too large');
+    chunks.push(chunk);
+  }
+  let raw;
+  try { raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)).trim(); }
+  catch { fail('request must be UTF-8 JSON'); }
   if (!raw) fail('request JSON is required on stdin');
   let data;
-  try { data = JSON.parse(raw); }
+  try { data = parseCapabilityJson(raw); }
   catch (error) { fail(`invalid request JSON: ${error.message}`); }
   if (!data || typeof data !== 'object' || Array.isArray(data)) fail('request must be a JSON object');
   return data;
@@ -48,12 +59,13 @@ const request = await readPayload();
 const allowed = new Set([
   'operation', 'scope', 'skills_root', 'local_skills_root', 'query', 'qualified_id', 'limit',
   'placement', 'context_label', 'capability_id', 'source_qualified_id',
-  'expected_source_generation_id', 'expected_source_digest',
+  'expected_source_generation_id', 'expected_source_digest', 'alias', 'binding', 'plan',
 ]);
 for (const key of Object.keys(request)) {
   if (!allowed.has(key)) fail(`unknown request field: ${key}`);
 }
 
+try {
 const operation = request.operation;
 const options = {
   osRoot: root,
@@ -61,7 +73,9 @@ const options = {
   skillsRoot: request.skills_root,
   localSkillsRoot: request.local_skills_root,
 };
-if (operation === 'discover') {
+if (operation === 'scope-check') {
+  process.stdout.write(`${JSON.stringify(validateCapabilityScope(options))}\n`);
+} else if (operation === 'discover') {
   const result = discoverCapabilities({
     ...options,
     query: request.query,
@@ -75,6 +89,10 @@ if (operation === 'discover') {
     qualifiedId: request.qualified_id,
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (operation === 'plan-binding') {
+  process.stdout.write(`${JSON.stringify(planCapabilityBinding({ ...options, qualifiedId: request.qualified_id, alias: request.alias, binding: request.binding }))}\n`);
+} else if (operation === 'apply-binding') {
+  process.stdout.write(`${JSON.stringify(applyCapabilityBinding({ ...options, plan: request.plan }))}\n`);
 } else if (operation === 'plan-placement') {
   const result = planCapabilityPlacement({
     ...options,
@@ -101,3 +119,5 @@ if (operation === 'discover') {
 } else {
   fail(`unsupported operation: ${operation}`);
 }
+
+} catch (error) { fail(error.message); }

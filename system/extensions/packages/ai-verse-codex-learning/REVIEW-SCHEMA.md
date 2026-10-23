@@ -68,3 +68,16 @@ Run maintenance.py report with an explicit scope to inspect review coverage and 
 The review receipt reports each actual owner effect/refusal. Never announce a saved memory or activated Skill solely because a request was issued.
 
 An interrupted turn cannot admit more learning. Cancellation stops subsequent owner requests and digest creation; it cannot reverse an owner write that already completed.
+
+## Shared member-library placement
+
+When the installation binds a member library, newly approved create proposals
+use that library rather than modifying the managed publisher generation.
+A portable `agent_learned` method may include `portability` on its candidate:
+`{"reusable":true,"contains_workspace_data":false,"contains_credentials":false,"has_workspace_dependencies":false}`.
+These declarations need evidence-based semantic review; do not infer them merely
+from a skill name, origin workspace or successful execution. Remove private facts
+and use explicit scoped inputs first. Missing/uncertain declarations keep workspace
+candidates restricted and operator candidates as drafts. Explicit `workspace_local`
+intent stays restricted even when the method is portable. Existing proposal/auto
+policy still controls activation. Do not set declarations just to pass a gate.

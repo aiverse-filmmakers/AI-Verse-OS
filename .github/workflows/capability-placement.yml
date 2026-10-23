@@ -26,6 +26,13 @@ jobs:
           node --check scripts/capability-promotion.mjs
           node --check scripts/capability-resolver.mjs
           node --check scripts/capability-resolver-cli.mjs
+          node --check scripts/capability-json.mjs
+          node --check scripts/member-skill-library.mjs
+          node --check scripts/capability-bindings.mjs
+          node --check scripts/capability-binding-plan.mjs
+          node --check scripts/capability-configuration.mjs
+          node --check scripts/capability-configuration-cli.mjs
+          node --check scripts/capability-external-sources.mjs
 
       - name: Test practical placement semantics
         run: node scripts/test-capability-placement.mjs
@@ -35,3 +42,8 @@ jobs:
 
       - name: Regress scoped discovery and managed-generation selection
         run: node scripts/test-capability-resolver.mjs
+
+      - name: Test member library discovery and scoped bindings
+        run: |
+          node scripts/test-member-skill-library.mjs
+          node scripts/test-capability-bindings.mjs

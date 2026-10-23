@@ -168,8 +168,8 @@ withFixture((base) => {
     skillsRoot: distributed,
     localSkillsRoot: local,
   });
-  assert.equal(workspaceChoice.status, 'selected');
-  assert.equal(workspaceChoice.selection.id, 'workspace:alpha:shared-tool');
+  assert.equal(workspaceChoice.status, 'ambiguous');
+  assert.deepEqual(new Set(workspaceChoice.alternatives.map(item => item.id)), new Set(['workspace:alpha:shared-tool', 'local:shared-tool', 'aiverse-skills:shared-tool']));
 
   const operatorChoice = selectCapability({
     osRoot: root,
@@ -178,7 +178,8 @@ withFixture((base) => {
     skillsRoot: distributed,
     localSkillsRoot: local,
   });
-  assert.equal(operatorChoice.selection.id, 'local:shared-tool');
+  assert.equal(operatorChoice.status, 'ambiguous');
+  assert.deepEqual(new Set(operatorChoice.alternatives.map(item => item.id)), new Set(['local:shared-tool', 'aiverse-skills:shared-tool']));
 
   const versionChoice = selectCapability({
     osRoot: root,
@@ -300,6 +301,21 @@ withFixture((base) => {
   });
   assert.equal(provider(discovered, 'aiverse-skills').state, 'unsupported');
   assert.equal(provider(discovered, 'aiverse-skills').candidate_count, 0);
+});
+
+withFixture((base) => {
+  const root = setupOs(base), distributed = path.join(base, 'managed');
+  const { generation, manifestFile } = setupDistributed(distributed, ['legacy-private']);
+  const manifest = JSON.parse(fs.readFileSync(manifestFile));
+  manifest.packages[0].ownership = 'workspace_local';
+  writeJson(manifestFile, manifest);
+  const file = path.join(generation, '.aiverse/capability-index.json');
+  const index = JSON.parse(fs.readFileSync(file));
+  index.manifest_sha256 = crypto.createHash('sha256').update(fs.readFileSync(manifestFile)).digest('hex');
+  writeJson(file, index);
+  const result = discoverCapabilities({ osRoot: root, scope: 'operator', skillsRoot: distributed, localSkillsRoot: path.join(base, 'absent') });
+  assert(!result.candidates.some(x => x.id === 'aiverse-skills:legacy-private'));
+  assert(provider(result, 'aiverse-skills').diagnostics.some(x => x.includes('withheld')));
 });
 
 console.log('Capability resolver acceptance: PASS');

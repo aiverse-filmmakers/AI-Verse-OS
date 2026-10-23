@@ -4,12 +4,13 @@ Status: implemented OS consumer for Capability Provider Contract v1.
 
 ## Purpose
 
-AI-Verse OS owns capability discovery, selection and user-owned placement semantics. It composes four provider classes without turning any of them into a second OS source of truth:
+AI-Verse OS owns capability discovery, selection and user-owned placement semantics. It composes the existing four provider classes plus explicit read-only registered external sources without turning any of them into a second OS source of truth:
 
 1. `os` — canonical built-ins from `system/capabilities/`.
 2. `aiverse-skills` — the optional standalone AI-Verse-Skills distribution, read from its active immutable generation.
 3. `local` — private reusable user capabilities, default `~/.aiverse/local-skills/`.
 4. `workspace:<workspace-id>` — capabilities owned by the explicitly authorized active workspace at `workspaces/<workspace-id>/skills/`.
+5. `external:<source-id>` — explicitly registered, digest-bound read-only external packages; never inferred from a plugin cache.
 
 The implementation is `scripts/capability-resolver.mjs`. It performs no network access and never recursively scans a home directory. Optional providers are read only from their configured roots.
 
@@ -97,7 +98,7 @@ Qualified identities are preserved:
 
 The protected bare OS aliases are `onboard`, `workspace`, `grill-me`, `link`, `audit`, `level-up`, `3d-brain`, and `version`. A personal, workspace, or distributed capability may keep the same name under its qualified identity, but a bare request for one of those aliases always resolves to OS or fails if the OS capability is unavailable.
 
-For other exact bare-name matches, precedence is active workspace, then personal local, then distributed Skills, then OS. Explicit qualified requests never fall back to a different provider except when an active OS-owned promotion compatibility receipt explicitly records that the retired Workspace identity was promoted to a specific personal identity. That compatibility result reports the new identity and the relationship; it is not ordinary fallback.
+For other exact bare-name matches, multiple candidates produce `ambiguous` with explicit alternatives. A saved workspace choice wins over an operator identity preference; unavailable saved choices never silently fall back. Without a saved choice, one exact match selects that identity. Equal top natural-language relevance also produces ambiguity. Provider precedence orders search results only; it no longer silently decides exact-name collisions. Explicit qualified requests never fall back to a different provider except when an active OS-owned promotion compatibility receipt explicitly records that the retired Workspace identity was promoted to a specific personal identity. That compatibility result reports the new identity and the relationship; it is not ordinary fallback.
 
 ## Distributed Skills validation
 
@@ -124,6 +125,14 @@ Package content digests are carried as integrity bindings. Full runtime re-verif
 
 `discoverCapabilities()` ranks the complete authorized candidate set before applying `limit`. This prevents relevant capabilities late in a large provider index from being hidden by an arbitrary first slice.
 
-`selectCapability()` supports both explicit qualified IDs and natural/bare queries. It returns either a concrete generation/digest/path-bound selection or an explicit `unavailable` result. The only cross-provider exact-ID compatibility case is a validated active Workspace-to-personal promotion receipt as described above.
+`selectCapability()` supports both explicit qualified IDs and natural/bare queries. It returns either a concrete generation/digest/path-bound selection or an explicit `ambiguous`/`unavailable` result. The only cross-provider exact-ID compatibility case is a validated active Workspace-to-personal promotion receipt as described above.
 
 Discovery currently reports readiness as `UNVERIFIED`, permission as `unknown`, and approval as `not_required` placeholders only. Real connection/runtime readiness is intentionally deferred to the readiness implementation audit item; discovery metadata never grants execution authority.
+
+## Shared member library and bindings
+
+See [member skills](member-skills.md) for the Skills-owned member index consumer,
+scoped settings, exact preview/apply choices, installation-root binding and the
+versioned read-only external-registration contract. Existing qualified IDs and
+promotion receipts remain supported. These APIs are local implementation source;
+composed runtime/release acceptance is tracked separately.

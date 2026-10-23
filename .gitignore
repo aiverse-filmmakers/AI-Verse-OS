@@ -70,3 +70,7 @@ runtime/*
 apps/*/data/
 apps/*/*.local.*
 apps/3d-brain/config.local.json
+
+# Member tool packages and interfaces are private, not Core source
+apps/*
+!apps/README.md

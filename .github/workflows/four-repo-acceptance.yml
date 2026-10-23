@@ -66,11 +66,11 @@ jobs:
           python "$MEMORY/scripts/component.py" --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json install
           test -f scripts/ai-verse-memory/memory.py
           test -f scripts/ai-verse-memory/memory_engine.py
+          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json setup > "$RUNNER_TEMP/memory-setup.json"
           test -f .claude/skills/ai-verse-memory/SKILL.md
           test -f .agents/skills/ai-verse-memory/SKILL.md
           test -f .aiverse/extensions/registry.json
           grep -Fq 'ai-verse-memory' .aiverse/extensions/registry.json
-          python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json setup > "$RUNNER_TEMP/memory-setup.json"
           python scripts/ai-verse-memory/component.py --target "$GITHUB_WORKSPACE" --source-dir "$MEMORY" --json doctor > "$RUNNER_TEMP/memory-doctor.json"
           test -z "$(git status --porcelain --untracked-files=no)"
 

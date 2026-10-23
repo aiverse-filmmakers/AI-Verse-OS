@@ -48,3 +48,16 @@ jobs:
           node scripts/test-member-skill-library.mjs
           node scripts/test-capability-bindings.mjs
           node scripts/test-member-skills-privacy.mjs
+
+  personal-tool-placement:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/test-personal-tool.mjs

@@ -32,6 +32,18 @@ When the operator says **"Update AI-Verse"**, **"upgrade AI-Verse"**, **"update 
 - A successful updater result is the authority for completion. Do not claim the update succeeded merely because Git or one component changed.
 - Claude adapters, Codex-compatible agents, Gateway-hosted agents, and other runtimes that consume this contract must converge on this same lifecycle path rather than defining runtime-specific update behavior.
 
+### Personal tool dependency rule
+
+When creating or adding dependencies to a personal script, API client, MCP server or other tool inside an installed OS:
+
+- Use `node scripts/personal-tool.mjs init --scope <operator|workspace:id> --name <slug> --runtime <node|python>`; preview first, then `--apply`. Operator tools live in `apps/<slug>/`; workspace tools live in `workspaces/<id>/tools/<slug>/`. A tool package does not imply a standalone UI.
+- Use the same helper's `install` command with repeated `--package <registry-spec>` and explicit `--apply`. It checks placement before dispatch. For an existing package, use `check` first; never initialize over it or automatically relocate it.
+- Keep the tool's manifest, lockfile, dependencies and environment in its own package. Never add personal-tool scripts/dependencies to the OS-root `package.json`, lockfiles, Python project files or Core environment. Do not run bare root-level `npm install`, `pip install` or equivalent for personal work.
+- For another ecosystem or an install option not supported by the helper, keep an isolated tool package and obtain a reviewed implementation for that path; do not fall back to installing at the OS root. Credentials stay with their existing authorized owner; package creation grants no new access or execution approval.
+- This governs personal tooling in an installed OS. Explicit development of the official OS source follows its repository conventions; Core updates still use the canonical Distribution updater. Do not use this helper to repair or overwrite an already-modified Core manifest.
+
+The helper enforces supported placement paths, not arbitrary filesystem/process isolation. See `system/architecture/personal-tools.md` for commands and limits.
+
 ### First-use and progressive onboarding rule
 
 An incomplete profile or intake must not block an ordinary useful request.

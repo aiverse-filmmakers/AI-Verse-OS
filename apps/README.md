@@ -7,3 +7,5 @@ An app may visualize, edit, monitor, or trigger work, but important canonical st
 Avoid hidden app-only truth. If the app is deleted, the OS should still retain its important knowledge and reasoning.
 
 The optional `/3d-brain` capability generates an app under this layer.
+
+Personal tool packages (including scripts without a UI) use the [checked dependency placement workflow](../system/architecture/personal-tools.md). Their dependencies must not be added to the OS root.

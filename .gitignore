@@ -13,6 +13,11 @@ node_modules/
 .aiverse/os/
 .aiverse/direction/
 
+# Installation-specific capability roots, external registrations and private inputs
+.aiverse/capability-providers*
+.aiverse/capability-sources*
+operator/context/skill-bindings.json*
+
 # Legacy private/session outputs
 audits/
 brainstorms/

@@ -16,7 +16,7 @@ jobs:
     env:
       MEMORY_COMMIT: f1327be48ba2ee0043959021365e6dbb9dcb1d3a
       BRAIN_COMMIT: 7e6f7a7e8a3d541815bc7f65c11dca7824c35d8f
-      SKILLS_COMMIT: 424e2a7b130011b715ff6c3fc3a5218c627765a1
+      SKILLS_COMMIT: 390c6e1633afc809040bd1159840045f4f9ff27e
 
     steps:
       - name: Checkout AI-Verse OS under test

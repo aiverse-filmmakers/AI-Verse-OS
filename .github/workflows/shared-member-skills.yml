@@ -1,0 +1,48 @@
+name: Shared Member Skills Acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shared-skills:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/AI-Verse-Skills
+          ref: 424e2a7b130011b715ff6c3fc3a5218c627765a1
+          path: runtime/qualification/skills
+      - uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/AI-Verse-Brain
+          ref: 7e6f7a7e8a3d541815bc7f65c11dca7824c35d8f
+          path: runtime/qualification/brain
+      - uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/ai-verse-distribution
+          ref: 5117564695defd42f89a25b523e3be7300bfddb0
+          path: runtime/qualification/distribution
+      - name: Exercise real scoped import, learning and lifecycle owners
+        run: python scripts/test-shared-skills-runtime.py --skills-source runtime/qualification/skills --brain-source runtime/qualification/brain --distribution-source runtime/qualification/distribution
+      - name: Verify member package and workspace binding boundaries
+        run: |
+          node scripts/test-member-skill-library.mjs
+          node scripts/test-capability-bindings.mjs

@@ -423,8 +423,10 @@ def main() -> int:
     intent_read = brain_intent_request(
         "learn-intent-read", "brain.intent.read", {}, "read_local"
     )
-    current_intent = intent_read["result"]["brain_intents"]["intents"][0]
-    assert current_intent["canonical_ref"] == intent_ref
+    current_intent = next(
+        row for row in intent_read["result"]["brain_intents"]["intents"]
+        if row["canonical_ref"] == intent_ref
+    )
     corrected_intent = brain_intent_request(
         "learn-intent-correct", "brain.intent.capture", {
             "subtype": "goal",

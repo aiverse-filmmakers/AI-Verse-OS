@@ -1,8 +1,8 @@
 {
   "schema_version": "ai-verse.component-release/v1",
   "component_id": "ai-verse-os",
-  "version": "0.3.9",
-  "revision": "7bb6226783396ef7a00b325306da26b0f4b17474",
+  "version": "0.3.10",
+  "revision": "00805bc7d866703d3ef5ca1359faa769d88ecdae",
   "release_status": "accepted",
   "package": {
     "repository": "aiverse-filmmakers/AI-Verse-OS",
@@ -57,18 +57,18 @@
       {
         "kind": "owner-native-ci",
         "status": "pass",
-        "revision": "7bb6226783396ef7a00b325306da26b0f4b17474",
-        "run_id": "39974961996",
-        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/39974961996"
+        "revision": "00805bc7d866703d3ef5ca1359faa769d88ecdae",
+        "run_id": "40478262870",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/40478262870"
       }
     ],
     "acceptance": [
       {
         "kind": "owner-local-native-workflow-acceptance",
         "status": "pass",
-        "revision": "7bb6226783396ef7a00b325306da26b0f4b17474",
-        "run_id": "39974961996",
-        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/39974961996"
+        "revision": "00805bc7d866703d3ef5ca1359faa769d88ecdae",
+        "run_id": "40478262870",
+        "url": "https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/40478262870"
       }
     ]
   },

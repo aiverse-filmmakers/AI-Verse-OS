@@ -223,6 +223,7 @@ Use `SKILL-AUTHORING.md` when creating or promoting a capability.
 
 - `/onboard`: establish domain-neutral operator context and initial workspace routes.
 - `/workspace`: create or evolve a universal isolated workspace.
+- `/learn`: review the current conversation chronologically and route durable learning through its existing owners.
 - `/grill-me`: capture knowledge still in the operator's head without mixing confirmed facts and exploration.
 - `/link`: make a source findable without duplicating it.
 - `/audit`: verify architecture, Four Cs, routing, freshness, isolation, and evidence.

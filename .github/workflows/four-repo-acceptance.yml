@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 30
     env:
       MEMORY_COMMIT: f1327be48ba2ee0043959021365e6dbb9dcb1d3a
-      BRAIN_COMMIT: 7e6f7a7e8a3d541815bc7f65c11dca7824c35d8f
+      BRAIN_COMMIT: 14ded0120c11362024864d50d47f1996e66530e8
       SKILLS_COMMIT: 390c6e1633afc809040bd1159840045f4f9ff27e
 
     steps:
@@ -96,6 +96,15 @@ jobs:
           PY
           grep -Fq 'ai-verse-brain' .aiverse/extensions/registry.json
           test -z "$(git status --porcelain --untracked-files=no)"
+
+      - name: Verify Brain strategic intent owner for cross-runtime /learn
+        shell: bash
+        run: |
+          set -euo pipefail
+          BRAIN="$(cat "$RUNNER_TEMP/brain-repo.txt")"
+          PYTHONPATH="$BRAIN/engine" python -m unittest discover \
+            -s "$BRAIN/tests" \
+            -p 'test_intent_owner_service.py' -v
 
       - name: Run optional Codex learning owner and lifecycle tests
         shell: bash

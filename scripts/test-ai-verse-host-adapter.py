@@ -385,6 +385,130 @@ def main() -> int:
         root.parent / "no-local-skills",
         after_pin=switch_generation,
     )
+    def brain_intent_request(request_id, operation, parameters, action_class):
+        request = {
+            "request_id": request_id,
+            "action_class": action_class,
+            "scope": "operator",
+            "operation": operation,
+            "parameters": parameters,
+            "idempotency_key": request_id,
+            "in_scope": True,
+            "within_budget": True,
+            "reversible": True,
+            "reason": "Capture or read the Brain-owned strategic intent in the host acceptance fixture.",
+        }
+        request["request_fingerprint"] = adapter_module._fingerprint(request)
+        return direct_host.request_action(request)
+
+    captured_intent = brain_intent_request(
+        "learn-intent-capture", "brain.intent.capture", {
+            "subtype": "goal",
+            "statement": "Protect two weekly mornings for focused writing.",
+            "operation_id": "learn-intent-capture",
+            "evidence_ref": "test:learn-intent-capture",
+            "source": "explicit_user",
+        }, "write_local_reversible",
+    )
+    assert captured_intent["status"] == "succeeded"
+    assert captured_intent["effect_occurred"] is True
+    intent_ref = captured_intent["result"]["brain_intent"]["ref"]
+    intent_read = brain_intent_request(
+        "learn-intent-read", "brain.intent.read", {}, "read_local"
+    )
+    current_intent = next(
+        row for row in intent_read["result"]["brain_intents"]["intents"]
+        if row["canonical_ref"] == intent_ref
+    )
+    corrected_intent = brain_intent_request(
+        "learn-intent-correct", "brain.intent.capture", {
+            "subtype": "goal",
+            "statement": "Protect three weekly mornings for focused writing.",
+            "operation_id": "learn-intent-correct",
+            "evidence_ref": "test:learn-intent-correct",
+            "source": "explicit_user",
+            "supersedes": current_intent["id"],
+            "expected_revision": current_intent["revision"],
+        }, "write_local_reversible",
+    )
+    assert corrected_intent["result"]["brain_intent"]["state"] == "saved"
+    assert corrected_intent["effect_occurred"] is True
+
+    profile_seed = {
+        "request_id": "learn-profile-seed",
+        "action_class": "write_local_reversible",
+        "scope": "operator",
+        "operation": "operator.profile.ensure",
+        "parameters": {
+            "preferences": {"communication": ["Prefer concise direct answers."]},
+            "evidence": {
+                "stable": True,
+                "explicit_or_strong": True,
+                "privacy_ambiguous": False,
+                "contains_sensitive": False,
+                "contains_secret": False,
+                "reason": "Direct host owner acceptance fixture.",
+            },
+            "provenance": {"trigger_ref": "test:learn-profile-seed"},
+        },
+        "idempotency_key": "learn-profile-seed",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Seed a bounded preference for owner correction acceptance.",
+    }
+    profile_seed["request_fingerprint"] = adapter_module._fingerprint(profile_seed)
+    seeded_profile = direct_host.request_action(profile_seed)
+    assert seeded_profile["status"] == "succeeded"
+    assert seeded_profile["result"]["operator_profile"]["state"] == "created"
+
+    profile_read = {
+        "request_id": "learn-profile-read",
+        "action_class": "read_local",
+        "scope": "operator",
+        "operation": "operator.profile.read",
+        "parameters": {},
+        "idempotency_key": "learn-profile-read",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Read the current profile revision before an exact correction.",
+    }
+    profile_read["request_fingerprint"] = adapter_module._fingerprint(profile_read)
+    read_profile_result = direct_host.request_action(profile_read)
+    assert read_profile_result["status"] == "succeeded"
+    profile_snapshot = read_profile_result["result"]["operator_profile"]
+    assert profile_snapshot["preferences"]["communication"] == ["Prefer concise direct answers."]
+    assert len(profile_snapshot["preferences_source_sha256"]) == 64
+
+    profile_correction = {
+        "request_id": "learn-profile-correction",
+        "action_class": "write_local_reversible",
+        "scope": "operator",
+        "operation": "operator.profile.correct",
+        "parameters": {
+            "category": "communication",
+            "previous": "Prefer concise direct answers.",
+            "replacement": "Keep routine replies concise; expand when I ask for research.",
+            "expected_sha256": profile_snapshot["preferences_source_sha256"],
+            "evidence": {
+                "stable": True,
+                "explicit_or_strong": True,
+                "reason": "Direct correction owner acceptance fixture.",
+            },
+            "provenance": {"trigger_ref": "test:learn-profile-correction"},
+        },
+        "idempotency_key": "learn-profile-correction",
+        "in_scope": True,
+        "within_budget": True,
+        "reversible": True,
+        "reason": "Correct one exact existing preference using its observed revision.",
+    }
+    profile_correction["request_fingerprint"] = adapter_module._fingerprint(profile_correction)
+    corrected_profile = direct_host.request_action(profile_correction)
+    assert corrected_profile["status"] == "succeeded"
+    assert corrected_profile["effect_occurred"] is True
+    assert corrected_profile["result"]["operator_profile"]["state"] == "evolved"
 
     workspace_request = {
         "request_id": "automatic-workspace-client-alpha",

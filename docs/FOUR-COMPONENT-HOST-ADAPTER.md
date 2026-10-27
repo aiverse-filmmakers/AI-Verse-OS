@@ -43,6 +43,33 @@ operation: memory.capture
 
 OS does not decide what Memory may persist. It binds the candidate to the current action scope and delegates to the installed Memory owner's `capture_candidate` gate. Memory then admits or rejects the historical candidate using its canonical provenance, idempotency, containment and safety rules. Cross-workspace capture is rejected before owner invocation.
 
+For operator preference learning, the adapter exposes bounded profile-owner operations:
+
+```text
+action_class: read_local
+operation: operator.profile.read
+
+action_class: write_local_reversible
+operation: operator.profile.ensure
+
+action_class: write_local_reversible
+operation: operator.profile.correct
+```
+
+`read` returns only the managed identity/preferences and a SHA-256 revision for the preferences file. `ensure` adds deduplicated facts through the existing profile owner. `correct` replaces one exact managed preference only when the caller supplies the previously read revision, strong durable evidence, and provenance. It preserves unrelated managed values and human-authored text, and rejects stale or ambiguous targets. These operations are operator-scope only; they do not write strategic goals or project state.
+
+For strategic direction, the host exposes Brain-owned intent operations:
+
+```text
+action_class: read_local
+operation: brain.intent.read
+
+action_class: write_local_reversible
+operation: brain.intent.capture
+```
+
+The host requires an installed, enabled Brain extension and delegates reads and writes to Brain's `IntentOwnerService`. The service enforces Brain ownership of the exact scope, allowed intent types, explicit-user versus proposed-hypothesis status, same-subtype corrections, expected revisions, idempotency, and preservation of existing workspace links. OS continues to own routing and scope. The shared `/learn` instruction requires runtimes to derive `explicit_user` only from a direct user declaration in the current conversation; inferred direction must use `temporary_hypothesis` and stays proposed. This API does not transfer strategic authority or accept goal writes through profile or Memory.
+
 ## Create a Brain host configuration
 
 From an AI-Verse OS checkout with Memory installed and an external Skills installation:

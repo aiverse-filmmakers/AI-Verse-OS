@@ -30,8 +30,8 @@ function parseArgs(argv) {
       fail(`unknown option: ${token}`, 2);
     }
   }
-  if (command !== 'ensure') fail(`unknown command: ${command}`, 2);
-  return { root: path.resolve(root) };
+  if (!['ensure', 'read', 'correct-preference'].includes(command)) fail(`unknown command: ${command}`, 2);
+  return { command, root: path.resolve(root) };
 }
 
 async function readInput() {
@@ -175,6 +175,146 @@ function normalizeRequest(raw) {
   }
 
   return { identity, preferences, evidence, provenance };
+}
+
+function normalizePreferenceCorrection(raw) {
+  rejectUnknownKeys(raw, new Set(['category', 'previous', 'replacement', 'expected_sha256', 'evidence', 'provenance']), 'request');
+  const category = cleanString(raw.category, 'category', { required: true, max: 64 });
+  if (!['communication', 'working_style', 'quality_expectations', 'avoid'].includes(category)) {
+    throw new Error('category must name a correctable preference category');
+  }
+  const previous = cleanString(raw.previous, 'previous', { required: true, max: 1000 });
+  const replacement = cleanString(raw.replacement, 'replacement', { required: true, max: 1000 });
+  const expected_sha256 = cleanString(raw.expected_sha256, 'expected_sha256', { required: true, max: 64 });
+  if (!/^[a-f0-9]{64}$/.test(expected_sha256)) throw new Error('expected_sha256 must be a lowercase SHA-256 digest');
+  if (normalizeFact(previous) === normalizeFact(replacement)) throw new Error('replacement must change the preference');
+  rejectUnknownKeys(raw.evidence, new Set(['stable', 'explicit_or_strong', 'privacy_ambiguous', 'contains_sensitive', 'contains_secret', 'reason']), 'evidence');
+  rejectUnknownKeys(raw.provenance ?? {}, new Set(['trigger_ref', 'classifier', 'source']), 'provenance');
+  const evidence = {
+    stable: raw.evidence.stable === true,
+    explicit_or_strong: raw.evidence.explicit_or_strong === true,
+    privacy_ambiguous: raw.evidence.privacy_ambiguous === true,
+    contains_sensitive: raw.evidence.contains_sensitive === true,
+    contains_secret: raw.evidence.contains_secret === true,
+    reason: cleanString(raw.evidence.reason, 'evidence.reason', { required: true, max: 1000 }),
+  };
+  const provenance = {
+    trigger_ref: cleanString(raw.provenance?.trigger_ref, 'provenance.trigger_ref', { required: true, max: 300 }),
+    classifier: cleanString(raw.provenance?.classifier, 'provenance.classifier', { max: 200 }),
+    source: cleanString(raw.provenance?.source, 'provenance.source', { max: 300 }),
+  };
+  if (containsSecretLike({ previous, replacement, evidence, provenance })) throw new Error('profile correction appears to contain credential/secret material');
+  if (containsForeignRuntimeInstruction(replacement)) throw new Error('foreign runtime/system instructions cannot become operator preferences');
+  return { category, previous, replacement, expected_sha256, evidence, provenance };
+}
+
+function resolveProfileRoot(root, { create = false } = {}) {
+  if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) throw new Error(`AI-Verse OS root not found: ${root}`);
+  const realRoot = fs.realpathSync(root);
+  const operatorExpected = path.join(realRoot, 'operator');
+  const operatorRoot = assertPlainDirectory(path.join(root, 'operator'), operatorExpected, 'operator root');
+  const profilePath = path.join(operatorRoot, 'profile');
+  if (!fs.existsSync(profilePath)) {
+    if (!create) return null;
+    fs.mkdirSync(profilePath, { recursive: true, mode: 0o700 });
+  }
+  return assertPlainDirectory(profilePath, path.join(operatorRoot, 'profile'), 'operator profile root');
+}
+
+function currentPreferences(profileRoot) {
+  const file = profileRoot ? safeFile(path.join(profileRoot, PREFERENCES_FILE), profileRoot, 'operator profile preferences') : null;
+  const text = file ? fs.readFileSync(file, 'utf8') : '';
+  const managed = extractManagedBlock(text);
+  const preferences = managed ? parseManagedPreferences(managed.body) : {
+    communication: [], working_style: [], approval_boundaries: [], quality_expectations: [], avoid: [],
+  };
+  return { file, text, preferences, source_sha256: crypto.createHash('sha256').update(text).digest('hex') };
+}
+
+function readProfile(profileRoot) {
+  const identityFile = profileRoot ? safeFile(path.join(profileRoot, IDENTITY_FILE), profileRoot, 'operator profile identity') : null;
+  const identityText = identityFile ? fs.readFileSync(identityFile, 'utf8') : '';
+  const identityManaged = extractManagedBlock(identityText);
+  const identity = identityManaged ? parseManagedIdentity(identityManaged.body) : { name: null, roles: [], domains: [], notes: [] };
+  const current = currentPreferences(profileRoot);
+  return {
+    schema_version: SCHEMA_VERSION,
+    operation: 'read',
+    state: 'ready',
+    identity,
+    preferences: current.preferences,
+    preferences_source_sha256: current.source_sha256,
+  };
+}
+
+function correctPreference(profileRoot, request) {
+  const current = currentPreferences(profileRoot);
+  const provenanceRequest = {
+    identity: { name: null, roles: [], domains: [], notes: [] },
+    preferences: { [request.category]: [request.replacement] },
+    correction: { category: request.category, previous: request.previous, replacement: request.replacement },
+    evidence: request.evidence,
+    provenance: request.provenance,
+  };
+  const base = {
+    schema_version: SCHEMA_VERSION,
+    operation: 'correct-preference',
+    user_confirmation_required: false,
+    permission_expanded: false,
+    connection_created: false,
+    credential_created: false,
+    automation_created: false,
+    permanent_bot_created: false,
+  };
+  if (hasProvenance(profileRoot, provenanceRequest)) {
+    return { ...base, state: 'existing', changed: false, category: request.category, source_sha256: current.source_sha256, reason: 'this preference correction was already applied' };
+  }
+  const initialValues = current.preferences[request.category];
+  const replacementKey = normalizeFact(request.replacement);
+  if (!initialValues.some((value) => value === request.previous)
+      && initialValues.some((value) => normalizeFact(value) === replacementKey)) {
+    return { ...base, state: 'existing', changed: false, category: request.category, source_sha256: current.source_sha256, reason: 'the requested preference is already current' };
+  }
+  if (request.expected_sha256 !== current.source_sha256) {
+    return { ...base, state: 'stale', changed: false, source_sha256: current.source_sha256, reason: 'profile preferences changed since they were read; reread and reconcile before correcting' };
+  }
+  if (!request.evidence.stable || !request.evidence.explicit_or_strong) {
+    return { ...base, state: 'ignored-weak', changed: false, reason: 'a preference correction needs stable, explicit or strong evidence' };
+  }
+  if (request.evidence.privacy_ambiguous || request.evidence.contains_sensitive) {
+    return { ...base, state: 'needs-clarification', changed: false, user_confirmation_required: true, reason: 'profile privacy/sensitivity is materially ambiguous' };
+  }
+  if (request.evidence.contains_secret) {
+    return { ...base, state: 'blocked-secret', changed: false, reason: 'secret-bearing material cannot be stored in operator profile' };
+  }
+  const values = current.preferences[request.category];
+  const matches = values.filter((value) => normalizeFact(value) === normalizeFact(request.previous));
+  if (matches.length !== 1) {
+    return { ...base, state: 'needs-clarification', changed: false, user_confirmation_required: true, reason: matches.length ? 'the old preference appears more than once' : 'the exact old preference is no longer present' };
+  }
+  if (matches[0] !== request.previous) {
+    return { ...base, state: 'needs-clarification', changed: false, user_confirmation_required: true, reason: 'the stored preference differs from the exact value being corrected' };
+  }
+  const updated = { ...current.preferences };
+  let inserted = false;
+  updated[request.category] = values.flatMap((value) => {
+    if (value !== request.previous) return [value];
+    if (values.some((existing) => existing !== request.previous && normalizeFact(existing) === replacementKey)) return [];
+    if (inserted) return [];
+    inserted = true;
+    return [request.replacement];
+  });
+  const nextManaged = renderPreferences(updated);
+  const managed = extractManagedBlock(current.text);
+  const next = managed
+    ? managed.before + nextManaged.replace(/\n$/, '') + managed.after + (managed.after.endsWith('\n') ? '' : '\n')
+    : (current.text.trim() ? current.text.replace(/\s*$/, '\n\n') : '# Working Preferences\n\n') + nextManaged;
+  if (next === current.text) return { ...base, state: 'existing', changed: false, reason: 'the preference correction is already reflected' };
+
+  if (current.file) atomicWrite(current.file, next);
+  else atomicWrite(path.join(profileRoot, PREFERENCES_FILE), next);
+  const history = updateProvenance(profileRoot, provenanceRequest, new Date().toISOString(), 'corrected');
+  return { ...base, state: current.file ? 'evolved' : 'created', changed: true, category: request.category, source_sha256: crypto.createHash('sha256').update(next).digest('hex'), provenance: { fingerprint: history.fingerprint, changed: history.changed } };
 }
 
 function atomicWrite(file, content) {
@@ -345,12 +485,26 @@ function profileFingerprint(request) {
   const material = {
     identity: request.identity,
     preferences: request.preferences,
+    correction: request.correction,
     reason: request.evidence.reason,
     trigger_ref: request.provenance.trigger_ref,
     classifier: request.provenance.classifier,
     source: request.provenance.source,
   };
   return crypto.createHash('sha256').update(JSON.stringify(material)).digest('hex');
+}
+
+function hasProvenance(profileRoot, request) {
+  const file = safeFile(path.join(profileRoot, PROVENANCE_FILE), profileRoot, 'operator profile provenance');
+  if (!file) return false;
+  let doc;
+  try { doc = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (error) { throw new Error(`operator profile provenance is unreadable: ${error.message}`); }
+  if (!doc || doc.schema_version !== SCHEMA_VERSION || !Array.isArray(doc.history)) {
+    throw new Error('operator profile provenance is incompatible');
+  }
+  const fingerprint = profileFingerprint(request);
+  return doc.history.some((event) => event.fingerprint === fingerprint);
 }
 
 function updateProvenance(profileRoot, request, now, outcome) {
@@ -376,22 +530,26 @@ function updateProvenance(profileRoot, request, now, outcome) {
     trigger_ref: request.provenance.trigger_ref,
     classifier: request.provenance.classifier,
     source: request.provenance.source,
+    ...(request.correction ? { correction: request.correction } : {}),
   });
   atomicWrite(file, JSON.stringify(doc, null, 2) + '\n');
   return { changed: true, fingerprint };
 }
 
 async function main() {
-  const { root } = parseArgs(process.argv.slice(2));
-  const request = normalizeRequest(await readInput());
-
-  if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) throw new Error(`AI-Verse OS root not found: ${root}`);
-  const realRoot = fs.realpathSync(root);
-  const operatorExpected = path.join(realRoot, 'operator');
-  const operatorRoot = assertPlainDirectory(path.join(root, 'operator'), operatorExpected, 'operator root');
-  const profilePath = path.join(operatorRoot, 'profile');
-  if (!fs.existsSync(profilePath)) fs.mkdirSync(profilePath, { recursive: true, mode: 0o700 });
-  const profileRoot = assertPlainDirectory(profilePath, path.join(operatorRoot, 'profile'), 'operator profile root');
+  const { command, root } = parseArgs(process.argv.slice(2));
+  const raw = await readInput();
+  const profileRoot = resolveProfileRoot(root, { create: command !== 'read' });
+  if (command === 'read') {
+    process.stdout.write(JSON.stringify(readProfile(profileRoot), null, 2) + '\n');
+    return;
+  }
+  if (command === 'correct-preference') {
+    const request = normalizePreferenceCorrection(raw);
+    process.stdout.write(JSON.stringify(correctPreference(profileRoot, request), null, 2) + '\n');
+    return;
+  }
+  const request = normalizeRequest(raw);
 
   const base = {
     schema_version: SCHEMA_VERSION,

@@ -385,13 +385,6 @@ def main() -> int:
         root.parent / "no-local-skills",
         after_pin=switch_generation,
     )
-    # The test fixture has Brain loaded in-process; model the installed extension
-    # registry without writing installation metadata into the OS checkout.
-    direct_host._extension_entry = lambda extension_id: (
-        {"id": extension_id, "supported": True, "installed": True, "enabled": True}
-        if extension_id == "ai-verse-brain" else None
-    )
-
     def brain_intent_request(request_id, operation, parameters, action_class):
         request = {
             "request_id": request_id,

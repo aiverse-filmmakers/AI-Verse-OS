@@ -141,6 +141,7 @@ Core OS capabilities include:
 
 - `/onboard`
 - `/workspace`
+- `/learn`
 - `/grill-me`
 - `/link`
 - `/audit`

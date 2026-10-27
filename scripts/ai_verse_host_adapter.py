@@ -1033,6 +1033,70 @@ class AIverseOSHost:
             },
         }
 
+    def _request_brain_intent(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        operation: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if self._extension_entry("ai-verse-brain") is None:
+            raise AdapterError("AI-Verse Brain is unavailable")
+        try:
+            from aiverse_brain import BrainRuntime
+            from aiverse_brain.authority import AuthorityTier
+        except Exception as exc:
+            raise AdapterError(f"AI-Verse Brain intent owner is unavailable: {exc}") from exc
+
+        runtime = BrainRuntime(str(self.root))
+        owner = getattr(runtime.controller, "intents", None)
+        if owner is None:
+            raise AdapterError("installed AI-Verse Brain does not support the intent owner API")
+        if operation == "brain.intent.read":
+            if not isinstance(parameters, Mapping) or parameters:
+                raise AdapterError("brain.intent.read takes no parameters")
+            result = owner.read(scope)
+            return {
+                "status": "blocked" if result.get("state") == "owner-required" else "succeeded",
+                "effect_occurred": False,
+                "result": {"brain_intents": result},
+                "execution_binding": {
+                    "request_fingerprint": _fingerprint(request), "scope": scope,
+                    "action_class": "read_local", "operation": operation,
+                },
+            }
+
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("brain.intent.capture parameters must be an object")
+        allowed = {"subtype", "statement", "operation_id", "evidence_ref", "source", "supersedes", "expected_revision"}
+        if set(parameters) - allowed or not {"subtype", "statement", "operation_id", "evidence_ref", "source"}.issubset(parameters):
+            raise AdapterError("brain.intent.capture requires subtype, statement, operation_id, evidence_ref and source")
+        decision = self.authorize_action({**request, "request_fingerprint": _fingerprint(request)})
+        if decision.get("decision") != "allow":
+            return {"status": "blocked", "effect_occurred": False, "result": {"authorization": decision}}
+        source_name = parameters["source"]
+        source_map = {
+            "explicit_user": AuthorityTier.EXPLICIT_USER,
+            "temporary_hypothesis": AuthorityTier.TEMPORARY_HYPOTHESIS,
+        }
+        if source_name not in source_map:
+            raise AdapterError("brain.intent.capture source must be explicit_user or temporary_hypothesis")
+        capture_args = {key: parameters[key] for key in allowed - {"source"} if key in parameters}
+        capture_args["source"] = source_map[source_name]
+        result = owner.capture(scope, **capture_args)
+        if not isinstance(result, dict):
+            raise AdapterError("AI-Verse Brain intent owner returned an invalid result")
+        return {
+            "status": "blocked" if result.get("state") == "owner-required" else "succeeded",
+            "effect_occurred": bool(result.get("changed")),
+            "result": {"brain_intent": result},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request), "scope": scope,
+                "action_class": "write_local_reversible", "operation": operation,
+                "intent_ref": result.get("ref"),
+            },
+        }
+
     def _request_memory_session_digest(
         self,
         request: Mapping[str, Any],
@@ -1317,6 +1381,83 @@ class AIverseOSHost:
                 "scope": scope,
                 "action_class": "write_local_reversible",
                 "operation": "operator.profile.ensure",
+            },
+        }
+
+    def _request_operator_profile_read(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if scope != "operator":
+            raise AdapterError("operator.profile.read requires operator scope")
+        if not isinstance(parameters, Mapping) or parameters:
+            raise AdapterError("operator.profile.read takes no parameters")
+        proc = subprocess.run(
+            ["node", str(self.operator_profile_owner_cli), "read", "--root", str(self.root)],
+            input="{}",
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            shell=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            raise AdapterError(f"OS operator profile owner failed: {detail}")
+        snapshot = _json_object(proc.stdout, "OS operator profile owner")
+        if snapshot.get("operation") != "read" or snapshot.get("state") != "ready":
+            raise AdapterError("OS operator profile owner returned an invalid read result")
+        return {
+            "status": "succeeded",
+            "effect_occurred": False,
+            "result": {"operator_profile": snapshot},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "read_local",
+                "operation": "operator.profile.read",
+            },
+        }
+
+    def _request_operator_profile_correct(
+        self,
+        request: Mapping[str, Any],
+        scope: str,
+        parameters: Any,
+    ) -> Dict[str, Any]:
+        if scope != "operator":
+            raise AdapterError("operator.profile.correct requires operator scope")
+        if not isinstance(parameters, Mapping):
+            raise AdapterError("operator.profile.correct parameters must be an object")
+        allowed = {"category", "previous", "replacement", "expected_sha256", "evidence", "provenance"}
+        if set(parameters) != allowed:
+            raise AdapterError("operator.profile.correct requires category, previous, replacement, expected_sha256, evidence and provenance")
+        proc = subprocess.run(
+            ["node", str(self.operator_profile_owner_cli), "correct-preference", "--root", str(self.root)],
+            input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            shell=False,
+        )
+        if proc.returncode != 0:
+            detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
+            raise AdapterError(f"OS operator profile owner failed: {detail}")
+        corrected = _json_object(proc.stdout, "OS operator profile owner")
+        state = corrected.get("state")
+        accepted = state in {"created", "evolved", "existing", "stale", "ignored-weak", "needs-clarification", "blocked-secret"}
+        if not accepted:
+            raise AdapterError("OS operator profile owner returned an invalid correction state")
+        return {
+            "status": "succeeded" if state not in {"blocked-secret"} else "blocked",
+            "effect_occurred": bool(corrected.get("changed")),
+            "result": {"operator_profile": corrected},
+            "execution_binding": {
+                "request_fingerprint": _fingerprint(request),
+                "scope": scope,
+                "action_class": "write_local_reversible",
+                "operation": "operator.profile.correct",
             },
         }
 
@@ -3241,10 +3382,18 @@ class AIverseOSHost:
             return self._request_migration_pending(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "operator.profile.ensure":
             return self._request_operator_profile_ensure(request, scope, parameters)
+        if action_class == "read_local" and operation == "operator.profile.read":
+            return self._request_operator_profile_read(request, scope, parameters)
+        if action_class == "write_local_reversible" and operation == "operator.profile.correct":
+            return self._request_operator_profile_correct(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "workspace.ensure":
             return self._request_workspace_ensure(request, scope, parameters)
         if action_class == "write_local_reversible" and operation == "memory.capture":
             return self._request_memory_capture(request, scope, parameters)
+        if action_class == "read_local" and operation == "brain.intent.read":
+            return self._request_brain_intent(request, scope, operation, parameters)
+        if action_class == "write_local_reversible" and operation == "brain.intent.capture":
+            return self._request_brain_intent(request, scope, operation, parameters)
         if action_class == "write_local_reversible" and operation == "memory.session_digest":
             return self._request_memory_session_digest(request, scope, parameters)
         if action_class == "write_local_reversible" and operation in {"skills.library-import", "skills.binding-save"}:
@@ -3273,7 +3422,7 @@ class AIverseOSHost:
                 "result": {
                     "reason": (
                         "supported adapter executes capability.read_instructions plus the safe "
-                        "migration.import, migration.pending, operator.profile.ensure, workspace.ensure, memory.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
+                        "migration.import, migration.pending, operator.profile.read, operator.profile.ensure, operator.profile.correct, workspace.ensure, memory.capture, brain.intent.read, brain.intent.capture, memory.session_digest, skills.learning-candidate, data.structured-truth, workers.temporary, explicit-consent bots.permanent, explicit-consent automations.create and bounded Data reads only"
                     ),
                 },
             }

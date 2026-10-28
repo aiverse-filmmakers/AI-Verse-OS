@@ -32,6 +32,10 @@ function fixture(grants=[human,bot]){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'aiverse-os-grants-'));roots.push(root);
  fs.mkdirSync(path.join(root,'operator'));
  fs.mkdirSync(path.join(root,'workspaces'));
+ fs.mkdirSync(path.join(root,'workspaces','film'));
+ fs.writeFileSync(path.join(root,'workspaces','film','WORKSPACE.yaml'),
+   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "active"\\n');
+
  fs.writeFileSync(path.join(root,'AI-VERSE.yaml'),
    'schema_version: "2.0"\narchitecture: unified-workspace\n');
  const file=path.join(root,CANVAS_GRANT_RELATIVE);
@@ -114,6 +118,16 @@ test('reject unsafe symlinked grant files or parents', {skip:process.platform===
 test('reject world-readable grant file', {skip:process.platform==='win32'},()=>{
  const x=fixture();fs.chmodSync(x.file,0o644);
  assert.equal(x.verify(facts.human),null);
+});
+test('existing OS action permission evaluator revokes paused workspace grants',()=>{
+ const x=fixture();
+ assert.equal(x.verify(facts.bot)?.actorId,'film-bot');
+ fs.writeFileSync(path.join(x.root,'workspaces','film','WORKSPACE.yaml'),
+   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "paused"\\n');
+ assert.equal(x.verify(facts.bot),null);
+ fs.writeFileSync(path.join(x.root,'workspaces','film','WORKSPACE.yaml'),
+   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "active"\\n');
+ assert.equal(x.verify(facts.bot)?.actorId,'film-bot');
 });
 test('reject unrelated and outdated OS root manifests',()=>{
  const x=fixture(),m=path.join(x.root,'AI-VERSE.yaml');

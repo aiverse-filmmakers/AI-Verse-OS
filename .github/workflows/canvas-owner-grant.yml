@@ -1,0 +1,30 @@
+name: Canvas Owner Grant (readonly)
+on:
+  push:
+    branches:
+      - codex/canvas-owner-grant-readonly-v1
+  pull_request:
+    paths:
+      - scripts/canvas-actor-grant.mjs
+      - tests/canvas-actor-grant.test.mjs
+      - .github/workflows/canvas-owner-grant.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  grant-tests:
+    name: Node 22 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify deny-by-default native Canvas grant contract
+        run: node --test tests/canvas-actor-grant.test.mjs

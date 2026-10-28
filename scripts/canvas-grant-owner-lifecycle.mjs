@@ -114,7 +114,14 @@ export function createCanvasGrantOwnerLifecycle({
       }))??[]});
   };
   const apply=async request=>{
-    const req=validateRequest(request);
+    // Immutable value snapshot: an asynchronous native approval must never
+    // approve one permission set and later write a caller-mutated grant.
+    const req=validateRequest(structuredClone(request));
+    if(req.grant){
+      Object.freeze(req.grant.methods);
+      Object.freeze(req.grant);
+    }
+    Object.freeze(req);
     const before=snapshot();
     const beforeGen=before.document?.generation??null;
     if(req.expectedGeneration!==beforeGen)throw fail('stale generation');

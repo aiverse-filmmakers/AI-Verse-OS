@@ -59,6 +59,33 @@ function pathOf(root) {
   }
   return current;
 }
+/** Strict shared canonical document schema for the owner-only lifecycle. */
+export function validateCanvasGrantDocument(doc) {
+  if (!exact(doc,KEYS) || doc.format !== CANVAS_GRANT_SOURCE
+    || doc.schema_version !== 1 || !safe(doc.generation)
+    || !Array.isArray(doc.grants) || doc.grants.length > MAX_GRANTS)
+    throw Error('invalid grant schema');
+  const ids = new Set();
+  for (const g of doc.grants) {
+    const fields = g?.actor_kind === 'bot' ? GRANT_KEYS :
+      new Set([...GRANT_KEYS].filter(x => x !== 'run_id' && x !== 'session_id'));
+    if (!exact(g,fields) || !safe(g.grant_id) || !safe(g.actor_id)
+      || !safe(g.lease_epoch) || !safe(g.principal)
+      || !WORKSPACE.test(g.scope) || !UUID.test(g.system_id)
+      || !['human','bot'].includes(g.actor_kind)
+      || !epoch(g.expires_at) || !Array.isArray(g.methods)
+      || g.methods.length < 1 || g.methods.length > 9
+      || g.methods.some(m => typeof m !== 'string' || !METHOD.test(m))
+      || new Set(g.methods).size !== g.methods.length
+      || (g.actor_kind === 'bot' && (!safe(g.run_id) || !safe(g.session_id)))
+      || ids.has(g.grant_id))
+      throw Error('invalid grant entry');
+    ids.add(g.grant_id);
+  }
+  if (Buffer.byteLength(JSON.stringify(doc),'utf8')>MAX_BYTES) throw Error('oversize document');
+  return doc;
+}
+
 function readDocument(root) {
   const file = pathOf(root);
   const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
@@ -75,30 +102,28 @@ function readDocument(root) {
     const raw = fs.readFileSync(fd,{encoding:'utf8'});
     if (Buffer.byteLength(raw,'utf8') > MAX_BYTES) throw Error('oversize');
     const doc = JSON.parse(raw);
-    if (!exact(doc,KEYS) || doc.format !== CANVAS_GRANT_SOURCE
-      || doc.schema_version !== 1 || !safe(doc.generation)
-      || !Array.isArray(doc.grants) || doc.grants.length > MAX_GRANTS)
-      throw Error('invalid grant schema');
-    const ids = new Set();
-    for (const g of doc.grants) {
-      const fields = g?.actor_kind === 'bot' ? GRANT_KEYS :
-        new Set([...GRANT_KEYS].filter(x => x !== 'run_id' && x !== 'session_id'));
-      if (!exact(g,fields) || !safe(g.grant_id) || !safe(g.actor_id)
-        || !safe(g.lease_epoch) || !safe(g.principal)
-        || !WORKSPACE.test(g.scope) || !UUID.test(g.system_id)
-        || !['human','bot'].includes(g.actor_kind)
-        || !epoch(g.expires_at) || !Array.isArray(g.methods)
-        || g.methods.length < 1 || g.methods.length > 9
-        || g.methods.some(m => typeof m !== 'string' || !METHOD.test(m))
-        || new Set(g.methods).size !== g.methods.length
-        || (g.actor_kind === 'bot' && (!safe(g.run_id) || !safe(g.session_id)))
-        || ids.has(g.grant_id))
-        throw Error('invalid grant entry');
-      ids.add(g.grant_id);
-    }
-    return doc;
+    return validateCanvasGrantDocument(doc);
   } finally { fs.closeSync(fd); }
 }
+/**
+ * Read native OS owner snapshot. Trusted host only: paths and full grant
+ * records are sensitive; NEVER return to Dashboard browser/agent RPC.
+ * Missing file is a valid *unprovisioned* state. Invalid files fail closed.
+ */
+export function readInstalledCanvasGrantSnapshot(osRoot) {
+  const root=rootOf(osRoot);
+  const parent=path.join(root,'.aiverse','os');
+  for (const p of [path.join(root,'.aiverse'),parent]) {
+    const stat=fs.lstatSync(p);
+    if (!stat.isDirectory()||stat.isSymbolicLink()) throw Error('unsafe owner grant directory');
+    if (process.platform!=='win32' && (stat.uid!==process.getuid() || (stat.mode & 0o022)!==0))
+      throw Error('unsafe owner grant directory permissions');
+  }
+  const file=path.join(parent,'canvas-actor-grants.json');
+  const exists=fs.existsSync(file);
+  return {root,parent,file,document:exists?readDocument(root):null};
+}
+
 /** A fresh read every time. No request-supplied paths, grants or authority. */
 export function verifyInstalledCanvasGrant({osRoot,facts}) {
   try {

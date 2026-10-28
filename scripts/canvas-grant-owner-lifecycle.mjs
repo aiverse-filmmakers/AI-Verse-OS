@@ -129,11 +129,27 @@ export function createCanvasGrantOwnerLifecycle({
         if(active!==true)throw fail('unverified running bot');
       }
     }
+    // Native approval UI can render the exact human-readable permission
+    // changes, rather than demanding approval of an opaque hash alone.
+    const displayedScope=req.operation==='issue'
+      ?req.grant.scope:req.operation==='revoke'
+        ?before.document?.grants.find(g=>g.grant_id===req.grantId)?.scope??null
+        :'all-scopes';
+    const displayedGrant=req.operation==='issue'
+      ?{grantId:req.grant.grant_id,actorKind:req.grant.actor_kind,
+        actorId:req.grant.actor_id,scope:req.grant.scope,
+        methods:[...req.grant.methods],expiresAt:req.grant.expires_at}
+      :req.operation==='revoke'?{grantId:req.grantId}:null;
+    const permissionChange=Object.freeze({
+      operation:req.operation,scope:displayedScope,grant:displayedGrant,
+      priorGeneration:beforeGen,reason:req.reason,
+    });
     const fingerprint=hash({root,request:req});
     const approval=await approveNativeOwnerChange({
       source:CANVAS_GRANT_OWNER_SOURCE,osRoot:root,
       requestId:req.requestId,operation:req.operation,
       requestFingerprint:fingerprint,reason:req.reason,
+      permissionChange,
     });
     if(!approval||approval.source!==CANVAS_GRANT_OWNER_SOURCE
       ||approval.approved!==true||approval.requestFingerprint!==fingerprint
@@ -141,6 +157,9 @@ export function createCanvasGrantOwnerLifecycle({
       ||!expires(approval.expiresAt)||Date.parse(approval.expiresAt)<=Date.now()
       ||Date.parse(approval.expiresAt)-Date.now()>300_000)
       throw fail('missing or expired independent owner approval');
+    // Repeat expiry at the final effect edge; approval must not outlive a
+    // slow owner dialog, file lock wait, or native callback.
+
     const lock=path.join(before.parent,'canvas-grant-change.lock');
     let fd;
     try{fd=fs.openSync(lock,fs.constants.O_CREAT|fs.constants.O_EXCL
@@ -182,6 +201,8 @@ export function createCanvasGrantOwnerLifecycle({
       const next=validateCanvasGrantDocument({
         format:CANVAS_GRANT_SOURCE,schema_version:1,generation:afterGen,grants,
       });
+      if(Date.parse(approval.expiresAt)<=Date.now())
+        throw fail('approval expired before effect');
       // Durably write a new owner-private file, then atomic rename. Never
       // overwrite through a symlink or create a directory at an HTTP path.
       temp=path.join(now.parent,'canvas-grants-'+crypto.randomUUID()+'.tmp');

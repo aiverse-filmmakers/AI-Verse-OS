@@ -18,13 +18,14 @@ function fixture(){
  const writeStatus=status=>fs.writeFileSync(path.join(root,'workspaces/film/WORKSPACE.yaml'),
   'schema_version: "2.0"\nid: "film"\nname: "Film"\nstatus: "'+status+'"\n');
  writeStatus('active');
- let approved=true,botRunning=true,wrongReceipt=false,approvalCount=0,checks=0,seenChange=null;
+ let approved=true,botRunning=true,wrongReceipt=false,approvalCount=0,checks=0,seenChange=null,approvalHook=null;
  const create=()=>createCanvasGrantOwnerLifecycle({
   osRoot:root,
   verifyCanonicalBotRun:async()=>{checks++;return botRunning},
   approveNativeOwnerChange:async info=>{
    approvalCount++;
    seenChange=info.permissionChange;
+   if(approvalHook)await approvalHook(info);
    return approved?{
      source:CANVAS_GRANT_OWNER_SOURCE,approved:true,
      requestFingerprint:wrongReceipt?'0'.repeat(64):info.requestFingerprint,
@@ -51,7 +52,8 @@ function fixture(){
  return {root,file,human,bot,request,read,create,writeStatus,
   blockApproval:()=>{approved=false},badReceipt:()=>{wrongReceipt=true},
   stopBot:()=>{botRunning=false},counts:()=>({approvalCount,checks}),
-  change:()=>seenChange};
+  change:()=>seenChange,afterApproval:fn=>{approvalHook=fn},
+  setBot:state=>{botRunning=state}};
 }
 const humanFacts={systemId:'system-1',workspaceId:'operator',
  principal:'owner-session-1',actorKind:'human',method:'aiverse.canvas.get'};
@@ -145,6 +147,41 @@ test('bot never receives revert or delete approval through owner issuer',onUnix,
    grant:{...f.bot,methods:[method]},
   })),/CANVAS_NATIVE_OWNER_DENIED/);
  assert.equal(f.counts().approvalCount,0);
+});
+test('workspace pause during native approval revokes issuance at effect edge',onUnix,async()=>{
+ const f=fixture(),owner=f.create();
+ f.afterApproval(()=>f.writeStatus('paused'));
+ await assert.rejects(owner.apply(f.request('issue',{grant:f.bot})),
+  /CANVAS_NATIVE_OWNER_DENIED/);
+ assert.equal(fs.existsSync(f.file),false);
+});
+test('canonical bot run canceled during owner approval cannot receive grant',onUnix,async()=>{
+ const f=fixture(),owner=f.create();
+ f.afterApproval(()=>f.setBot(false));
+ await assert.rejects(owner.apply(f.request('issue',{grant:f.bot})),
+  /CANVAS_NATIVE_OWNER_DENIED/);
+ assert.equal(fs.existsSync(f.file),false);
+ assert.ok(f.counts().checks>=2);
+});
+test('invalid existing OS grant document never gets overwritten by lifecycle',onUnix,async()=>{
+ const f=fixture();
+ fs.writeFileSync(f.file,'{"corrupted":"true"}',{mode:0o600});
+ assert.throws(()=>f.create(),/Error/);
+ assert.equal(fs.readFileSync(f.file,'utf8'),'{"corrupted":"true"}');
+});
+test('stale generation changed externally during approval cannot be overwritten',onUnix,async()=>{
+ const f=fixture(),owner=f.create();
+ const first=await owner.apply(f.request('issue',{grant:f.human}));
+ f.afterApproval(()=>{
+  const current=JSON.parse(fs.readFileSync(f.file,'utf8'));
+  current.generation='gen-external-owner-change';
+  fs.writeFileSync(f.file,JSON.stringify(current),{mode:0o600});
+ });
+ await assert.rejects(owner.apply(f.request('revoke',{
+  expectedGeneration:first.afterGeneration,grantId:f.human.grant_id,
+ })),/CANVAS_NATIVE_OWNER_DENIED/);
+ assert.equal(owner.list().generation,'gen-external-owner-change');
+ assert.ok(f.read(humanFacts));
 });
 test('missing approval receipt, forged fingerprint, no authority all fail closed',onUnix,async()=>{
  const f=fixture();f.badReceipt();

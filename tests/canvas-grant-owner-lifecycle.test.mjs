@@ -169,6 +169,19 @@ test('invalid existing OS grant document never gets overwritten by lifecycle',on
  assert.throws(()=>f.create(),/Error/);
  assert.equal(fs.readFileSync(f.file,'utf8'),'{"corrupted":"true"}');
 });
+test('caller changing methods while owner approves cannot widen issued scope',onUnix,async()=>{
+ const f=fixture(),owner=f.create();
+ const original={...f.human,methods:[...f.human.methods]};
+ f.afterApproval(()=>{
+  original.methods.push('aiverse.canvas.edit');
+  original.scope='film';
+  original.actor_id='injected-actor';
+ });
+ await owner.apply(f.request('issue',{grant:original}));
+ assert.equal(f.read(humanFacts)?.actorId,'human-operator');
+ assert.equal(f.read({...humanFacts,method:'aiverse.canvas.edit'}),null);
+ assert.equal(f.read({...humanFacts,workspaceId:'film'}),null);
+});
 test('stale generation changed externally during approval cannot be overwritten',onUnix,async()=>{
  const f=fixture(),owner=f.create();
  const first=await owner.apply(f.request('issue',{grant:f.human}));

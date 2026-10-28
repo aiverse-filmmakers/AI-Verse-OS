@@ -1,0 +1,32 @@
+name: Canvas Native Owner Grant Lifecycle
+on:
+  push:
+    branches:
+      - codex/canvas-owner-grant-lifecycle-v1
+  pull_request:
+    paths:
+      - scripts/canvas-grant-owner-lifecycle.mjs
+      - scripts/canvas-actor-grant.mjs
+      - tests/canvas-grant-owner-lifecycle.test.mjs
+      - tests/canvas-actor-grant.test.mjs
+      - .github/workflows/canvas-owner-grant-lifecycle.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  grant-owner-lifecycle:
+    name: Node 22 native host / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify read-only grant contract and native owner lifecycle
+        run: node --test tests/canvas-actor-grant.test.mjs tests/canvas-grant-owner-lifecycle.test.mjs

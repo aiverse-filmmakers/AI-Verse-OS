@@ -172,6 +172,10 @@ export function createCanvasGrantOwnerLifecycle({
         throw fail('stale generation after approval');
       if(req.operation==='issue') {
         checkOwnerScope(root,req.grant.scope);
+        // A slow approval must not create a grant that expired while the
+        // human was reviewing the exact operation.
+        if(Date.parse(req.grant.expires_at)<=Date.now())
+          throw fail('target grant expired before effect');
         if(req.grant.actor_kind==='bot') {
           // No admission from old proof while bot run stops during owner UI.
           if(await verifyCanonicalBotRun({

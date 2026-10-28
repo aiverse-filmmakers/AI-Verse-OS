@@ -34,7 +34,7 @@ function fixture(grants=[human,bot]){
  fs.mkdirSync(path.join(root,'workspaces'));
  fs.mkdirSync(path.join(root,'workspaces','film'));
  fs.writeFileSync(path.join(root,'workspaces','film','WORKSPACE.yaml'),
-   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "active"\\n');
+   'schema_version: "2.0"\nid: "film"\nname: "Film"\nstatus: "active"\n');
 
  fs.writeFileSync(path.join(root,'AI-VERSE.yaml'),
    'schema_version: "2.0"\narchitecture: unified-workspace\n');
@@ -123,10 +123,10 @@ test('existing OS action permission evaluator revokes paused workspace grants',(
  const x=fixture();
  assert.equal(x.verify(facts.bot)?.actorId,'film-bot');
  fs.writeFileSync(path.join(x.root,'workspaces','film','WORKSPACE.yaml'),
-   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "paused"\\n');
+   'schema_version: "2.0"\nid: "film"\nname: "Film"\nstatus: "paused"\n');
  assert.equal(x.verify(facts.bot),null);
  fs.writeFileSync(path.join(x.root,'workspaces','film','WORKSPACE.yaml'),
-   'schema_version: "2.0"\\nid: "film"\\nname: "Film"\\nstatus: "active"\\n');
+   'schema_version: "2.0"\nid: "film"\nname: "Film"\nstatus: "active"\n');
  assert.equal(x.verify(facts.bot)?.actorId,'film-bot');
 });
 test('reject unrelated and outdated OS root manifests',()=>{

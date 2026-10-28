@@ -7,6 +7,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import {evaluateActionPermission} from './action-permission.mjs';
 
 export const CANVAS_GRANT_SOURCE = 'ai-verse-os/canvas-actor-grants-v1';
 export const CANVAS_GRANT_RELATIVE = '.aiverse/os/canvas-actor-grants.json';
@@ -114,7 +115,16 @@ export function verifyInstalledCanvasGrant({osRoot,facts}) {
       (facts.runId !== undefined || facts.sessionId !== undefined)) return deny();
     const now = facts.now === undefined ? Date.now() : facts.now;
     if (!Number.isSafeInteger(now) || now < 0) return deny();
-    const doc = readDocument(rootOf(osRoot));
+    const root = rootOf(osRoot);
+    // Reuse the existing OS evaluator's exact workspace manifest logic,
+    // not a duplicate YAML parser or a browser-provided workspace status.
+    const policy = evaluateActionPermission({osRoot:root,request:{
+      action_class:'read_local',
+      scope:facts.workspaceId==='operator'?'operator':'workspace:'+facts.workspaceId,
+      request_fingerprint:'0'.repeat(64),
+    }});
+    if (policy.decision !== 'allow') return deny();
+    const doc = readDocument(root);
     const matches = doc.grants.filter(g =>
       g.actor_kind === facts.actorKind && g.system_id === facts.systemId
       && g.scope === facts.workspaceId && g.principal === facts.principal

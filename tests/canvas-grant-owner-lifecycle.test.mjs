@@ -18,12 +18,13 @@ function fixture(){
  const writeStatus=status=>fs.writeFileSync(path.join(root,'workspaces/film/WORKSPACE.yaml'),
   'schema_version: "2.0"\nid: "film"\nname: "Film"\nstatus: "'+status+'"\n');
  writeStatus('active');
- let approved=true,botRunning=true,wrongReceipt=false,approvalCount=0,checks=0;
+ let approved=true,botRunning=true,wrongReceipt=false,approvalCount=0,checks=0,seenChange=null;
  const create=()=>createCanvasGrantOwnerLifecycle({
   osRoot:root,
   verifyCanonicalBotRun:async()=>{checks++;return botRunning},
   approveNativeOwnerChange:async info=>{
    approvalCount++;
+   seenChange=info.permissionChange;
    return approved?{
      source:CANVAS_GRANT_OWNER_SOURCE,approved:true,
      requestFingerprint:wrongReceipt?'0'.repeat(64):info.requestFingerprint,
@@ -49,7 +50,8 @@ function fixture(){
  const read=(facts)=>verifyInstalledCanvasGrant({osRoot:root,facts});
  return {root,file,human,bot,request,read,create,writeStatus,
   blockApproval:()=>{approved=false},badReceipt:()=>{wrongReceipt=true},
-  stopBot:()=>{botRunning=false},counts:()=>({approvalCount,checks})};
+  stopBot:()=>{botRunning=false},counts:()=>({approvalCount,checks}),
+  change:()=>seenChange};
 }
 const humanFacts={systemId:'system-1',workspaceId:'operator',
  principal:'owner-session-1',actorKind:'human',method:'aiverse.canvas.get'};
@@ -79,6 +81,18 @@ test('native-approved owner issues real grant atomically, read by existing verif
  assert.equal(owner.list().grants[0].grantId,'grant-human-1');
  assert.equal(fs.statSync(f.file).mode&0o077,0);
  assert.ok(f.counts().approvalCount>0);
+});
+test('native approval sees exact scope, actor, methods, expiry and reason',onUnix,async()=>{
+ const f=fixture(),owner=f.create();
+ await owner.apply(f.request('issue',{grant:f.human}));
+ assert.deepEqual(f.change(),{
+  operation:'issue',scope:'operator',
+  grant:{grantId:'grant-human-1',actorKind:'human',
+   actorId:'human-operator',scope:'operator',
+   methods:['aiverse.canvas.get','aiverse.canvas.create'],
+   expiresAt:f.human.expires_at},
+  priorGeneration:null,reason:'explicit native owner approval',
+ });
 });
 test('revocation requires independent owner approval and invalidates next read',onUnix,async()=>{
  const f=fixture(),owner=f.create();

@@ -6,7 +6,6 @@
  * independently authenticates the caller/session. Fails closed if absent.
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
 export const CANVAS_GRANT_SOURCE = 'ai-verse-os/canvas-actor-grants-v1';
@@ -36,6 +35,15 @@ function rootOf(osRoot) {
   const abs = path.resolve(osRoot);
   const root = fs.realpathSync(abs);
   if (!fs.lstatSync(abs).isDirectory() || !fs.lstatSync(root).isDirectory()) throw Error('unsafe root');
+  const manifest = path.join(root,'AI-VERSE.yaml');
+  const stat = fs.lstatSync(manifest);
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 128 * 1024) throw Error('missing OS manifest');
+  const top = fs.readFileSync(manifest,'utf8');
+  if (!/^schema_version:\\s*["']?2\\./m.test(top) || !/^architecture:\\s*unified-workspace/m.test(top))
+    throw Error('incompatible OS manifest');
+  for (const segment of ['operator','workspaces']) {
+    if (!fs.lstatSync(path.join(root,segment)).isDirectory()) throw Error('incomplete OS root');
+  }
   return root;
 }
 function pathOf(root) {

@@ -145,8 +145,11 @@ export const pendingText = (root) => peek(root, "SELECT text FROM occurrences WH
 
 // Everything the pipeline could have written under the Core, searched byte for byte (database, its WAL, spool, inboxes, owner
 // files). The chat's own transcript and the test's own log are the harness's, not the pipeline's, and are not searched.
+// A file another connection holds open exclusively (Windows) cannot be read by anyone else either; it is skipped.
+const readIfFree = (file) => { try { return fs.readFileSync(file, 'latin1'); } catch (error) { if (['EBUSY', 'EPERM'].includes(error.code)) return ''; throw error; } };
+
 export function allText(root) {
-  const walk = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).map((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : fs.readFileSync(path.join(dir, e.name), 'latin1'))).join('') : '');
+  const walk = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).map((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : readIfFree(path.join(dir, e.name)))).join('') : '');
   return ['runtime', 'operator', 'workspaces', '.aiverse'].map((d) => walk(path.join(root, d))).join('');
 }
 

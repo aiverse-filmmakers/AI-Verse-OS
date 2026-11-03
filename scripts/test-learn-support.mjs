@@ -24,7 +24,7 @@ if (mode === 'failonce' && fs.readFileSync(process.env.FAKE_LOG, 'utf8').trim().
 if (mode === 'steal') { const { DatabaseSync } = await import('node:sqlite'); const d = new DatabaseSync(process.env.FAKE_DB); d.exec("UPDATE claims SET owner = 'thief'"); d.close(); }
 if (mode === 'fail') { process.stderr.write('boom SECRET-IN-STDERR'); process.exit(1); }
 if (mode === 'slow') await new Promise((r) => setTimeout(r, 1500));
-if (mode === 'switchoff') fs.writeFileSync(process.env.FAKE_CONFIG, JSON.stringify({ mode: 'off' }));
+if (mode === 'switchoff') fs.writeFileSync(process.env.FAKE_CONFIG, JSON.stringify({ ...JSON.parse(fs.readFileSync(process.env.FAKE_CONFIG, 'utf8')), mode: 'off' }));
 const scope = (input.match(/Conversation scope: (\\S+)/) || [])[1] || '';
 let answer;
 if (mode === 'facts') {

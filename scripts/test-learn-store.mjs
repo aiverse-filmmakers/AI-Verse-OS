@@ -74,9 +74,9 @@ test('a process killed inside a transaction leaves no half state and blocks nobo
   assert.ok(crashed.signal === 'SIGKILL' || crashed.code !== 0);
   assert.deepEqual(db.prepare('SELECT session FROM failures ORDER BY id').all().map((r) => r.session), ['keep']);
   assert.equal((await child(root, `console.log(tx(db, () => { db.prepare("INSERT INTO failures(session, at, code) VALUES('next', 1, 'ok')").run(); return 'done'; }));`)).out, 'done');
-  await child(root, `acquire(db, 'worker', 'dead', 200); process.kill(process.pid, 'SIGKILL');`);
+  await child(root, `acquire(db, 'worker', 'dead', 60000); process.kill(process.pid, 'SIGKILL');`);
   assert.equal(acquire(db, 'worker', 'live', 60000), false);
-  assert.equal(acquire(db, 'worker', 'live', 60000, Date.now() + 1000), true);
+  assert.equal(acquire(db, 'worker', 'live', 60000, Date.now() + 90000), true); // once the dead holder's lease has run out
   db.close();
 });
 

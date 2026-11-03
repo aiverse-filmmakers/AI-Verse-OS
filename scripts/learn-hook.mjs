@@ -5,11 +5,12 @@
 // Mode off (or no config) does nothing at all.
 
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, learnPaths, loadConfig, pruneRuntime, resolveScope, sessionKey, sha, spoolEvent } from './learn-common.mjs';
+import { isEnabled, isMain, learnPaths, loadConfig, pruneRuntime, resolveScope, sessionKey, spoolEvent } from './learn-common.mjs';
 import { fingerprint, handoffLines, HEAD_RECORDS, headHash, readLines } from './learn-window.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
@@ -49,14 +50,22 @@ function handoff(root, key, transcript, now) {
     if (!fp) return {};
     const dir = path.join(learnPaths(root).base, 'handoff');
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `${key}-${now}-${sha(transcript + now, 8)}.jsonl`);
-    try {
-      fs.writeFileSync(`${file}.tmp`, `${handoffLines(lines, (cwd) => resolveScope(root, cwd)).join('\n')}\n`);
-      fs.renameSync(`${file}.tmp`, file);
-    } catch (error) {
-      fs.rmSync(`${file}.tmp`, { force: true }); // no half-written copy is left behind
-      throw error;
+    // Exclusive creation under a random name: two handoffs in the same millisecond can never overwrite each other. The event that
+    // names the file is written only after this returns, so a half-written file is never referenced (and is removed on failure).
+    const body = `${handoffLines(lines, (cwd) => resolveScope(root, cwd)).join('\n')}\n`;
+    let file = null;
+    for (let attempt = 0; attempt < 5 && !file; attempt += 1) {
+      const candidate = path.join(dir, `${key}-${now}-${crypto.randomBytes(4).toString('hex')}.jsonl`);
+      try {
+        fs.writeFileSync(candidate, body, { flag: 'wx' });
+        file = candidate;
+      } catch (error) {
+        if (error.code === 'EEXIST') continue; // someone else's file: never touched, try another name
+        fs.rmSync(candidate, { force: true }); // our own partial write
+        throw error;
+      }
     }
+    if (!file) throw new Error('handoff_name_taken');
     const hn = Math.min(HEAD_RECORDS, lines.length);
     return { handoff: { fp, path: file, head: headHash(lines, hn), hn } };
   } catch {
@@ -66,7 +75,6 @@ function handoff(root, key, transcript, now) {
 
 export function handleEvent(root, event, payload, now = Date.now(), start = startWorker) {
   const config = loadConfig(root);
-  try { pruneRuntime(root, now); } catch {} // housekeeping runs whether or not learning is on; it creates nothing
   if (!isEnabled(config) || process.env.AIVERSE_LEARN_REVIEW) return false;
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) return false;
   if (event === 'start') {

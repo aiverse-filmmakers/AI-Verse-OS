@@ -18,9 +18,9 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0,
   due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
-  anchor TEXT DEFAULT '', path TEXT, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
+  anchor TEXT DEFAULT '', path TEXT, ord INTEGER, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
 CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
-CREATE TABLE IF NOT EXISTS seen_text(session TEXT, h TEXT, fp TEXT, PRIMARY KEY(session, h));
+CREATE TABLE IF NOT EXISTS seen_records(session TEXT, uuid TEXT, fp TEXT, PRIMARY KEY(session, uuid));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
 CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
@@ -29,23 +29,32 @@ CREATE TABLE IF NOT EXISTS failures(id INTEGER PRIMARY KEY, session TEXT, at INT
 CREATE TABLE IF NOT EXISTS seen(name TEXT PRIMARY KEY, at INTEGER);
 `;
 
-// Databases made by earlier rounds: add what is missing, rebuild the handoffs table whose key changed. Guarded by table_info, so
-// it is safe to run on every open and on a database that is already current.
+// Databases made by earlier rounds. Everything is decided from PRAGMA table_info (columns and primary key), so it is safe on
+// every open and on a database that is already current. A table whose key or columns differ is rebuilt inside one transaction,
+// copying every row with a plain INSERT: a conflict is an error that rolls the whole rebuild back, never silently dropped rows.
+const HANDOFFS_KEY = ['session', 'path'];
+const HANDOFFS_COLUMNS = ['session', 'fp', 'path', 'head', 'hn'];
+
 function migrate(db) {
-  const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
-  if (!columns('sources').includes('path')) db.exec('ALTER TABLE sources ADD COLUMN path TEXT');
-  if (!columns('handoffs').includes('head') || !columns('handoffs').includes('hn')) {
-    db.exec('BEGIN IMMEDIATE');
-    try {
-      db.exec(`ALTER TABLE handoffs RENAME TO handoffs_old;
-        CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
-        INSERT OR IGNORE INTO handoffs(session, fp, path) SELECT session, fp, path FROM handoffs_old;
-        DROP TABLE handoffs_old;`);
-      db.exec('COMMIT');
-    } catch (error) {
-      try { db.exec('ROLLBACK'); } catch {}
-      throw error;
-    }
+  const info = (table) => db.prepare(`PRAGMA table_info(${table})`).all();
+  const names = (table) => info(table).map((r) => r.name);
+  const key = (table) => info(table).filter((r) => r.pk > 0).sort((a, b) => a.pk - b.pk).map((r) => r.name);
+  for (const column of ['path TEXT', 'ord INTEGER']) {
+    if (!names('sources').includes(column.split(' ')[0])) db.exec(`ALTER TABLE sources ADD COLUMN ${column}`);
+  }
+  const current = names('handoffs');
+  if (HANDOFFS_COLUMNS.every((c) => current.includes(c)) && key('handoffs').join() === HANDOFFS_KEY.join()) return;
+  const copied = HANDOFFS_COLUMNS.filter((c) => current.includes(c));
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec('ALTER TABLE handoffs RENAME TO handoffs_old');
+    db.exec('CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path))');
+    db.exec(`INSERT INTO handoffs(${copied.join(', ')}) SELECT ${copied.join(', ')} FROM handoffs_old`);
+    db.exec('DROP TABLE handoffs_old');
+    db.exec('COMMIT');
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    throw error;
   }
 }
 

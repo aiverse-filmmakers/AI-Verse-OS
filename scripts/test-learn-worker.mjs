@@ -240,7 +240,7 @@ test('a replacement that keeps the first line and is detected only by its first 
   assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'handoff_used'));
 });
 
-test('handoff housekeeping: caps by count (oldest first), drops stale temp files, runs even when learning is off, and frees a closed source', async () => {
+test('handoff housekeeping: off means untouched; on caps by count (oldest first), drops stale temp files, never touches foreign files, and frees a closed source', async () => {
   const root = core({ mode: 'off' });
   const dir = handoffDir(root);
   fs.mkdirSync(dir, { recursive: true });
@@ -263,17 +263,21 @@ test('handoff housekeeping: caps by count (oldest first), drops stale temp files
   fs.writeFileSync(tmp, 'x');
   const old = new Date(now - 3 * 3600 * 1000);
   fs.utimesSync(tmp, old, old);
-  hookEvent(root, 'stop', session(root)); // mode off: still housekeeping
-  const left = fs.readdirSync(dir).sort();
-  assert.equal(left.length, 51); // 50 handoffs plus the member's own file
-  assert.ok(left.includes(`${'a'.repeat(16)}-1059-${'b'.repeat(8)}.jsonl`) && !left.includes(`${'a'.repeat(16)}-1000-${'b'.repeat(8)}.jsonl`) && !left.includes(path.basename(tmp)));
+  const before = [fs.readdirSync(dir).sort(), fs.readdirSync(learnPaths(root).spool).sort()];
+  hookEvent(root, 'stop', session(root)); // learning is off: the hook does nothing to disk, not even housekeeping
+  assert.deepEqual([fs.readdirSync(dir).sort(), fs.readdirSync(learnPaths(root).spool).sort()], before);
+  // learning on: the next handoff runs housekeeping, which touches only names this pipeline generates
+  setMode(root, 'propose');
+  const s0 = session(root);
+  writeTranscript(s0.transcript_path, [userLine('a0', 'a message to hand over before compaction', root)]);
+  hookEvent(root, 'precompact', s0);
+  const left = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl'));
+  assert.equal(left.length, 50);
+  assert.ok(left.includes(`${'a'.repeat(16)}-1059-${'b'.repeat(8)}.jsonl`) && !left.includes(`${'a'.repeat(16)}-1000-${'b'.repeat(8)}.jsonl`));
+  assert.equal(fs.existsSync(tmp), false);
   // files that this pipeline did not create survive, however old and whatever their extension
   for (const f of [mine, path.join(learnPaths(root).spool, 'personal-notes.txt'), path.join(learnPaths(root).spool, 'bad', 'personal-notes.txt'), path.join(learnPaths(root).spool, 'keep.json'), path.join(learnPaths(root).spool, 'x.tmp')]) assert.ok(fs.existsSync(f), f);
   // a handoff whose source is closed is deleted on the next ingest
-  setMode(root, 'propose');
-  const s = session(root);
-  writeTranscript(s.transcript_path, [userLine('a1', 'message to hand over before compaction', root)]);
-  hookEvent(root, 'precompact', s);
   const db = await openStore(root);
   ingest(db, root);
   const row = db.prepare('SELECT session, fp, path FROM handoffs').get();
@@ -300,6 +304,108 @@ test('two handoffs of one generation are both kept: an earlier unread message th
   assert.equal(fs.readdirSync(handoffDir(root)).length, 2);
   await drain(root);
   markersOnce(['first version message number one', 'second version message number one', 'shared message that both versions have', 'a completely different transcript']);
+});
+
+const occurrences = (text) => calls().map((c) => c.prompt.split('CONVERSATION WINDOW')[1] ?? '').reduce((n, p) => n + p.split(text).length - 1, 0);
+const userUuid = (id, text, root) => userLine(id, text, root);
+
+test('distinct records with identical text are both reviewed; a retained record (same uuid) is reviewed once, even past line 200', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const same = 'identical words in the message here';
+  writeTranscript(s.transcript_path, [assistantLine('h1', 'first opening record', root), userUuid('p1', same, root), userUuid('p2', same, root),
+    ...Array.from({ length: 250 }, (_, i) => assistantLine(`f${i}`, `filler ${i}`, root)), userUuid('keep', 'retained far below line two hundred', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [assistantLine('h2', 'second opening record', root), userUuid('q1', same, root), userUuid('q2', same, root),
+    ...Array.from({ length: 250 }, (_, i) => assistantLine(`g${i}`, `filler ${i}`, root)), userUuid('keep', 'retained far below line two hundred', root)]);
+  hookEvent(root, 'end', s);
+  await drain(root);
+  assert.equal(occurrences(same), 4); // p1, p2 from the handoff and q1, q2 from the live transcript
+  assert.equal(occurrences('retained far below line two hundred'), 1);
+});
+
+test('an interrupted multipart review completes every part exactly once after a kill -9', async () => {
+  const root = core({ window_chars: 1000 });
+  review([]);
+  const big = ['LINEONE', 'LINETWO', 'LINETHREE', 'LINEFOUR'].map((w) => `${w} ${'word '.repeat(170)}`.trim()).join('\n');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [userUuid('big', big, root)]);
+  setMode(root, 'propose');
+  hookEvent(root, 'end', s);
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_finish' });
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  timePasses(root);
+  workerProcess(root);
+  for (const w of ['LINEONE', 'LINETWO', 'LINETHREE', 'LINEFOUR']) assert.equal(occurrences(w), 1, w);
+});
+
+test('retained history is reviewed before the successor transcript, also across a restart', async () => {
+  const root = core({ window_chars: 1000 });
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const body = (w) => `${w} ${'word '.repeat(120)}`.trim();
+  writeTranscript(s.transcript_path, [assistantLine('h', 'opening record', root), userUuid('o1', body('OLDPREFERENCE'), root), userUuid('o2', body('CORRECTIONMESSAGE'), root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [userUuid('c0', body('COMPACTEDLIVE'), root)]);
+  hookEvent(root, 'end', s);
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_finish' });
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  timePasses(root);
+  workerProcess(root);
+  const order = ['OLDPREFERENCE', 'CORRECTIONMESSAGE', 'COMPACTEDLIVE'].map((w) => calls().findIndex((c) => (c.prompt.split('CONVERSATION WINDOW')[1] ?? '').includes(w)));
+  assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+});
+
+test('two handoffs in the same millisecond get different files, neither overwritten', async () => {
+  const root = core();
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [userLine('a1', 'message to hand over before compaction', root)]);
+  const { handleEvent } = await import('./learn-hook.mjs');
+  const at = Date.now();
+  handleEvent(root, 'precompact', s, at, () => {});
+  handleEvent(root, 'precompact', s, at, () => {});
+  const files = fs.readdirSync(handoffDir(root));
+  assert.equal(files.length, 2);
+  assert.ok(files.every((f) => fs.statSync(path.join(handoffDir(root), f)).size > 0));
+  assert.equal(fs.readdirSync(learnPaths(root).spool).filter((n) => n.endsWith('.json')).length, 2);
+});
+
+test('migration: both historical handoffs schemas are rebuilt with their rows, a conflict rolls back to the complete old state, two paths per fingerprint then work', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const make = (root, ddl, rows) => {
+    fs.mkdirSync(learnPaths(root).base, { recursive: true });
+    const old = new DatabaseSync(learnPaths(root).db);
+    old.exec(`${ddl}; ${rows}`);
+    old.close();
+  };
+  const noHead = "CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, PRIMARY KEY(session, fp))";
+  const withHead = "CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, fp))";
+  for (const [ddl, rows] of [[noHead, "INSERT INTO handoffs VALUES('s','f1','/p/1.jsonl'),('s','f2','/p/2.jsonl')"],
+    [withHead, "INSERT INTO handoffs VALUES('s','f1','/p/1.jsonl','hh',3),('s','f2','/p/2.jsonl',NULL,NULL)"]]) {
+    const root = core();
+    make(root, ddl, rows);
+    const db = await openStore(root);
+    const info = db.prepare('PRAGMA table_info(handoffs)').all();
+    assert.deepEqual(info.filter((r) => r.pk > 0).sort((a, b) => a.pk - b.pk).map((r) => r.name), ['session', 'path']);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM handoffs').get().n, 2);
+    db.prepare("INSERT INTO handoffs(session, fp, path) VALUES('s','f1','/p/3.jsonl')").run(); // two paths for one fingerprint
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM handoffs WHERE fp = 'f1'").get().n, 2);
+    db.close();
+  }
+  // two rows that would collide under the new key: the rebuild fails as a whole and the old table is left complete
+  const root = core();
+  make(root, noHead, "INSERT INTO handoffs VALUES('s','f1','/same.jsonl'),('s','f2','/same.jsonl')");
+  await assert.rejects(openStore(root));
+  const raw = new DatabaseSync(learnPaths(root).db);
+  assert.equal(raw.prepare('SELECT COUNT(*) AS n FROM handoffs').get().n, 2);
+  assert.deepEqual(raw.prepare('PRAGMA table_info(handoffs)').all().map((r) => r.name), ['session', 'fp', 'path']);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'handoffs_old'").get().n, 0);
+  raw.close();
 });
 
 test('records kept by a replacement transcript are not reviewed again after the handoff reviewed them', async () => {

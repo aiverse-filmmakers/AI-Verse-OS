@@ -39,7 +39,7 @@ function toMessage(entry, line) {
   let text = textOf(entry.message?.content).trim();
   if (!text || (entry.type === 'user' && HARNESS_TEXT.test(text))) return null;
   if (entry.type === 'assistant' && text.length > ASSISTANT_MAX) text = `${text.slice(0, ASSISTANT_MAX)} [trimmed]`;
-  return { id: entry.uuid || `L${line}`, role: entry.type, text, line, cwd: entry.cwd };
+  return { id: entry.uuid || `L${line}`, uuid: entry.uuid || null, role: entry.type, text, line, cwd: entry.cwd };
 }
 
 export const isEligible = (message) => message.role === 'user' && message.text.length >= MIN_ELIGIBLE && !message.text.startsWith('/');
@@ -60,13 +60,15 @@ export function splitText(text, max) {
 }
 
 // Stops at `budget` characters, or when a user message belongs to another scope. A window only ever holds one scope.
-export const textHash = (text) => sha(text, 16);
-
-export function readWindow(lines, cursor, budget, scopeOf, skip = null, skipLimit = Infinity) {
+// `skip` holds the transcript record uuids already reviewed from another source of the chat. A record is identified by its uuid
+// (never by its text or position), so two different records with the same words are both reviewed. `completed` lists the uuids
+// whose every part is inside this window.
+export function readWindow(lines, cursor, budget, scopeOf, skip = null) {
   const messages = [];
   let used = 0;
   let scope = null;
   let skipped = 0;
+  const completed = [];
   let line = cursor.line;
   let part = cursor.part;
   scan: for (; line < lines.length; line += 1, part = 0) {
@@ -81,8 +83,8 @@ export function readWindow(lines, cursor, budget, scopeOf, skip = null, skipLimi
       if (own === null) { skipped += 1; continue; }
       if (scope && own !== scope) break;
       scope = own;
-      // a retained copy of a message already reviewed from another source of this chat (handoff vs live): not reviewed twice
-      if (skip && part === 0 && line < skipLimit && message.text.length >= MIN_ELIGIBLE && skip.has(textHash(message.text))) continue;
+      // a retained copy of a record already reviewed from another source of this chat (handoff vs live): not reviewed twice
+      if (skip && part === 0 && message.uuid && skip.has(message.uuid)) continue;
     } else if (own === null || own !== scope) {
       continue; // assistant text from another scope (or before any scope is known) never joins this window
     }
@@ -92,10 +94,11 @@ export function readWindow(lines, cursor, budget, scopeOf, skip = null, skipLimi
       messages.push({ id: pieces.length > 1 ? `${message.id}#${k + 1}` : message.id, role: message.role, text: pieces[k], full: pieces.length > 1 ? message.text : undefined, line });
       used += pieces[k].length;
     }
+    if (message.role === 'user' && message.uuid) completed.push(message.uuid);
   }
   const anchorLine = part > 0 ? line : line - 1;
   return {
-    messages, scope: scope ?? 'unscoped', next: { line, part }, atEnd: line >= lines.length, skipped,
+    messages, scope: scope ?? 'unscoped', next: { line, part }, atEnd: line >= lines.length, skipped, completed,
     anchor_line: anchorLine >= 0 && anchorLine < lines.length ? anchorLine : -1,
     anchor: anchorLine >= 0 && anchorLine < lines.length ? lineHash(lines[anchorLine]) : '',
     hasEligible: messages.some(isEligible),
@@ -117,7 +120,7 @@ export function handoffLines(lines, scopeOf) {
     if (!message || message.role !== 'user' || SECRET.test(message.text)) return;
     const scope = scopeOf(message.cwd);
     if (scope === null || scope === 'unscoped') return; // only a known operator or workspace scope is ever persisted
-    out.push(JSON.stringify({ type: 'user', uuid: message.id, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
+    out.push(JSON.stringify({ type: 'user', uuid: message.uuid || undefined, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
   });
   return out;
 }
@@ -134,7 +137,6 @@ export function readSource(source, livePath, budget, scopeOf, skip = null) {
   }
   if (!source.path && fingerprint(lines) !== source.fp) return null;
   if (source.line > lines.length || (source.anchor_line >= 0 && (source.anchor_line >= lines.length || lineHash(lines[source.anchor_line]) !== source.anchor))) return { replaced: true };
-  return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf, skip, source.path ? Infinity : 200);
+  return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf, skip);
 }
 
-export const hashesOf = (messages) => [...new Set(messages.filter((m) => m.role === 'user' && (m.full ?? m.text).length >= MIN_ELIGIBLE).map((m) => textHash(m.full ?? m.text)))];

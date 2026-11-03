@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { isEnabled, isMain, learnPaths, loadConfig, resolveScope, sha } from './learn-common.mjs';
 import { resolveClaude } from './learn-claude.mjs';
 import { acquire, allowance, holds, ingest, openStore, recordReview, release, renew, tx } from './learn-store.mjs';
-import { fingerprint, hashesOf, headHash, readLines, readSource } from './learn-window.mjs';
+import { fingerprint, headHash, readLines, readSource } from './learn-window.mjs';
 import { computeWriteCommandFingerprint, submitWriteCommand } from './write-command.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -166,7 +166,7 @@ function closeSource(db, key, source) {
 // the first message not yet reviewed (they remember their original line numbers).
 function adoptHandoff(db, key, source) {
   let adopted = 0;
-  // every handoff of this generation, oldest first; messages they share are reviewed once (see seen_text)
+  // every handoff of this generation, oldest first; messages they share are reviewed once (see seen_records)
   for (const handoff of db.prepare('SELECT rowid AS id, path FROM handoffs WHERE session = ? AND fp = ? ORDER BY id').all(key, source.fp)) {
     if (!fs.existsSync(handoff.path)) continue;
     let start = 0;
@@ -176,7 +176,8 @@ function adoptHandoff(db, key, source) {
       start = origs.filter((o) => o < source.line).length;
       if (source.part > 0 && origs[start] === source.line) part = source.part; // a long message already partly reviewed continues at its part
     } catch { continue; }
-    db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, part, path) VALUES(?, ?, ?, ?, ?)').run(key, `h:${source.fp}:${handoff.id}`, start, part, handoff.path);
+    // ord = the adopted generation's own place: its retained history is reviewed before any successor transcript
+    db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, part, path, ord) VALUES(?, ?, ?, ?, ?, ?)').run(key, `h:${source.fp}:${handoff.id}`, start, part, handoff.path, source.ord ?? source.id);
     adopted += 1;
   }
   if (!adopted) return false;
@@ -210,13 +211,13 @@ function nextWork(ctx, session) {
     db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(session.key, live);
     db.prepare('UPDATE sources SET closed = 0 WHERE session = ? AND fp = ? AND closed = 1').run(session.key, live);
   }
-  for (let source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY id').all(session.key)) {
+  for (let source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY COALESCE(ord, rowid), rowid').all(session.key)) {
     const pending = db.prepare('SELECT body FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').get(session.key, source.fp, source.line, source.part);
     if (pending) return { source, live, review: JSON.parse(pending.body) };
     // Same first line but different first records: the handoff's head no longer matches the live transcript, so it was replaced
     // even if the cursor is still 0 and no anchor can show it.
     if (!source.path && headChanged(db, session, source)) { if (adoptHandoff(db, session.key, source)) return nextWork(ctx, session); }
-    const skip = new Set(db.prepare('SELECT h FROM seen_text WHERE session = ? AND fp != ?').all(session.key, source.fp).map((r) => r.h));
+    const skip = new Set(db.prepare('SELECT uuid FROM seen_records WHERE session = ? AND fp != ?').all(session.key, source.fp).map((r) => r.uuid));
     let window = readSource(source, source.path || session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd), skip);
     if (!source.path && (!window || window.replaced) && adoptHandoff(db, session.key, source)) return nextWork(ctx, session);
     if (window?.replaced) {
@@ -264,7 +265,6 @@ function wait(ctx, session, code, ms = WAIT_MS) {
 
 function review(ctx, session, { source, live, window }, guard) {
   const { root, db, now, drain } = ctx;
-  window.hashes = hashesOf(window.messages);
   if (!window.hasEligible) return finish(ctx, session, source, live, window, null);
   const limit = allowance(db, session.key, ctx.config, now(), drain);
   if (!limit.ok) {
@@ -280,7 +280,7 @@ function review(ctx, session, { source, live, window }, guard) {
   if (!planned.ok) return fail(ctx, session, source, live, window, planned, guard);
   const body = {
     scope: window.scope, cost: reviewed.cost, model: ctx.config.model, messages: window.messages.length, skipped: window.skipped,
-    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, hashes: window.hashes,
+    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, completed: window.completed,
     items: planned.value.items.map((item) => ({ ...item, done: false })),
   };
   tx(db, () => {
@@ -325,7 +325,7 @@ function execute(ctx, session, { source, live }, body, guard) {
     messages: body.messages, skipped_outside_core: body.skipped || undefined,
     results: body.items.map(({ kind, state, reason, owner, ref }) => ({ kind, state, reason, owner, ref })),
   };
-  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, hashes: body.hashes };
+  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, completed: body.completed };
   return finish(ctx, session, source, live, window, receipt);
 }
 
@@ -338,7 +338,7 @@ function finish(ctx, session, source, live, window, receipt) {
     if (!holds(db, name, owner, ctx.now())) throw new Lost();
     if (receipt) db.prepare('INSERT INTO receipts(session, at, body) VALUES(?, ?, ?)').run(session.key, ctx.now(), JSON.stringify(receipt));
     crash('in_finish');
-    for (const h of window.hashes ?? []) db.prepare('INSERT OR IGNORE INTO seen_text(session, h, fp) VALUES(?, ?, ?)').run(session.key, h, source.fp);
+    for (const uuid of window.completed ?? []) db.prepare('INSERT OR IGNORE INTO seen_records(session, uuid, fp) VALUES(?, ?, ?)').run(session.key, uuid, source.fp);
     db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ? WHERE session = ? AND fp = ?')
       .run(window.next.line, window.next.part, window.anchor_line, window.anchor, session.key, source.fp);
     db.prepare('DELETE FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').run(session.key, source.fp, source.line, source.part);

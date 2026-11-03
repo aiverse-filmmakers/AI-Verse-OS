@@ -253,7 +253,7 @@ class Commit(unittest.TestCase):
         self.assertNotIn("operator.profile.ensure", host.calls)
         self.assertFalse(hasattr(learn, "allow_unfenced_auto"))
         for path in (SCRIPTS / "ai_verse_learn_apply.py", SCRIPTS / "learn-common.mjs", SCRIPTS / "learn-worker.mjs"):
-            self.assertNotIn("allow_unfenced_auto", path.read_text())
+            self.assertNotIn("allow_unfenced_auto", path.read_text(encoding="utf-8"))
 
     def test_a_fenced_owner_gets_the_write_once_and_stale_state_is_replanned(self):
         host = FakeHost()

@@ -1,0 +1,43 @@
+name: Automatic Learning
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/learn-*.mjs'
+      - 'scripts/test-learn-*'
+      - 'scripts/ai_verse_learn_apply.py'
+      - 'scripts/ai_verse_host_adapter.py'
+      - 'scripts/write-command.mjs'
+      - 'system/capabilities/learn/**'
+      - '.claude/settings.json'
+      - '.github/workflows/auto-learning.yml'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auto-learning:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test hook entry, durable queue and transcript window
+        run: node scripts/test-learn-hook.mjs
+      - name: Test worker, reviewer runner and applier end to end with a fake claude
+        run: node scripts/test-learn-worker.mjs
+      - name: Test applier routing and safety
+        run: python scripts/test-learn-apply.py
+      - name: Check generated runtime adapters are in sync
+        run: node scripts/test-adapter-sync.mjs

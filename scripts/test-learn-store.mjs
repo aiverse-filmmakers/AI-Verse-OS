@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { learnPaths, loadConfig, readStatus } from './learn-common.mjs';
+import { learnPaths, loadConfig, readStatus, sqliteTooOld } from './learn-common.mjs';
+import { DatabaseSync } from 'node:sqlite';
 import { acquire, holds, ingestBatch, openStore, purgeWal, release, renew, reserveReview, tx } from './learn-store.mjs';
 import { buildWindow, chooseCut } from './learn-worker.mjs';
 import { allText, capture, core, hookEvent, hookEventAsync, peek, session, setMode, tempDir, userLine, writeTranscript } from './test-learn-support.mjs';
@@ -179,4 +180,119 @@ test('the review allowance is reserved before the reviewer is launched, and coun
   assert.equal(reserveReview(db, 'k', cfg, t, false, () => false).off, true); // off: nothing at all is written
   assert.equal(db.prepare('SELECT SUM(n) AS n FROM ledger').get().n, 2);
   db.close();
+});
+
+test('opening inspects identity BEFORE changing anything: an empty database of another application or version, or one with only schema objects, is refused untouched', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const refusedAt = async (sql, check) => {
+    const root = core();
+    fs.mkdirSync(learnPaths(root).base, { recursive: true });
+    const d = new DatabaseSync(learnPaths(root).db);
+    d.exec(sql);
+    d.close();
+    await assert.rejects(openStore(root), (error) => error.code === 'store_incompatible');
+    const after = new DatabaseSync(learnPaths(root).db);
+    check(after);
+    after.close();
+  };
+  // empty, but claimed by another application and a future version: it must not be adopted
+  await refusedAt('PRAGMA application_id = 12345; PRAGMA user_version = 99', (d) => {
+    assert.deepEqual([d.prepare('PRAGMA application_id').get().application_id, d.prepare('PRAGMA user_version').get().user_version], [12345, 99]);
+    assert.equal(d.prepare('PRAGMA journal_mode').get().journal_mode, 'delete'); // not even switched to WAL
+  });
+  // no table, but a view
+  await refusedAt('CREATE VIEW precious AS SELECT 1 AS x', (d) => assert.equal(d.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'precious'").get().n, 1));
+  // our identity at a version nobody here knows
+  await refusedAt(`PRAGMA application_id = ${0x41495645}; PRAGMA user_version = 2`, (d) => assert.equal(d.prepare('PRAGMA user_version').get().user_version, 2));
+});
+
+test('the exclusion salt is never regenerated while exclusions exist: the store stops instead', async () => {
+  const root = core();
+  await capture(root, 's', [{ uuid: 'a', text: 'My password is lilac7.' }]);
+  const before = peek(root, "SELECT v FROM meta WHERE k = 'salt'")[0].v;
+  const { DatabaseSync } = await import('node:sqlite');
+  const d = new DatabaseSync(learnPaths(root).db);
+  d.exec("DELETE FROM meta WHERE k = 'salt'");
+  d.close();
+  await assert.rejects(openStore(root), (error) => error.code === 'store_incompatible' && /salt/.test(error.message));
+  assert.equal(peek(root, "SELECT COUNT(*) AS n FROM meta WHERE k = 'salt'")[0].n, 0); // nothing was invented
+  assert.ok(before);
+});
+
+test('a link anywhere between the Core and the database is refused before anything is created behind it', async () => {
+  const target = tempDir('aiverse-elsewhere-');
+  const root = core();
+  try {
+    fs.symlinkSync(target, path.join(root, 'runtime', 'learn')); // the storage folder itself
+    await assert.rejects(openStore(root), (error) => error.code === 'store_incompatible');
+    fs.rmSync(path.join(root, 'runtime', 'learn'));
+    fs.rmSync(path.join(root, 'runtime'), { recursive: true });
+    fs.symlinkSync(target, path.join(root, 'runtime')); // an ancestor
+    await assert.rejects(openStore(root), (error) => error.code === 'store_incompatible');
+    assert.deepEqual(fs.readdirSync(target), []);
+    assert.deepEqual(readStatus(root), []); // and not even a health file was written through the link
+  } catch (error) { if (error.code !== 'EPERM') throw error; }
+});
+
+test('a populated version 3 database is migrated without loss: every occurrence, the exclusion hashes and the salt carry over, and a second open changes nothing', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const root = core();
+  fs.mkdirSync(learnPaths(root).base, { recursive: true });
+  const old = new DatabaseSync(learnPaths(root).db);
+  old.exec(`PRAGMA application_id = ${0x41495645}; PRAGMA user_version = 3;
+    CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0, due_at INTEGER, not_before INTEGER DEFAULT 0, blocked TEXT);
+    CREATE TABLE captures(session TEXT PRIMARY KEY, path TEXT, off INTEGER, anchor TEXT);
+    CREATE TABLE gaps(session TEXT, seq INTEGER, bytes INTEGER, at INTEGER, PRIMARY KEY(session, seq));
+    CREATE TABLE occurrences(id INTEGER PRIMARY KEY AUTOINCREMENT, harness TEXT NOT NULL, session TEXT NOT NULL, uuid TEXT NOT NULL, seq INTEGER, ts TEXT, scope TEXT NOT NULL, src_session TEXT, cli TEXT, contract INTEGER, text TEXT, size INTEGER DEFAULT 0, done_to INTEGER DEFAULT 0, state TEXT DEFAULT 'pending', attempts INTEGER DEFAULT 0, not_before INTEGER DEFAULT 0, at INTEGER, UNIQUE(harness, session, uuid));
+    CREATE TABLE secrets(h TEXT PRIMARY KEY);
+    CREATE TABLE items(id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT, scope TEXT, key TEXT UNIQUE, state TEXT, rev INTEGER DEFAULT 0, not_before INTEGER DEFAULT 0, body TEXT, result TEXT, at INTEGER, done_at INTEGER);
+    CREATE TABLE seen_candidates(session TEXT, h TEXT, PRIMARY KEY(session, h));
+    CREATE TABLE claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
+    CREATE TABLE ledger(day TEXT, session TEXT, n INTEGER DEFAULT 0, cost REAL DEFAULT 0, last_at INTEGER DEFAULT 0, PRIMARY KEY(day, session));
+    CREATE TABLE counters(session TEXT, code TEXT, n INTEGER DEFAULT 0, PRIMARY KEY(session, code));
+    CREATE TABLE failures(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, code TEXT);
+    INSERT INTO meta VALUES('salt', 'abc123');
+    INSERT INTO secrets VALUES('feedface');
+    INSERT INTO occurrences(harness, session, uuid, seq, ts, scope, src_session, text, size, state, at) VALUES
+      ('claude-code', 'k1', 'u1', 0, '2026-01-02T10:00:00+02:00', 'operator', NULL, 'I always want warm replies.', 27, 'pending', 1),
+      ('claude-code', 'k1', 'u2', 1, NULL, 'operator', 'orig-chat', 'My goal is to finish the report.', 33, 'pending', 2),
+      ('claude-code', 'k1', 'u3', 2, NULL, 'workspace:alpha', NULL, NULL, 0, 'done', 3);
+    INSERT INTO items(session, scope, key, state, body, at) VALUES('k1', 'operator', 'key1', 'done', '{"statement":"kept"}', 5);
+    INSERT INTO seen_candidates VALUES('k1', 'oldhash');`);
+  old.close();
+  const db = await openStore(root);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.deepEqual(db.prepare('SELECT uuid, origin, ts_ms, state FROM occurrences ORDER BY id').all().map((r) => `${r.uuid}|${r.origin === 'k1' ? 'k1' : 'sha'}|${r.ts_ms}|${r.state}`), ['u1|k1|1767340800000|pending', 'u2|sha|null|pending', 'u3|k1|null|done']);
+  assert.equal(db.prepare("SELECT v FROM meta WHERE k = 'salt'").get().v, 'abc123');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM secrets').get().n, 1);
+  assert.equal(JSON.parse(db.prepare('SELECT body FROM items').get().body).statement, 'kept');
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM seen_candidates').get().n, 0); // the meaning of those hashes changed: reviews simply ask again
+  assert.ok(db.prepare("SELECT name FROM pragma_table_info('gaps')").all().some((c) => c.name === 'resolved'));
+  db.close();
+  const again = await openStore(root);
+  assert.equal(again.prepare('SELECT COUNT(*) AS n FROM occurrences').get().n, 3);
+  again.close();
+});
+
+test('storage that cannot be relied on is refused unless the member explicitly accepts the risk; independent health conditions never overwrite each other', async () => {
+  const synced = tempDir('aiverse-learn-');
+  const core_ = path.join(synced, 'Dropbox', 'Core');
+  fs.mkdirSync(core_, { recursive: true });
+  await assert.rejects(openStore(core_, { config: { accept_storage_risk: false } }), (error) => error.code === 'storage_unsafe');
+  assert.equal(fs.existsSync(path.join(core_, 'runtime')), false); // nothing was created
+  (await openStore(core_, { config: { accept_storage_risk: true } })).close();
+  const here = core({ accept_storage_risk: false });
+  const verdict = await openStore(here, { config: loadConfig(here) }).then((d) => { d.close(); return 'opens'; }, (error) => error.code);
+  const version = (() => { const d = new DatabaseSync(':memory:'); const v = d.prepare('SELECT sqlite_version() AS v').get().v; d.close(); return v; })();
+  assert.equal(verdict, sqliteTooOld(version) ? 'storage_unsafe' : 'opens'); // this machine's SQLite decides, by the documented rule
+  // twenty processes each raise a different condition at the same moment: none is lost
+  const root = core();
+  const codes = Array.from({ length: 20 }, (_, i) => `condition_${i}`);
+  const results = await Promise.all(codes.map((code) => new Promise((resolve) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', `import { setStatus } from ${JSON.stringify(pathToFileURL(path.join(root, 'scripts', 'learn-common.mjs')).href)}; setStatus(${JSON.stringify(root)}, ${JSON.stringify(code)});`], { stdio: 'ignore' });
+    child.on('exit', resolve);
+  })));
+  assert.ok(results.every((c) => c === 0));
+  assert.deepEqual(readStatus(root), [...codes].sort());
 });

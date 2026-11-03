@@ -394,7 +394,7 @@ test('the real hook starts a real detached worker that finishes the review on it
 test('shipped Claude settings only wire the hooks; learning is dormant until configured', () => {
   const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
   assert.equal('autoMemoryEnabled' in settings, false);
-  assert.deepEqual(Object.keys(settings.hooks).sort(), ['PreCompact', 'SessionEnd', 'SessionStart', 'Stop']);
+  assert.deepEqual(Object.keys(settings.hooks).sort(), ['PreCompact', 'SessionEnd', 'SessionStart', 'Stop', 'UserPromptSubmit']);
   for (const groups of Object.values(settings.hooks)) assert.match(groups[0].hooks[0].command, /scripts\/learn-hook\.mjs/);
   assert.ok(buildPrompt(REPO, 'operator', {}, [{ id: 'o1', text: 'hi' }]).includes('[o1] operator: hi'));
 });
@@ -611,4 +611,78 @@ test('the worker lease outlives the longest synchronous review, and the storage 
 test('the test suite cannot reach the real reviewer: the stand-in heads the PATH and was never called', () => {
   const found = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], { encoding: 'utf8' });
   assert.match(found.stdout.split('\n')[0], /aiverse-sentinel-/);
+});
+
+test('an effect is admitted only under the mode it was prepared under: a switch to off after the claim and before the filing stops it, and re-enabling files it once', async () => {
+  const root = core();
+  chat(root, [u(root, 'u1', 'I always want a warm tone in client emails.')]);
+  warm();
+  const result = await run(root, { drain: true, hooks: { afterClaim: () => setMode(root, 'off') } });
+  assert.equal(result.outcomes.at(-1).state, 'disabled');
+  assert.equal(inboxFiles(root).length, 0);
+  assert.deepEqual(items(root).map((i) => i.state), ['pending']); // the claim was put back
+  assert.equal(items(root)[0].result, null);
+  setMode(root, 'propose');
+  await drain(root);
+  assert.equal(inboxFiles(root).length, 1);
+  assert.deepEqual(items(root).map((i) => i.state), ['done']);
+});
+
+test('continuation state is scoped to the evidence: identical statements in two workspaces both survive, and a statement rejected on one record is judged afresh on another', async () => {
+  const root = core({ window_chars: 1000 });
+  workspace(root, 'alpha');
+  workspace(root, 'beta');
+  const said = 'I always want a warm tone in client emails.';
+  chat(root, [u(root, 'a1', said, path.join(root, 'workspaces', 'alpha')), u(root, 'b1', said, path.join(root, 'workspaces', 'beta'))]);
+  review([candidate('preference', said, said, 'o1')], '.workspace_alpha');
+  review([candidate('preference', said, said, 'o2')], '.workspace_beta');
+  await drain(root);
+  assert.deepEqual(items(root).map((i) => [i.scope, i.state]), [['workspace:alpha', 'done'], ['workspace:beta', 'done']]);
+  assert.equal(inboxFiles(root, 'workspaces/alpha/inbox').length + inboxFiles(root, 'workspaces/beta/inbox').length, 2);
+  assert.equal(peek(root, "SELECT COUNT(*) AS n FROM occurrences WHERE state = 'done'")[0].n, 2);
+  // the same statement is rejected for lack of confidence on one record, then stands on a later one
+  const other = core();
+  chat(other, [u(other, 'x1', said)]);
+  review([candidate('preference', said, said, 'o1', { confidence: 0.2 })]);
+  await drain(other);
+  assert.equal(items(other).length, 0);
+  appendTranscript(path.join(other, 'session-1.jsonl'), [u(other, 'x2', `${said} Really.`)]);
+  hookEvent(other, 'end', session(other));
+  review([candidate('preference', said, said, `o${peek(other, "SELECT id FROM occurrences WHERE uuid = 'x2'")[0].id}`)]);
+  await drain(other);
+  assert.deepEqual(items(other).map((i) => [i.body.uuid, i.state]), [['x2', 'done']]);
+  assert.deepEqual(peek(other, 'SELECT uuid, verdict FROM seen_candidates ORDER BY at').map((r) => `${r.uuid}:${r.verdict}`), ['x1:rejected:low_confidence', 'x2:accepted']);
+});
+
+test('a restart after a page of rejected candidates continues from what the reviewer is TOLD was decided, not from a call count', async () => {
+  const root = core();
+  chat(root, [u(root, 'u1', 'I always want FACT1 notes.')]);
+  process.env.FAKE_MODE = 'rejects';
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_reserve:2' }); // killed after the first page (six rejected) was stored
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  assert.equal(peek(root, "SELECT COUNT(*) AS n FROM seen_candidates WHERE verdict LIKE 'rejected:%'")[0].n, 6);
+  assert.equal(items(root).length, 0);
+  timePasses(root);
+  workerProcess(root);
+  process.env.FAKE_MODE = 'ok';
+  const told = shown({ prompt: calls().at(-1).prompt.replace('WHAT THE OPERATOR WROTE', 'X\\nWHAT THE OPERATOR WROTE') });
+  assert.ok(calls().at(-1).prompt.includes('I always want junk0 notes.'), 'the decided statements are supplied in the prompt');
+  assert.ok(told.length > 0);
+  assert.deepEqual(items(root).map((i) => i.body.statement), ['I always want FACT1 notes.']);
+  assert.equal(peek(root, 'SELECT state FROM occurrences')[0].state, 'done');
+});
+
+test('a predecessor that arrives after its correction was already processed is kept, flagged as late, and carries its own instant', async () => {
+  const root = core({ window_chars: 1000 });
+  const old = 'I always want short answers in client emails.';
+  const fix = 'Actually I always want detailed answers in client emails.';
+  await capture(root, 's', [{ uuid: 'fix', ts: '2026-01-02T12:00:00Z', text: fix }]);
+  review([candidate('preference', 'I always want detailed answers in client emails.', 'I always want detailed answers in client emails.', 'o1')]);
+  await drain(root);
+  await capture(root, 's', [{ uuid: 'old', ts: '2026-01-02T09:00:00Z', text: old }]);
+  review([candidate('preference', 'I always want short answers in client emails.', 'I always want short answers in client emails.', 'o2')]);
+  await drain(root);
+  const all = items(root);
+  assert.deepEqual(all.map((i) => [i.body.uuid, Boolean(i.body.late)]), [['fix', false], ['old', true]]);
+  assert.deepEqual(all.map((i) => i.body.ts_ms), [Date.parse('2026-01-02T12:00:00Z'), Date.parse('2026-01-02T09:00:00Z')]);
 });

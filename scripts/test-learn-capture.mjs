@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { learnPaths, readStatus, resolveScope } from './learn-common.mjs';
+import { learnPaths, readStatus, resolveScope, sessionKey } from './learn-common.mjs';
 import { BATCH_BYTES, CONTRACT_VERSION, humanRecord, scanTranscript, secretValues, tokensOf } from './learn-capture.mjs';
 import { handleEvent } from './learn-hook.mjs';
 import { isSecretText, openStore } from './learn-store.mjs';
@@ -277,4 +277,73 @@ test('an explicit declaration keeps its value however short or ordinary; metadat
   assert.equal((await handleEvent(root, 'end', s, Date.now(), noStart)).via, 'skipped'); // not a session id: nothing is captured, nothing is written
   assert.equal(allText(root).includes('zeta99'), false);
   assert.equal(dumpDb(root).includes('zeta99'), false);
+});
+
+test('a record too large to hold is an unresolved gap in ANY property order or shape; generated and assistant lines are not; the state stays outstanding', async () => {
+  const root = core();
+  const file = path.join(root, 'big.jsonl');
+  const big = 'word '.repeat(2200000); // over the 8 MB a record may be
+  writeTranscript(file, [
+    JSON.stringify({ message: { role: 'user', content: big }, type: 'user', uuid: 'reordered' }), // the type comes AFTER the content
+    JSON.stringify({ type: 'assistant', uuid: 'a', message: { content: big } }),
+    JSON.stringify({ uuid: 'tool', message: { content: [{ type: 'tool_result', content: big }] }, type: 'user', toolUseResult: {} }),
+    JSON.stringify({ mystery: big }), // a shape nobody can tell
+    record(root, 'small', 'I always want warm replies.'),
+  ]);
+  const scanned = scanTranscript(file);
+  assert.deepEqual(scanned.gaps.map((g) => g.seq === 0), [true, false]); // the reordered user record and the unreadable shape
+  assert.deepEqual(scanned.records.map((r) => r.uuid), ['small']);
+  const s = { session_id: 's', transcript_path: file, cwd: root };
+  assert.equal((await handleEvent(root, 'stop', s, Date.now(), noStart)).ok, true);
+  assert.ok(readStatus(root).includes('capture_incomplete'));
+  // a later scan that sees no gap does not make the outstanding one disappear
+  const clean = path.join(root, 'clean.jsonl');
+  writeTranscript(clean, [record(root, 'c1', 'I prefer short answers.')]);
+  await handleEvent(root, 'stop', { session_id: 's2', transcript_path: clean, cwd: root }, Date.now(), noStart);
+  assert.ok(readStatus(root).includes('capture_incomplete'));
+  assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM gaps WHERE resolved = 0')[0].n, 2);
+  fs.rmSync(file);
+});
+
+test('the prompt boundary captures early, silently and fast: an interrupted turn (no Stop ever fires) is already in the journal, nothing is printed, no worker is started, and it stops after its time budget', async () => {
+  const root = core();
+  const file = path.join(root, 't.jsonl');
+  const s = { session_id: 's', transcript_path: file, cwd: root };
+  writeTranscript(file, [record(root, 'i1', 'I always want warm replies.')]); // the previous turn was interrupted: no Stop
+  let started = 0;
+  const out = await handleEvent(root, 'prompt', s, Date.now(), () => { started += 1; });
+  assert.deepEqual([out.ok, out.via, started], [true, 'journal', 0]);
+  assert.deepEqual(peek(root, 'SELECT uuid FROM occurrences').map((r) => r.uuid), ['i1']);
+  assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM sessions')[0].n, 0); // evidence, but no wake-up
+  // as a program: no output at all
+  const run1 = spawnSync(process.execPath, [path.join(root, 'scripts', 'learn-hook.mjs'), 'prompt'], { input: JSON.stringify({ ...s, prompt: 'a new request' }), encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+  assert.deepEqual([run1.status, run1.stdout, run1.stderr], [0, '', '']);
+  // bounded: after its budget no further batch is started (the read position of the finished ones is already committed)
+  let batches = 0;
+  const slow = (f, o) => { batches += 1; const until = Date.now() + 3200; while (Date.now() < until) {} return { records: [], gaps: [], end: o.from + 1, anchor: '', done: false }; };
+  await handleEvent(root, 'prompt', { ...s, session_id: 'slow' }, Date.now(), noStart, { scan: slow });
+  assert.equal(batches, 1);
+});
+
+test('switching learning off while a transcript is being read writes nothing at all', async () => {
+  const root = core();
+  const file = path.join(root, 't.jsonl');
+  writeTranscript(file, [record(root, 'u1', 'I always want warm replies.')]);
+  const scan = (f, o) => { const r = scanTranscript(f, o); setMode(root, 'off'); return r; }; // off right after the read, before the write
+  const out = await handleEvent(root, 'end', { session_id: 's', transcript_path: file, cwd: root }, Date.now(), noStart, { scan });
+  assert.deepEqual([out.ok, out.via], [true, 'skipped']);
+  assert.deepEqual([peek(root, 'SELECT COUNT(*) AS n FROM occurrences')[0].n, peek(root, 'SELECT COUNT(*) AS n FROM captures')[0].n, peek(root, 'SELECT COUNT(*) AS n FROM sessions')[0].n], [0, 0, 0]);
+});
+
+test('provenance by the ORIGINAL source: a forked or replayed copy is the same record, and timestamps with offsets are compared as instants', async () => {
+  const root = core();
+  await capture(root, 'reader-one', [{ uuid: 'orig-1', src_session: 'original-chat', text: 'I always want warm replies.' }]);
+  await capture(root, 'reader-two', [{ uuid: 'orig-1', src_session: 'original-chat', text: 'I always want warm replies.' }]); // a fork that copied the record
+  await capture(root, 'reader-two', [{ uuid: 'own-1', text: 'I always want warm replies.' }]);
+  assert.deepEqual(peek(root, 'SELECT uuid, origin FROM occurrences ORDER BY id').map((r) => `${r.uuid}:${r.origin}`), [`orig-1:${sessionKey('original-chat')}`, `own-1:${sessionKey('reader-two')}`]);
+  await capture(root, 'order', [
+    { uuid: 'later', ts: '2026-01-02T10:00:00+02:00', text: 'second in time, written first' }, // 08:00 UTC
+    { uuid: 'earlier', ts: '2026-01-02T07:30:00Z', text: 'first in time' },
+  ]);
+  assert.deepEqual(peek(root, "SELECT uuid FROM occurrences WHERE session != 'x' AND uuid IN ('later', 'earlier') ORDER BY ts_ms").map((r) => r.uuid), ['earlier', 'later']);
 });

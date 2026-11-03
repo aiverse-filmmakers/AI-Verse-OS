@@ -313,8 +313,8 @@ function storePage(ctx, session, win, fresh, planned, more) {
     const count = db.prepare('INSERT INTO counters(session, code, n) VALUES(?, ?, 1) ON CONFLICT(session, code) DO UPDATE SET n = n + 1');
     const decided = db.prepare('INSERT OR IGNORE INTO seen_candidates(session, h, uuid, verdict, statement, at) VALUES(?, ?, ?, ?, ?, ?)');
     for (const [index, item] of planned.items.entries()) {
-      const seg = win.segs.find((s) => s.id === item.message_id);
       const candidate = fresh[index];
+      const seg = win.segs.find((s) => s.id === (item.message_id ?? candidate.evidence?.message_id)); // a rejected result carries no message id of its own
       // every persisted content field is screened with the one credential contract; an excluded source yields nothing
       const secret = isSecretText(db, `${candidate.statement}\n${candidate.evidence?.quote ?? ''}\n${candidate.replaces ?? ''}`);
       const verdict = item.disposition === 'rejected' ? `rejected:${item.reason}` : secret ? 'rejected:secret_in_source' : !seg || !live.has(seg.occurrence) ? 'rejected:source_excluded' : 'accepted';

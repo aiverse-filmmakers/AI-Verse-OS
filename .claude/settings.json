@@ -43,6 +43,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/learn-hook.mjs\" prompt",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

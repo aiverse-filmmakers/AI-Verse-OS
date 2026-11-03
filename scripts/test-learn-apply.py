@@ -258,10 +258,13 @@ class Commit(unittest.TestCase):
     def test_fence_stops_the_write_when_the_deadline_passed_the_parent_changed_or_the_switch_is_off(self):
         host = FakeHost()
         late = committed(cand(), host=host, deadline=1)
+        self.assertEqual(host.calls, [])
         self.assertEqual((late["state"], late["reason"]), ("proposed", "fenced"))
-        orphan = committed(cand(), host=host, parent_pid=1 if os.getppid() != 1 else 2)
         if os.name == "posix":
+            orphan = committed(cand(), host=host, parent_pid=1 if os.getppid() != 1 else 2)
             self.assertEqual(orphan["reason"], "fenced")
+            self.assertEqual(host.calls, [])
+        host = FakeHost()
         root = Path(tempfile.mkdtemp())
         item = plan_one(cand())
         (root / ".aiverse" / "learn").mkdir(parents=True)

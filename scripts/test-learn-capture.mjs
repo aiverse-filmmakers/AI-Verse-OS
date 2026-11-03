@@ -106,7 +106,8 @@ test('a tail anchor is only a shortcut: the Stop fast path can miss a replaced e
 test('one credential contract: declared values, short PINs, punctuation, assignment and URL forms and Unicode forms are caught everywhere, and the value is stored nowhere', async () => {
   assert.ok(secretValues('My pin is 123.').has('123'));
   assert.ok(secretValues('password: p@ss!w0rd#').has('p@ss!w0rd#'));
-  assert.equal(secretValues('The password is required for login.').size, 0); // an ordinary word is not a value
+  assert.ok(secretValues('The password is required for login.').has('required')); // a declaration is taken at its word, even an ordinary one (a known false positive: it only drops more)
+  assert.equal(secretValues('password purple').size, 0); // undeclared and not credential-shaped: not a value
   assert.equal(secretValues('token limits are fine').size, 0);
   assert.ok(tokensOf('Use value=lilac7 to log in.').has('lilac7'));
   assert.ok(tokensOf('open https://example.com/login?user=a&pw=lilac7&x=1').has('lilac7'));
@@ -247,4 +248,33 @@ test('the hook program says so and exits 1 when nothing could be written, and ex
   const fine = run1();
   assert.deepEqual([fine.status, fine.stdout, fine.stderr], [0, '', '']);
   assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM occurrences')[0].n, 1);
+});
+
+test('an explicit declaration keeps its value however short or ordinary; metadata that is free text is refused; nothing leaks, now or after a late discovery', async () => {
+  const root = core();
+  review([]);
+  // short and ordinary declared values: the later use is dropped
+  await capture(root, 'pin', [{ uuid: 'p1', text: 'My pin is 12.' }, { uuid: 'p2', text: 'Use 12 to log in.' }]);
+  await capture(root, 'word', [{ uuid: 'w1', text: 'My password is true.' }, { uuid: 'w2', text: 'Use true to log in.' }]);
+  assert.deepEqual(peek(root, 'SELECT uuid, state FROM occurrences ORDER BY id').map((r) => `${r.uuid}:${r.state}`), ['p1:excluded', 'p2:excluded', 'w1:excluded', 'w2:excluded']);
+  for (const text of ['Use 12 to log in', 'Use true to log in', 'My pin is 12', 'My password is true']) assert.equal(allText(root).includes(text), false, text);
+  // a bare function word is not a credential, and an undeclared ordinary word is not either
+  assert.equal(secretValues('The token is a nuisance').size > 0, false);
+  assert.equal(secretValues('password required').size, 0);
+  // discovered later: the earlier pending text goes too
+  await capture(root, 'late', [{ uuid: 'l1', text: 'Remember maple55 for the portal.' }]);
+  await capture(root, 'late2', [{ uuid: 'l2', text: 'My password is maple55.' }]);
+  assert.equal(peek(root, "SELECT state FROM occurrences WHERE uuid = 'l1'")[0].state, 'excluded');
+  assert.equal(allText(root).includes('maple55'), false);
+  // metadata: a sentence is not a session id, a path is not a sentence
+  const phrase = 'My password is zeta99.';
+  assert.equal(humanRecord({ type: 'user', uuid: 'x', sessionId: phrase, version: phrase, timestamp: phrase, message: { content: 'I always want warm replies.' } }).src_session, null);
+  await assert.rejects(capture(root, phrase, [{ uuid: 'z1', text: 'I always want warm replies.' }]), (error) => error.code === 'invalid_source');
+  await capture(root, 'meta', [{ uuid: 'm1', text: 'I always want warm replies.', src_session: phrase, cli: phrase, ts: phrase }]);
+  assert.deepEqual({ ...peek(root, "SELECT src_session, cli, ts FROM occurrences WHERE uuid = 'm1'")[0] }, { src_session: null, cli: null, ts: null });
+  const s = { session_id: phrase, transcript_path: path.join(root, 'x.jsonl'), cwd: root };
+  writeTranscript(s.transcript_path, [record(root, 'u1', 'I always want warm replies.')]);
+  assert.equal((await handleEvent(root, 'end', s, Date.now(), noStart)).via, 'skipped'); // not a session id: nothing is captured, nothing is written
+  assert.equal(allText(root).includes('zeta99'), false);
+  assert.equal(dumpDb(root).includes('zeta99'), false);
 });

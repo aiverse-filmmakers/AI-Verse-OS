@@ -197,7 +197,8 @@ function runtimePaths(root) {
   const queue = assertSafeDirectory(path.join(base, 'queue'), base, 'write-command queue', { create: true });
   const receipts = assertSafeDirectory(path.join(base, 'receipts'), base, 'write-command receipts', { create: true });
   const tmp = assertSafeDirectory(path.join(base, 'tmp'), base, 'write-command tmp', { create: true });
-  return { runtime, base, queue, receipts, tmp };
+  const withdrawn = assertSafeDirectory(path.join(base, 'withdrawn'), base, 'write-command withdrawals', { create: true });
+  return { runtime, base, queue, receipts, tmp, withdrawn };
 }
 
 function safeReadJson(file, boundary, label) {
@@ -229,16 +230,31 @@ function writeExclusiveJson(file, payload, tmpDir) {
   }
   try {
     fs.linkSync(tmp, file);
+    fsyncDir(path.dirname(file));
   } finally {
     fs.rmSync(tmp, { force: true });
   }
 }
 
+// Directory entries are made durable where the platform supports it (a rename or link is not safe until its directory is).
+function fsyncDir(dir) {
+  if (process.platform === 'win32') return;
+  const fd = fs.openSync(dir, 'r');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
+
 function replaceJson(file, payload) {
   const dir = path.dirname(file);
   const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
+  const fd = fs.openSync(tmp, 'w', 0o600);
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    fs.fsyncSync(fd); // the content is on disk before it replaces anything
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, file);
+  fsyncDir(dir);
 }
 
 function commandKey(request) {
@@ -309,6 +325,93 @@ function receiptFor(request, key, permission, queuedAt) {
   };
 }
 
+// -- withdrawal: a terminal tombstone bound to the original operation ---------------------------------------------------
+//
+// A proposal this pipeline routed can be withdrawn when its text turns out to hold a credential. The tombstone is written FIRST and
+// atomically; from then on enqueue, dispatch and every recovery path refuse to recreate the content, and each of them finishes the
+// redaction if a process died part-way. Redaction is explicit: the stored request is removed (never left with content that no longer
+// matches its fingerprint), the inbox candidate keeps only its kind and a `redacted` marker, the receipt says `withdrawn`, and every
+// temporary copy of the payload is removed.
+
+export const LEARNING_REQUESTER = 'ai-verse-os.auto-learning';
+const LEARNING_KIND = 'claude-code-learning-proposal';
+
+function readTombstone(paths, key) {
+  return safeReadJson(path.join(paths.withdrawn, `${key}.json`), paths.withdrawn, 'write command withdrawal');
+}
+
+function withdrawnResult(tomb) {
+  return {
+    schema_version: WRITE_COMMAND_SCHEMA_VERSION,
+    provider: WRITE_COMMAND_PROVIDER,
+    status: 'withdrawn',
+    command_id: tomb.command_id,
+    request_fingerprint: tomb.request_fingerprint,
+    idempotency_key: tomb.idempotency_key,
+    scope: tomb.scope,
+    effect_occurred: false,
+    canonical_effect_occurred: false,
+    withdrawn_at: tomb.withdrawn_at,
+    replayed: true,
+  };
+}
+
+// Every temporary file that could still hold a copy of this operation's payload: the private creation names and the replacement names.
+function sweepTemps(root, paths, key, scope) {
+  const prefixes = [`.${key}.json.`, `.write-candidate-${key.slice(0, 32)}.json.`];
+  const dirs = [paths.tmp, paths.queue, paths.receipts];
+  try { dirs.push(ownerInbox(root, scope)); } catch {}
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) if (prefixes.some((p) => name.startsWith(p)) && /\.(?:new|tmp)$/.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
+// Idempotent and resumable: any step can be repeated after a kill, in any order, and the result is the same.
+function finishRedaction(root, paths, tomb) {
+  const key = commandKey(tomb);
+  const stamp = tomb.withdrawn_at;
+  let inbox = null;
+  try { inbox = ownerInbox(root, tomb.scope); } catch {}
+  const candidatePath = inbox && path.join(inbox, `write-candidate-${key.slice(0, 32)}.json`);
+  const candidate = candidatePath && safeReadJson(candidatePath, inbox, 'routed candidate');
+  if (candidate && candidate.status !== 'withdrawn') {
+    replaceJson(candidatePath, {
+      schema_version: candidate.schema_version, provider: candidate.provider, canonical_owner: candidate.canonical_owner, canonical_layer: candidate.canonical_layer,
+      status: 'withdrawn', request_fingerprint: tomb.request_fingerprint, idempotency_key: tomb.idempotency_key, scope: tomb.scope, operation: candidate.operation,
+      candidate: { candidate_kind: candidate.candidate?.candidate_kind ?? LEARNING_KIND, redacted: true }, requested_by: candidate.requested_by,
+      promotion_occurred: false, redacted: true, withdrawn_at: stamp,
+    });
+  }
+  const commandPath = path.join(paths.queue, `${key}.json`);
+  const command = safeReadJson(commandPath, paths.queue, 'queued write command');
+  if (command && command.status !== 'withdrawn') {
+    replaceJson(commandPath, {
+      schema_version: command.schema_version, provider: command.provider, status: 'withdrawn', command_id: command.command_id,
+      request_fingerprint: tomb.request_fingerprint, scope: tomb.scope, idempotency_key: tomb.idempotency_key, redacted: true, withdrawn_at: stamp,
+    });
+  }
+  const receiptPath = path.join(paths.receipts, `${key}.json`);
+  const receipt = safeReadJson(receiptPath, paths.receipts, 'write command receipt');
+  if (receipt && receipt.status !== 'withdrawn') {
+    replaceJson(receiptPath, { ...receipt, status: 'withdrawn', result: { queue_state: 'withdrawn', canonical_handler_dispatched: Boolean(candidate), redacted: true }, withdrawn_at: stamp });
+  }
+  sweepTemps(root, paths, key, tomb.scope);
+}
+
+// Payloads of operations that died between a private name and its final one, long after any live writer could be using them.
+function sweepOrphanTemps(paths) {
+  let names = [];
+  try { names = fs.readdirSync(paths.tmp); } catch { return; }
+  for (const name of names) {
+    try {
+      const file = path.join(paths.tmp, name);
+      if (name.startsWith('.') && name.endsWith('.new') && Date.now() - fs.statSync(file).mtimeMs > 10 * 60 * 1000) fs.rmSync(file, { force: true });
+    } catch {}
+  }
+}
+
 function existingResult(paths, key, request) {
   const commandPath = path.join(paths.queue, `${key}.json`);
   const receiptPath = path.join(paths.receipts, `${key}.json`);
@@ -349,6 +452,13 @@ export function enqueueWriteCommand({ osRoot = process.cwd(), request }) {
 
   const paths = runtimePaths(root);
   const key = commandKey(normalized);
+  sweepOrphanTemps(paths);
+  const tomb = readTombstone(paths, key);
+  if (tomb) {
+    if (tomb.request_fingerprint !== normalized.request_fingerprint) fail('idempotency key is already bound to a different write command', 5);
+    finishRedaction(root, paths, tomb);
+    return withdrawnResult(tomb);
+  }
   const replay = existingResult(paths, key, normalized);
   if (replay) return replay;
 
@@ -452,6 +562,12 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
   const normalized = validateWriteCommandRequest(request);
   const paths = runtimePaths(root);
   const key = commandKey(normalized);
+  const tomb = readTombstone(paths, key);
+  if (tomb) {
+    if (tomb.request_fingerprint !== normalized.request_fingerprint) fail('idempotency key is already bound to a different write command', 5);
+    finishRedaction(root, paths, tomb);
+    return withdrawnResult(tomb);
+  }
   const replay = completedResult(paths, key, normalized);
   const commandPath = path.join(paths.queue, `${key}.json`);
   const receiptPath = path.join(paths.receipts, `${key}.json`);
@@ -509,6 +625,12 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
   };
 
   if (!existing) writeExclusiveJson(candidatePath, routed, paths.tmp);
+  // A withdrawal that landed while the candidate was being created: the candidate is redacted and nothing is completed.
+  const late = readTombstone(paths, key);
+  if (late) {
+    finishRedaction(root, paths, late);
+    return withdrawnResult(late);
+  }
 
   const completedAt = new Date().toISOString();
   const completed = {
@@ -545,34 +667,53 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
   return { ...completed, replayed: false };
 }
 
-// Withdraws a proposal this pipeline routed: its content is replaced in the inbox candidate and in the stored request, and it is
-// marked withdrawn; nothing else is touched. Only candidates requested by the learning pipeline, for the exact request on file,
-// inside the owner's own inbox, are eligible. Returns { state: 'withdrawn' | 'absent' }.
-export function withdrawCandidate({ osRoot = process.cwd(), scope, idempotency_key: idempotencyKey, requested_by: requestedBy }) {
+// Withdraws a proposal this pipeline routed. Restricted to the learning pipeline's own proposals that are still plain, unclassified,
+// unpromoted inbox candidates; a record of any other owner or kind, or one that has been classified or promoted, is refused untouched.
+// Idempotent: running it again (after a kill, say) finishes the redaction. Returns { state: 'withdrawn' | 'absent' }; `absent` means
+// no command was ever created under that key (only stray temporary copies, if any, are removed).
+export function withdrawCandidate({ osRoot = process.cwd(), scope, idempotency_key: idempotencyKey }) {
   const root = validateRoot(osRoot);
-  if (!SCOPE.test(scope) || typeof idempotencyKey !== 'string') fail('withdraw needs a scope and an idempotency key', 7);
+  if (!SCOPE.test(scope) || typeof idempotencyKey !== 'string' || !idempotencyKey) fail('withdraw needs a scope and an idempotency key', 7);
   const paths = runtimePaths(root);
   const key = commandKey({ scope, idempotency_key: idempotencyKey });
-  const commandPath = path.join(paths.queue, `${key}.json`);
-  const commandRecord = safeReadJson(commandPath, paths.queue, 'queued write command');
-  if (!commandRecord) return { state: 'absent' };
-  const request = commandRecord.request;
-  if (!request || request.requested_by !== requestedBy || request.operation !== 'candidate.route') fail('only a candidate routed by the requesting owner can be withdrawn', 6);
-  evaluatePermission(root, request, 'write-command.withdraw', 'modify_canonical_state');
-  const redacted = { candidate_kind: request.parameters.candidate_kind, summary: 'Withdrawn: this proposal was removed because it contained a credential.', refs: [] };
-  const inbox = ownerInbox(root, scope);
-  const candidatePath = path.join(inbox, `write-candidate-${key.slice(0, 32)}.json`);
-  const existing = safeReadJson(candidatePath, inbox, 'routed candidate');
-  if (existing) {
-    if (existing.request_fingerprint !== request.request_fingerprint) fail('canonical inbox record is bound to a different request', 5);
-    replaceJson(candidatePath, { ...existing, status: 'withdrawn', candidate: redacted, withdrawn_at: new Date().toISOString() });
+  const already = readTombstone(paths, key);
+  if (already) {
+    finishRedaction(root, paths, already);
+    return { state: 'withdrawn' };
   }
-  replaceJson(commandPath, { ...commandRecord, request: { ...request, parameters: redacted }, withdrawn: true });
-  return { state: existing ? 'withdrawn' : 'absent' };
+  const commandPath = path.join(paths.queue, `${key}.json`);
+  const command = safeReadJson(commandPath, paths.queue, 'queued write command');
+  const receipt = safeReadJson(path.join(paths.receipts, `${key}.json`), paths.receipts, 'write command receipt');
+  if (!command && !receipt) {
+    sweepTemps(root, paths, key, scope);
+    return { state: 'absent' };
+  }
+  const request = command?.request;
+  if (!request || request.requested_by !== LEARNING_REQUESTER || request.operation !== 'candidate.route' || request.parameters?.candidate_kind !== LEARNING_KIND || request.scope !== scope) {
+    fail('only a learning proposal can be withdrawn by the learning pipeline', 6);
+  }
+  const inbox = ownerInbox(root, scope);
+  const candidate = safeReadJson(path.join(inbox, `write-candidate-${key.slice(0, 32)}.json`), inbox, 'routed candidate');
+  if (candidate && (candidate.request_fingerprint !== request.request_fingerprint || candidate.status !== 'unclassified' || candidate.promotion_occurred !== false || candidate.requested_by !== LEARNING_REQUESTER)) {
+    fail('the routed candidate is not an eligible learning proposal', 6);
+  }
+  evaluatePermission(root, request, 'write-command.withdraw', 'modify_canonical_state');
+  const tomb = {
+    schema_version: WRITE_COMMAND_SCHEMA_VERSION, provider: WRITE_COMMAND_PROVIDER, command_id: command.command_id, request_fingerprint: request.request_fingerprint,
+    scope, idempotency_key: idempotencyKey, requested_by: LEARNING_REQUESTER, withdrawn_at: new Date().toISOString(),
+  };
+  try {
+    writeExclusiveJson(path.join(paths.withdrawn, `${key}.json`), tomb, paths.tmp);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+  }
+  finishRedaction(root, paths, readTombstone(paths, key));
+  return { state: 'withdrawn' };
 }
 
 export function submitWriteCommand({ osRoot = process.cwd(), request }) {
-  enqueueWriteCommand({ osRoot, request });
+  const queued = enqueueWriteCommand({ osRoot, request });
+  if (queued.status === 'withdrawn') return queued;
   return dispatchWriteCommand({ osRoot, request });
 }
 

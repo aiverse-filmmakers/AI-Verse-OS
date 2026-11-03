@@ -147,6 +147,7 @@ export function submitInbox(root, scope, item, idempotency) {
   request.request_fingerprint = computeWriteCommandFingerprint(request);
   try {
     const done = submitWriteCommand({ osRoot: root, request });
+    if (done.status === 'withdrawn') return { ok: true, withdrawn: true }; // withdrawn before it could be filed: it stays withdrawn
     return { ok: true, receipt: { command_id: done.command_id, status: done.status, path: done.result?.path ?? null, completed_at: done.completed_at ?? null, request_fingerprint: done.request_fingerprint } };
   } catch {
     return { ok: false, code: 'inbox_failed' };
@@ -242,12 +243,20 @@ function reviewWindow(ctx, session) {
   const messages = win.segs.map((seg) => ({ id: seg.id, role: 'user', text: seg.text, full: seg.full, ts: seg.ts, start: seg.start }));
   const stored = callApplier(root, config, 'context', { scope: win.scope });
   if (!stored.ok) return failWindow(ctx, session, win, stored);
+  hooks.afterContext?.(win);
   const uuids = win.segs.map((seg) => seg.uuid);
   const seen = new Set(db.prepare('SELECT h FROM seen_candidates WHERE session = ?').all(session.key).map((r) => r.h));
   const reported = db.prepare('SELECT body FROM items WHERE session = ?').all(session.key).map((r) => JSON.parse(r.body)).filter((b) => uuids.includes(b.uuid)).map((b) => b.statement);
   let total = 0;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (guard()) return { state: 'disabled' };
+    // The text cached above may have been excluded (a credential found, say) while the context was loading or the last page ran:
+    // it is looked at again right before anything is sent, and a changed window is simply rebuilt on the next step.
+    const now_ = buildWindow(db, session.key, config.window_chars, now());
+    if (!now_ || now_.segs.map((x) => `${x.occurrence}:${x.start}:${x.end}`).join() !== win.segs.map((x) => `${x.occurrence}:${x.start}:${x.end}`).join() || now_.segs.some((x, i) => x.full !== win.segs[i].full)) {
+      db.prepare('UPDATE sessions SET not_before = 0, due_at = ? WHERE key = ?').run(now(), session.key);
+      return { state: 'continuing', items: total };
+    }
     const reservation = reserveReview(db, session.key, config, now(), ctx.drain || round > 0, () => !guard());
     if (!reservation.ok) {
       if (reservation.off) return { state: 'disabled' };
@@ -322,14 +331,21 @@ function storePage(ctx, session, win, fresh, planned, more) {
   });
 }
 
-// Removes from the inbox a proposal whose text turned out to hold a credential. The item keeps only its effect reference.
+// Removes from the inbox a proposal whose text turned out to hold a credential, whatever state its filing is in (not started, ambiguous,
+// done): the write-command owner records a terminal tombstone first, so nothing can recreate it. A proposal the owner will not
+// withdraw (another owner's, promoted) is left alone and reported as blocked.
 function withdrawItem(ctx, row) {
   const { root, db, now, guard } = ctx;
   if (guard()) return { state: 'disabled' };
   const effect = JSON.parse(row.result).effect;
   try {
-    withdrawCandidate({ osRoot: root, scope: effect.scope, idempotency_key: effect.idempotency_key, requested_by: REQUESTER });
-  } catch {
+    withdrawCandidate({ osRoot: root, scope: effect.scope, idempotency_key: effect.idempotency_key });
+  } catch (error) {
+    if (error?.exitCode === 6) {
+      db.prepare("UPDATE items SET state = 'withdraw_blocked', done_at = ? WHERE id = ?").run(now(), row.id);
+      setStatus(root, 'withdraw_blocked');
+      return { state: 'withdraw_blocked' };
+    }
     db.prepare('UPDATE items SET not_before = ? WHERE id = ?').run(now() + WAIT_MS, row.id);
     return { state: 'waiting', code: 'withdraw_failed' };
   }
@@ -368,10 +384,17 @@ function runItem(ctx, row) {
   const claimed = db.prepare("UPDATE items SET state = 'filing', result = ? WHERE id = ? AND state = 'pending' AND rev = ?").run(JSON.stringify({ effect }), row.id, row.rev);
   if (claimed.changes !== 1) return { state: 'revoked' }; // no longer what was planned: no effect
   crash('after_claim');
-  const filed = submitInbox(root, row.scope, result.inbox, idempotency);
+  hooks.afterClaim?.(row);
+  const filed = (hooks.submit ?? submitInbox)(root, row.scope, result.inbox, idempotency);
   if (!filed.ok) {
-    db.prepare("UPDATE items SET state = 'pending', result = NULL, not_before = ? WHERE id = ? AND state = 'filing'").run(now() + WAIT_MS, row.id);
+    // Ambiguous: the command or the inbox item may exist. The reference to it is KEPT, so it stays withdrawable and the retry (same key) reconciles it.
+    db.prepare("UPDATE items SET state = 'pending', not_before = ? WHERE id = ? AND state = 'filing'").run(now() + WAIT_MS, row.id);
     return { state: 'waiting', code: filed.code };
+  }
+  hooks.afterSubmit?.(row);
+  if (filed.withdrawn) { // the owner says it was withdrawn: the item is withdrawn too
+    db.prepare("UPDATE items SET state = 'withdrawn', done_at = ? WHERE id = ? AND state IN ('filing', 'withdraw_pending')").run(now(), row.id);
+    return { state: 'withdrawn' };
   }
   const done = db.prepare("UPDATE items SET state = 'done', result = ?, done_at = ? WHERE id = ? AND state = 'filing'").run(JSON.stringify({ ...outcome, effect, receipt: filed.receipt }), now(), row.id);
   if (done.changes !== 1) return withdrawItem(ctx, { ...row, result: JSON.stringify({ effect }) }); // a credential was found while it was being filed
@@ -382,6 +405,7 @@ function runItem(ctx, row) {
 // The member said which project a parked item belongs to: ONLY the listed items move, each against the revision it was shown at, with
 // the evidence of that statement kept beside it. A workspace must really exist in this Core, with a manifest naming itself.
 export function bindItems(db, root, bindings, scope, evidence) {
+  if (typeof evidence === 'string' && isSecretText(db, evidence)) throw new Error('scope_binding_refused'); // the member's words are screened like any other persisted text
   const known = scope === 'operator' || (scope.startsWith('workspace:') && validWorkspace(root, scope.slice('workspace:'.length)));
   if (!known || typeof evidence !== 'string' || !evidence.trim()) throw new Error('scope_binding_refused');
   return tx(db, () => bindings.map(({ id, rev }) => {

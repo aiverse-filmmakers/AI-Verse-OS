@@ -227,6 +227,8 @@ test('unknown scope is never copied anywhere global, whatever the kind of candid
   fs.writeFileSync(path.join(root, 'workspaces', 'gamma', 'WORKSPACE.yaml'), 'id: somebody-else\n');
   assert.throws(() => bindItems(db, root, alpha, 'workspace:gamma', 'it is Alpha'), /scope_binding_refused/); // a manifest must name itself
   assert.throws(() => bindItems(db, root, alpha, 'workspace:alpha', ''), /scope_binding_refused/); // and the member's words are required
+  await capture(root, 'earlier-chat', [{ uuid: 'e1', text: 'My password is maple55.' }]);
+  assert.throws(() => bindItems(db, root, alpha, 'workspace:alpha', 'it is Alpha, password maple55'), /scope_binding_refused/); // the member's words are screened like any other text
   assert.deepEqual(bindItems(db, root, [{ id: all[0].id, rev: all[0].rev + 7 }], 'workspace:alpha', 'it is Alpha'), [{ id: all[0].id, bound: false }]); // a stale revision binds nothing
   assert.deepEqual(bindItems(db, root, alpha, 'workspace:alpha', 'these two were about Alpha').map((r) => r.bound), [true, true]);
   assert.deepEqual(bindItems(db, root, alpha, 'workspace:beta', 'oops').map((r) => r.bound), [false, false]); // already bound: no rebinding by mistake
@@ -418,7 +420,8 @@ test('a credential found later withdraws proposals already filed: the inbox cand
   await drain(root);
   assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
   assert.equal(inboxText(root).includes('zeta99'), false);
-  assert.match(inboxText(root), /Withdrawn: this proposal was removed/);
+  assert.match(inboxText(root), /"redacted": true/);
+  assert.match(inboxText(root), /"status": "withdrawn"/);
   assert.equal(allText(root).includes('zeta99'), false); // inbox, write-command queue, database, log
   await drain(root);
   assert.equal(inboxFiles(root).length, 1); // and nothing is filed again
@@ -447,16 +450,54 @@ test('an item or a source excluded while the reviewer or the applier is running 
   await run(root, { drain: true, hooks: { beforeEffect: () => revealSync(root) } });
   assert.equal(inboxFiles(root).length, 0);
   assert.deepEqual(items(root).map((i) => i.state), ['excluded']);
-  // (c) the credential is found after the proposal was filed: it is withdrawn (see the test above); here, while it is being filed
-  root = core();
-  chat(root, [u(root, 'u1', sentence)]);
-  review([goodItem()]);
-  await run(root, { drain: true });
-  assert.equal(inboxFiles(root).length, 1);
-  revealSync(root);
-  await drain(root);
-  assert.equal(inboxText(root).includes('zeta99'), false);
-  assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+});
+
+test('revocation at every boundary of an effect: nothing revoked is newly sent or filed, and every effect that may exist stays withdrawable', async (t) => {
+  const sentence = 'I always want warm replies with the code zeta99 on top.';
+  const clean = (root) => { assert.equal(inboxText(root).includes('zeta99'), false); assert.equal(allText(root).includes('zeta99'), false); };
+  const setup = () => { const root = core(); chat(root, [u(root, 'u1', sentence)]); review([goodItem()]); return root; };
+  await t.test('while the context is being loaded: the reviewer never receives the excluded text', async () => {
+    const root = setup();
+    await run(root, { drain: true, hooks: { afterContext: () => revealSync(root) } });
+    assert.equal(calls().some((c) => c.prompt.includes('zeta99')), false);
+    assert.equal(items(root).length, 0);
+    clean(root);
+  });
+  await t.test('after the effect was claimed and WHILE it is being filed: the finished proposal is withdrawn at once', async () => {
+    const root = setup();
+    await run(root, { drain: true, hooks: { afterClaim: () => revealSync(root) } });
+    assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+    clean(root);
+  });
+  await t.test('after the inbox item exists and before its receipt is recorded', async () => {
+    const root = setup();
+    await run(root, { drain: true, hooks: { afterSubmit: () => revealSync(root) } });
+    assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+    clean(root);
+  });
+  await t.test('after an ambiguous error: the effect reference is kept, and a later discovery still withdraws what may exist', async () => {
+    const root = setup();
+    const { submitInbox } = await import('./learn-worker.mjs');
+    await run(root, { drain: true, hooks: { submit: (...a) => { submitInbox(...a); return { ok: false, code: 'inbox_failed' }; } } }); // created, but reported as failed
+    const [pending] = items(root);
+    assert.equal(pending.state, 'pending');
+    assert.ok(pending.result.effect.idempotency_key); // not cleared
+    assert.match(inboxText(root), /zeta99/);
+    revealSync(root);
+    assert.deepEqual(items(root).map((i) => i.state), ['withdraw_pending']);
+    await drain(root);
+    assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+    clean(root);
+  });
+  await t.test('an ambiguous error with no discovery is reconciled by the retry: one inbox item, completed', async () => {
+    const root = setup();
+    const { submitInbox } = await import('./learn-worker.mjs');
+    await run(root, { drain: true, hooks: { submit: (...a) => { submitInbox(...a); return { ok: false, code: 'inbox_failed' }; } } });
+    timePasses(root);
+    await drain(root);
+    assert.equal(inboxFiles(root).length, 1);
+    assert.deepEqual(items(root).map((i) => i.state), ['done']);
+  });
 });
 
 test('a worker killed after claiming the effect and before filing it resumes and files exactly once', () => {

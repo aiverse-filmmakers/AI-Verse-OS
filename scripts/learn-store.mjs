@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { learnPaths } from './learn-common.mjs';
-import { CONTRACT_VERSION, labelled, secretValues, tokensOf } from './learn-capture.mjs';
+import { CONTRACT_VERSION, IDENTIFIER, labelled, metadataOf, SAFE_PATH, secretValues, tokensOf } from './learn-capture.mjs';
 
 export const APPLICATION_ID = 0x41495645; // "AIVE"
 export const VERSION = 3;
@@ -131,6 +131,9 @@ export const isSecretText = (db, text) => labelled(text) || mentions(text, known
 // read position and the wake time are all recorded, or none of them.
 export function ingestBatch(db, batch, now = Date.now()) {
   const h = hasher(db);
+  // Identifiers and paths are admitted in their own formats only (a sentence cannot be an identifier); a batch that fails is refused whole.
+  if (!IDENTIFIER.test(batch.session_id) || !SAFE_PATH(batch.transcript_path)) throw Object.assign(new Error('invalid capture source'), { code: 'invalid_source' });
+  batch = { ...batch, records: batch.records.filter((r) => IDENTIFIER.test(r.uuid)).map(metadataOf) };
   let discovered = false;
   const result = tx(db, () => {
     const hashes = knownHashes(db);
@@ -177,7 +180,7 @@ function rescreen(db, hashes, h) {
     const item = JSON.parse(row.body);
     if (!mentions(`${item.statement ?? ''} ${item.quote ?? ''} ${item.replaces ?? ''}`, hashes, h)) continue;
     const effect = row.result ? JSON.parse(row.result).effect : null;
-    db.prepare("UPDATE items SET state = ?, body = '{}', rev = rev + 1 WHERE id = ?").run(effect ? 'withdraw_pending' : 'excluded', row.id);
+    db.prepare("UPDATE items SET state = ?, body = '{}', rev = rev + 1, not_before = 0 WHERE id = ?").run(effect ? 'withdraw_pending' : 'excluded', row.id);
   }
 }
 

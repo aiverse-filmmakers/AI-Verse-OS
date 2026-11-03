@@ -18,7 +18,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { isEnabled, isMain, loadConfig, resolveScope, sessionKey, setStatus } from './learn-common.mjs';
-import { scanTranscript } from './learn-capture.mjs';
+import { IDENTIFIER, SAFE_PATH, scanTranscript } from './learn-capture.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const MAX_STDIN = 1024 * 1024;
@@ -66,7 +66,7 @@ export async function handleEvent(root, event, payload, now = Date.now(), start 
   const reason = REASONS[event];
   const { session_id: sessionId, transcript_path: transcript } = payload;
   if (!reason || (event === 'stop' && payload.stop_hook_active)) return { ok: true, via: 'skipped' };
-  if (typeof sessionId !== 'string' || !sessionId || typeof transcript !== 'string' || !transcript.endsWith('.jsonl')) {
+  if (typeof sessionId !== 'string' || !IDENTIFIER.test(sessionId) || !SAFE_PATH(transcript) || !transcript.endsWith('.jsonl')) {
     if (event === 'start') start(root);
     return { ok: true, via: 'skipped' };
   }

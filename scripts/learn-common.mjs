@@ -109,17 +109,22 @@ export const HANDOFF_MAX_BYTES = 64 * 1024 * 1024;
 
 // Cheap, database-free housekeeping that the hook runs even when learning is off: abandoned temp files, old or excess handoffs
 // (oldest first, capped by count and total size), old event files and quarantined events. Never creates anything.
+// Only files this pipeline itself creates are ever touched, recognised by their exact generated names; anything else in these
+// folders (a note, a copy, a file from another tool) is never deleted.
+export const EVENT_NAME = /^\d{15}-\d+-[0-9a-f]{8}\.(?:json|tmp)$/;
+export const HANDOFF_NAME = /^[0-9a-f]{16}-\d+-[0-9a-f]{8}\.jsonl(?:\.tmp)?$/;
+
 export function pruneRuntime(root, now = Date.now()) {
   const { base, spool } = learnPaths(root);
-  const list = (dir) => { try { return fs.readdirSync(dir).map((n) => { const f = path.join(dir, n); const st = fs.statSync(f); return st.isFile() ? { f, n, age: now - st.mtimeMs, size: st.size } : null; }).filter(Boolean); } catch { return []; } };
+  const list = (dir, pattern) => { try { return fs.readdirSync(dir).filter((n) => pattern.test(n)).map((n) => { const f = path.join(dir, n); const st = fs.statSync(f); return st.isFile() ? { f, n, age: now - st.mtimeMs, size: st.size } : null; }).filter(Boolean); } catch { return []; } };
   const drop = (entries, test, maxAge) => entries.filter((e) => test(e.n) && e.age > maxAge).forEach((e) => fs.rmSync(e.f, { force: true }));
-  drop(list(spool), (n) => n.endsWith('.tmp'), DAY);
-  drop(list(spool), (n) => n.endsWith('.json'), 30 * DAY);
-  drop(list(path.join(spool, 'bad')), () => true, 14 * DAY);
+  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.tmp'), DAY);
+  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.json'), 30 * DAY);
+  drop(list(path.join(spool, 'bad'), EVENT_NAME), () => true, 14 * DAY);
   const dir = path.join(base, 'handoff');
-  drop(list(dir), (n) => n.endsWith('.tmp'), 60 * 60 * 1000);
-  drop(list(dir), () => true, 30 * DAY);
-  const kept = list(dir).filter((e) => e.n.endsWith('.jsonl')).sort((a, b) => a.age - b.age); // newest first
+  drop(list(dir, HANDOFF_NAME), (n) => n.endsWith('.tmp'), 60 * 60 * 1000);
+  drop(list(dir, HANDOFF_NAME), () => true, 30 * DAY);
+  const kept = list(dir, HANDOFF_NAME).filter((e) => e.n.endsWith('.jsonl')).sort((a, b) => a.age - b.age); // newest first
   let bytes = 0;
   kept.forEach((e, i) => {
     bytes += e.size;

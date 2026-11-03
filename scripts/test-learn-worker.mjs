@@ -246,19 +246,29 @@ test('handoff housekeeping: caps by count (oldest first), drops stale temp files
   fs.mkdirSync(dir, { recursive: true });
   const now = Date.now();
   for (let i = 0; i < 60; i += 1) {
-    const f = path.join(dir, `k-${i}.jsonl`);
+    const f = path.join(dir, `${'a'.repeat(16)}-${1000 + i}-${'b'.repeat(8)}.jsonl`);
     fs.writeFileSync(f, '{}\n');
     const t = new Date(now - (100 - i) * 1000); // k-59 is the newest
     fs.utimesSync(f, t, t);
   }
-  const tmp = path.join(dir, 'old.jsonl.tmp');
+  const tmp = path.join(dir, `${'a'.repeat(16)}-1-${'c'.repeat(8)}.jsonl.tmp`);
+  const mine = path.join(dir, 'personal-notes.txt');
+  fs.writeFileSync(mine, 'my own notes');
+  fs.utimesSync(mine, new Date(now - 90 * 24 * 3600 * 1000), new Date(now - 90 * 24 * 3600 * 1000));
+  fs.mkdirSync(path.join(learnPaths(root).spool, 'bad'), { recursive: true });
+  for (const f of [path.join(learnPaths(root).spool, 'personal-notes.txt'), path.join(learnPaths(root).spool, 'bad', 'personal-notes.txt'), path.join(learnPaths(root).spool, 'keep.json'), path.join(learnPaths(root).spool, 'x.tmp')]) {
+    fs.writeFileSync(f, 'mine');
+    fs.utimesSync(f, new Date(now - 90 * 24 * 3600 * 1000), new Date(now - 90 * 24 * 3600 * 1000));
+  }
   fs.writeFileSync(tmp, 'x');
   const old = new Date(now - 3 * 3600 * 1000);
   fs.utimesSync(tmp, old, old);
   hookEvent(root, 'stop', session(root)); // mode off: still housekeeping
   const left = fs.readdirSync(dir).sort();
-  assert.equal(left.length, 50);
-  assert.ok(left.includes('k-59.jsonl') && !left.includes('k-0.jsonl') && !left.includes('old.jsonl.tmp'));
+  assert.equal(left.length, 51); // 50 handoffs plus the member's own file
+  assert.ok(left.includes(`${'a'.repeat(16)}-1059-${'b'.repeat(8)}.jsonl`) && !left.includes(`${'a'.repeat(16)}-1000-${'b'.repeat(8)}.jsonl`) && !left.includes(path.basename(tmp)));
+  // files that this pipeline did not create survive, however old and whatever their extension
+  for (const f of [mine, path.join(learnPaths(root).spool, 'personal-notes.txt'), path.join(learnPaths(root).spool, 'bad', 'personal-notes.txt'), path.join(learnPaths(root).spool, 'keep.json'), path.join(learnPaths(root).spool, 'x.tmp')]) assert.ok(fs.existsSync(f), f);
   // a handoff whose source is closed is deleted on the next ingest
   setMode(root, 'propose');
   const s = session(root);
@@ -273,6 +283,57 @@ test('handoff housekeeping: caps by count (oldest first), drops stale temp files
   assert.equal(fs.existsSync(row.path), false);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM handoffs').get().n, 0);
   db.close();
+});
+
+test('two handoffs of one generation are both kept: an earlier unread message the later one no longer has is still reviewed, shared ones once', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const header = assistantLine('h', 'the same opening record in every version', root);
+  writeTranscript(s.transcript_path, [header, userLine('x1', 'first version message number one', root), userLine('x2', 'shared message that both versions have', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [header, userLine('y1', 'second version message number one', root), userLine('x2', 'shared message that both versions have', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [userLine('z0', 'a completely different transcript now', root)]);
+  hookEvent(root, 'end', s);
+  assert.equal(fs.readdirSync(handoffDir(root)).length, 2);
+  await drain(root);
+  markersOnce(['first version message number one', 'second version message number one', 'shared message that both versions have', 'a completely different transcript']);
+});
+
+test('records kept by a replacement transcript are not reviewed again after the handoff reviewed them', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [userLine('a1', 'message the compaction keeps number one', root), userLine('a2', 'message the compaction drops number two', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [userLine('c0', 'summary written by the compaction', root), userLine('a1', 'message the compaction keeps number one', root), userLine('c1', 'a brand new message afterwards', root)]);
+  hookEvent(root, 'end', s);
+  await drain(root);
+  markersOnce(['keeps number one', 'drops number two', 'summary written by the compaction', 'brand new message afterwards']);
+});
+
+test('a database made by an earlier round is migrated on open', async () => {
+  const root = core();
+  fs.mkdirSync(learnPaths(root).base, { recursive: true });
+  const { DatabaseSync } = await import('node:sqlite');
+  const old = new DatabaseSync(learnPaths(root).db);
+  old.exec(`CREATE TABLE sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1, anchor TEXT DEFAULT '', backup TEXT, backup_lines INTEGER DEFAULT 0, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
+    CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, PRIMARY KEY(session, fp));
+    INSERT INTO handoffs VALUES('s', 'fp1', '/old/path.jsonl');`);
+  old.close();
+  const db = await openStore(root);
+  const cols = (t) => db.prepare(`PRAGMA table_info(${t})`).all().map((r) => r.name);
+  assert.ok(cols('sources').includes('path') && cols('handoffs').includes('head') && cols('handoffs').includes('hn'));
+  assert.deepEqual({ ...db.prepare('SELECT session, fp, path FROM handoffs').get() }, { session: 's', fp: 'fp1', path: '/old/path.jsonl' });
+  db.close();
+  (await openStore(root)).close(); // opening a current database again changes nothing
+  chat(root, { mode: 'propose' });
+  review([]);
+  const result = await drain(root); // and the worker runs on it
+  assert.equal(result.outcomes[0].state, 'reviewed');
 });
 
 test('a handoff that was not needed (transcript not replaced) does not cause a second review', async () => {
@@ -534,12 +595,13 @@ test('numeric settings are bounded and old event files are pruned', async () => 
   const { spool } = learnPaths(root);
   fs.mkdirSync(path.join(spool, 'bad'), { recursive: true });
   const old = new Date(Date.now() - 40 * 24 * 3600 * 1000);
-  for (const name of ['a.tmp', 'b.json', 'bad/c.json']) { fs.writeFileSync(path.join(spool, name), '{}'); fs.utimesSync(path.join(spool, name), old, old); }
-  fs.writeFileSync(path.join(spool, 'fresh.tmp'), 'x');
+  const ev = (n) => `${String(n).padStart(15, '0')}-1-${'d'.repeat(8)}`;
+  for (const name of [`${ev(1)}.tmp`, `${ev(2)}.json`, `bad/${ev(3)}.json`]) { fs.writeFileSync(path.join(spool, name), '{}'); fs.utimesSync(path.join(spool, name), old, old); }
+  fs.writeFileSync(path.join(spool, `${ev(4)}.tmp`), 'x');
   chat(root);
   review([]);
   await drain(root);
-  assert.deepEqual(fs.readdirSync(spool).filter((n) => n !== 'bad').sort(), ['fresh.tmp']);
+  assert.deepEqual(fs.readdirSync(spool).filter((n) => n !== 'bad').sort(), [`${ev(4)}.tmp`]);
   assert.deepEqual(fs.readdirSync(path.join(spool, 'bad')), []);
 });
 

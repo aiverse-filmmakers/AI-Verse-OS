@@ -60,7 +60,9 @@ export function splitText(text, max) {
 }
 
 // Stops at `budget` characters, or when a user message belongs to another scope. A window only ever holds one scope.
-export function readWindow(lines, cursor, budget, scopeOf) {
+export const textHash = (text) => sha(text, 16);
+
+export function readWindow(lines, cursor, budget, scopeOf, skip = null, skipLimit = Infinity) {
   const messages = [];
   let used = 0;
   let scope = null;
@@ -79,6 +81,8 @@ export function readWindow(lines, cursor, budget, scopeOf) {
       if (own === null) { skipped += 1; continue; }
       if (scope && own !== scope) break;
       scope = own;
+      // a retained copy of a message already reviewed from another source of this chat (handoff vs live): not reviewed twice
+      if (skip && part === 0 && line < skipLimit && message.text.length >= MIN_ELIGIBLE && skip.has(textHash(message.text))) continue;
     } else if (own === null || own !== scope) {
       continue; // assistant text from another scope (or before any scope is known) never joins this window
     }
@@ -121,7 +125,7 @@ export function handoffLines(lines, scopeOf) {
 // The window of one source from the live transcript. Returns null when it cannot be read or is a different transcript, and
 // { replaced: true } when the lines before the cursor are no longer the lines that were reviewed (the caller starts over
 // at line 0 of what is there now and records that history was replaced).
-export function readSource(source, livePath, budget, scopeOf) {
+export function readSource(source, livePath, budget, scopeOf, skip = null) {
   let lines;
   try {
     lines = readLines(livePath);
@@ -130,5 +134,7 @@ export function readSource(source, livePath, budget, scopeOf) {
   }
   if (!source.path && fingerprint(lines) !== source.fp) return null;
   if (source.line > lines.length || (source.anchor_line >= 0 && (source.anchor_line >= lines.length || lineHash(lines[source.anchor_line]) !== source.anchor))) return { replaced: true };
-  return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf);
+  return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf, skip, source.path ? Infinity : 200);
 }
+
+export const hashesOf = (messages) => [...new Set(messages.filter((m) => m.role === 'user' && (m.full ?? m.text).length >= MIN_ELIGIBLE).map((m) => textHash(m.full ?? m.text)))];

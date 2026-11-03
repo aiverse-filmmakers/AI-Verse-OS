@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, trans
   due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
   anchor TEXT DEFAULT '', path TEXT, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
-CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, fp));
+CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
+CREATE TABLE IF NOT EXISTS seen_text(session TEXT, h TEXT, fp TEXT, PRIMARY KEY(session, h));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
 CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
@@ -28,6 +29,26 @@ CREATE TABLE IF NOT EXISTS failures(id INTEGER PRIMARY KEY, session TEXT, at INT
 CREATE TABLE IF NOT EXISTS seen(name TEXT PRIMARY KEY, at INTEGER);
 `;
 
+// Databases made by earlier rounds: add what is missing, rebuild the handoffs table whose key changed. Guarded by table_info, so
+// it is safe to run on every open and on a database that is already current.
+function migrate(db) {
+  const columns = (table) => db.prepare(`PRAGMA table_info(${table})`).all().map((r) => r.name);
+  if (!columns('sources').includes('path')) db.exec('ALTER TABLE sources ADD COLUMN path TEXT');
+  if (!columns('handoffs').includes('head') || !columns('handoffs').includes('hn')) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(`ALTER TABLE handoffs RENAME TO handoffs_old;
+        CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
+        INSERT OR IGNORE INTO handoffs(session, fp, path) SELECT session, fp, path FROM handoffs_old;
+        DROP TABLE handoffs_old;`);
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw error;
+    }
+  }
+}
+
 export async function openStore(root) {
   const { DatabaseSync } = await import('node:sqlite'); // throws on a Node without it: callers treat that as 'store_unavailable'
   const { base, db: file } = learnPaths(root);
@@ -35,6 +56,7 @@ export async function openStore(root) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
   db.exec(SCHEMA);
+  migrate(db);
   return db;
 }
 
@@ -119,9 +141,8 @@ function applyEvent(db, event, now) {
   if (event.handoff) {
     // The generation this handoff belongs to must exist as a source even if the worker never saw it live.
     db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(key, event.handoff.fp);
-    const old = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, event.handoff.fp)?.path;
-    if (old && old !== event.handoff.path) fs.rmSync(old, { force: true });
-    db.prepare('INSERT OR REPLACE INTO handoffs(session, fp, path, head, hn) VALUES(?, ?, ?, ?, ?)').run(key, event.handoff.fp, event.handoff.path, event.handoff.head, event.handoff.hn);
+    // Every handoff of a generation is kept (a later one may not contain what an earlier, still unread one did).
+    db.prepare('INSERT OR IGNORE INTO handoffs(session, fp, path, head, hn) VALUES(?, ?, ?, ?, ?)').run(key, event.handoff.fp, event.handoff.path, event.handoff.head, event.handoff.hn);
   }
   if (event.handoff_failed) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, now, 'handoff_failed');
 }

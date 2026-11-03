@@ -331,9 +331,10 @@ def proposal(item: Dict[str, Any], reason: str, ref: str) -> Dict[str, Any]:
 
 def read_config(root: Path) -> Dict[str, Any]:
     try:
-        return json.loads((root / ".aiverse" / "learn" / "config.json").read_text(encoding="utf-8"))
+        value = json.loads((root / ".aiverse" / "learn" / "config.json").read_text(encoding="utf-8"))
     except Exception:
         return {}
+    return value if isinstance(value, dict) else {}  # anything but an object is no configuration: no auto
 
 
 def mode_still_auto(root: Path) -> bool:

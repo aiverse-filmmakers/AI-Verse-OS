@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { isEnabled, isMain, learnPaths, loadConfig, resolveScope, sha } from './learn-common.mjs';
 import { resolveClaude } from './learn-claude.mjs';
 import { acquire, allowance, holds, ingest, openStore, recordReview, release, renew, tx } from './learn-store.mjs';
-import { fingerprint, headHash, readLines, readSource } from './learn-window.mjs';
+import { fingerprint, hashesOf, headHash, readLines, readSource } from './learn-window.mjs';
 import { computeWriteCommandFingerprint, submitWriteCommand } from './write-command.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -165,16 +165,21 @@ function closeSource(db, key, source) {
 // The live transcript no longer is this generation, but PreCompact left its screened user messages: continue from those, at
 // the first message not yet reviewed (they remember their original line numbers).
 function adoptHandoff(db, key, source) {
-  const handoff = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, source.fp);
-  if (!handoff || !fs.existsSync(handoff.path)) return false;
-  let start = 0;
-  let part = 0;
-  try {
-    const origs = readLines(handoff.path).map((raw) => { try { return JSON.parse(raw).orig; } catch { return -1; } });
-    start = origs.filter((o) => o < source.line).length;
-    if (source.part > 0 && origs[start] === source.line) part = source.part; // a long message already partly reviewed continues at its part
-  } catch { return false; }
-  db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, part, path) VALUES(?, ?, ?, ?, ?)').run(key, `h:${source.fp}`, start, part, handoff.path);
+  let adopted = 0;
+  // every handoff of this generation, oldest first; messages they share are reviewed once (see seen_text)
+  for (const handoff of db.prepare('SELECT rowid AS id, path FROM handoffs WHERE session = ? AND fp = ? ORDER BY id').all(key, source.fp)) {
+    if (!fs.existsSync(handoff.path)) continue;
+    let start = 0;
+    let part = 0;
+    try {
+      const origs = readLines(handoff.path).map((raw) => { try { return JSON.parse(raw).orig; } catch { return -1; } });
+      start = origs.filter((o) => o < source.line).length;
+      if (source.part > 0 && origs[start] === source.line) part = source.part; // a long message already partly reviewed continues at its part
+    } catch { continue; }
+    db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, part, path) VALUES(?, ?, ?, ?, ?)').run(key, `h:${source.fp}:${handoff.id}`, start, part, handoff.path);
+    adopted += 1;
+  }
+  if (!adopted) return false;
   db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(key, source.fp);
   db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(key, source.fp);
   noteFailure(db, key, 'handoff_used');
@@ -189,11 +194,11 @@ function restartSource(db, key, source) {
 }
 
 function headChanged(db, session, source) {
-  const h = db.prepare('SELECT head, hn FROM handoffs WHERE session = ? AND fp = ?').get(session.key, source.fp);
-  if (!h || !h.head) return false;
+  const rows = db.prepare('SELECT head, hn FROM handoffs WHERE session = ? AND fp = ? AND head IS NOT NULL').all(session.key, source.fp);
+  if (!rows.length) return false;
   try {
     const lines = readLines(session.transcript);
-    return lines.length < h.hn || headHash(lines, h.hn) !== h.head;
+    return rows.some((h) => lines.length < h.hn || headHash(lines, h.hn) !== h.head);
   } catch { return false; }
 }
 
@@ -211,11 +216,12 @@ function nextWork(ctx, session) {
     // Same first line but different first records: the handoff's head no longer matches the live transcript, so it was replaced
     // even if the cursor is still 0 and no anchor can show it.
     if (!source.path && headChanged(db, session, source)) { if (adoptHandoff(db, session.key, source)) return nextWork(ctx, session); }
-    let window = readSource(source, source.path || session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    const skip = new Set(db.prepare('SELECT h FROM seen_text WHERE session = ? AND fp != ?').all(session.key, source.fp).map((r) => r.h));
+    let window = readSource(source, source.path || session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd), skip);
     if (!source.path && (!window || window.replaced) && adoptHandoff(db, session.key, source)) return nextWork(ctx, session);
     if (window?.replaced) {
       source = restartSource(db, session.key, source);
-      window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+      window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd), skip);
     }
     if (window && (window.messages.length || window.next.line > source.line || window.next.part > source.part)) return { source, live, window };
     if (window && source.fp === live) continue; // nothing new yet in the live transcript
@@ -258,6 +264,7 @@ function wait(ctx, session, code, ms = WAIT_MS) {
 
 function review(ctx, session, { source, live, window }, guard) {
   const { root, db, now, drain } = ctx;
+  window.hashes = hashesOf(window.messages);
   if (!window.hasEligible) return finish(ctx, session, source, live, window, null);
   const limit = allowance(db, session.key, ctx.config, now(), drain);
   if (!limit.ok) {
@@ -273,7 +280,7 @@ function review(ctx, session, { source, live, window }, guard) {
   if (!planned.ok) return fail(ctx, session, source, live, window, planned, guard);
   const body = {
     scope: window.scope, cost: reviewed.cost, model: ctx.config.model, messages: window.messages.length, skipped: window.skipped,
-    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd,
+    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, hashes: window.hashes,
     items: planned.value.items.map((item) => ({ ...item, done: false })),
   };
   tx(db, () => {
@@ -318,7 +325,7 @@ function execute(ctx, session, { source, live }, body, guard) {
     messages: body.messages, skipped_outside_core: body.skipped || undefined,
     results: body.items.map(({ kind, state, reason, owner, ref }) => ({ kind, state, reason, owner, ref })),
   };
-  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end };
+  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, hashes: body.hashes };
   return finish(ctx, session, source, live, window, receipt);
 }
 
@@ -331,6 +338,7 @@ function finish(ctx, session, source, live, window, receipt) {
     if (!holds(db, name, owner, ctx.now())) throw new Lost();
     if (receipt) db.prepare('INSERT INTO receipts(session, at, body) VALUES(?, ?, ?)').run(session.key, ctx.now(), JSON.stringify(receipt));
     crash('in_finish');
+    for (const h of window.hashes ?? []) db.prepare('INSERT OR IGNORE INTO seen_text(session, h, fp) VALUES(?, ?, ?)').run(session.key, h, source.fp);
     db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ? WHERE session = ? AND fp = ?')
       .run(window.next.line, window.next.part, window.anchor_line, window.anchor, session.key, source.fp);
     db.prepare('DELETE FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').run(session.key, source.fp, source.line, source.part);
@@ -344,8 +352,8 @@ function finish(ctx, session, source, live, window, receipt) {
   crash('after_finish');
   if (source.path && window.atEnd) fs.rmSync(source.path, { force: true });
   if (!source.path && window.atEnd) { // the live transcript is fully reviewed, so a handoff of it is redundant
-    const spare = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(session.key, source.fp);
-    if (spare) { fs.rmSync(spare.path, { force: true }); db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(session.key, source.fp); }
+    for (const spare of db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').all(session.key, source.fp)) fs.rmSync(spare.path, { force: true });
+    db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(session.key, source.fp);
   }
   return { state: receipt ? 'reviewed' : 'skipped_no_user_message', results: receipt?.results };
 }

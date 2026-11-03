@@ -345,6 +345,17 @@ class Commit(unittest.TestCase):
         self.assertEqual((out["state"], out["reason"]), ("proposed", "auto_blocked"))
         self.assertEqual(host.calls, [])
 
+    def test_a_config_that_is_not_an_object_means_no_auto_and_no_crash(self):
+        for raw in ("[]", "null", "123", '"auto"', "{", '{"mode": 5}', '{"mode": ["auto"], "allow_unfenced_auto": "yes"}'):
+            host = FakeHost()
+            root = Path(tempfile.mkdtemp())
+            (root / ".aiverse" / "learn").mkdir(parents=True)
+            (root / ".aiverse" / "learn" / "config.json").write_text(raw)
+            out = learn.commit(root, {"item": plan_one(cand()), "mode": "auto", "scope": "operator", "session_key": "k"}, host=(FakeModule, host))
+            self.assertEqual(out["state"], "proposed", raw)
+            self.assertEqual(host.calls, [], raw)
+            self.assertFalse(learn.mode_still_auto(root), raw)
+
     def test_auto_goal_goes_through_brain_only_when_ready(self):
         self.assertEqual(committed(cand("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
         down = committed(cand("goal", "Launch my store by March.", "launch my store by March"), host=FakeHost(brain="owner-required"))

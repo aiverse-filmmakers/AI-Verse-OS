@@ -38,7 +38,8 @@ class CompatibleOwnership(DirectionOwnershipService):
 
 
 class IntentService:
-    def __init__(self, root):
+    def __init__(self, root, harness="codex"):
+        self.harness = harness
         self.root = Path(root).resolve()
         for relative in ("operator", "operator/context", "operator/profile", "operator/brain", ".aiverse", ".aiverse/direction", "workspaces"):
             path = self.root / relative
@@ -87,7 +88,7 @@ class IntentService:
             object_id = ref.split(":")[-1]
             item = self.controller.store.load("intent", scope, object_id)
             if item.status == "CONFIRMED":
-                self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor="codex:confirmed-handover")
+                self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor=f"{self.harness}:confirmed-handover")
         return result
 
     def snapshot(self, scope):
@@ -155,7 +156,7 @@ class IntentService:
                                               "expected_prior_version": expected, "explicit": confirmed,
                                               "source_ref": source_ref}},
                             source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
-                            actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
+                            actor=f"{self.harness}:intent", source_refs=[source_ref], supersedes=prior_id)
                 else:
                     item = self.controller.create("intent", scope, "PROPOSED", {
                         "subtype": subtype, "statement": statement,
@@ -163,18 +164,18 @@ class IntentService:
                                           "expected_prior_version": expected, "explicit": confirmed,
                                           "source_ref": source_ref}},
                         source=USER if confirmed else AuthorityTier.TEMPORARY_HYPOTHESIS,
-                        actor="codex:intent", source_refs=[source_ref], supersedes=prior_id)
+                        actor=f"{self.harness}:intent", source_refs=[source_ref], supersedes=prior_id)
             if confirmed:
                 if prior_id:
                     prior = self.controller.store.load("intent", scope, prior_id)
                     if prior.status != "SUPERSEDED":
                         if prior.revision != expected:
                             raise ValueError("Prior intent changed before correction activation")
-                        self.controller.transition("intent", scope, prior_id, "SUPERSEDED", source=USER, actor="codex:intent")
+                        self.controller.transition("intent", scope, prior_id, "SUPERSEDED", source=USER, actor=f"{self.harness}:intent")
                 if item.status == "PROPOSED":
-                    item = self.controller.transition("intent", scope, item.id, "CONFIRMED", source=USER, actor="codex:intent")
+                    item = self.controller.transition("intent", scope, item.id, "CONFIRMED", source=USER, actor=f"{self.harness}:intent")
                 if item.status == "CONFIRMED":
-                    item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor="codex:intent")
+                    item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor=f"{self.harness}:intent")
                 if prior_id:
                     # Reuse the original evidence reference with the operation key on retry.
                     capture_meta = item.payload.get("codex_capture", {})
@@ -219,9 +220,9 @@ class IntentService:
                 item.source_refs.append(source_ref)
                 item = self.controller.store.save(item, expected_revision=expected)
             if item.status == "PROPOSED":
-                item = self.controller.transition("intent", scope, item.id, "CONFIRMED", source=USER, actor="codex:intent-confirm")
+                item = self.controller.transition("intent", scope, item.id, "CONFIRMED", source=USER, actor=f"{self.harness}:intent-confirm")
             if item.status == "CONFIRMED":
-                item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor="codex:intent-confirm")
+                item = self.controller.transition("intent", scope, item.id, "ACTIVE", source=USER, actor=f"{self.harness}:intent-confirm")
             if item.status != "ACTIVE":
                 raise ValueError("Pending intent is no longer confirmable")
             return {"state": "saved", "ref": canonical_ref(item), "status": item.status}

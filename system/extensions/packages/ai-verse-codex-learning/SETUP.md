@@ -39,3 +39,17 @@ After a code update, changed definitions may require trust again. Say: “AI-Ver
 ## Installer integration
 
 Distribution should verify the versioned package, invoke its install interface with the selected OS root and that project's admitted runtime metadata, then display this guidance and resume its existing setup flow. The package generates local paths; it ships no member state or trust. Public interface: install, setup, doctor, descriptor, remove. Package export is a maintainer action. The existing OS Distribution release must explicitly admit this component; the local package alone does not publish or change that release.
+
+## Claude Code (second adapter)
+
+The same learning bridge can also serve Claude Code in this project. It sits on top of the normal package installation, so run the usual `install` first. The Claude commands change only `.claude/settings.local.json` and one record file, `.aiverse/extensions/ai-verse-codex-learning/claude-adapter.json`. They never touch `.codex/`, the shared registry entry, the install receipt or `config.json`.
+
+Use the same Python as the install. Replace the paths with this project's.
+
+- Set up: `install.py claude-install --root ROOT --python PYTHON`. It adds the five Claude hooks, a few narrow permission rules (the bridge commands and one notes folder, `runtime/codex-learning/claude-input/`) and turns Claude's own automatic memory off for this project. Everything else already in the file stays.
+- Check: `install.py claude-doctor --root ROOT --json`. Read only. It says whether the hooks, permissions and memory switch are in place, and whether the hooks match the installed bridge.
+- Switch off for good: `install.py claude-remove --root ROOT`. If nobody else edited the settings file it is restored byte for byte. If it was edited, only our own entries are removed and anything you changed is left in place and listed.
+- Pause without removing: `bridge.py set --enabled false` switches learning off for both apps.
+- After an update: if `claude-doctor` says the build is old, run `claude-install` again to refresh the hooks.
+
+Claude Code may ask you once to trust the folder. Claude blocks JSON typed into shell commands, so the assistant saves each review as a small note file in the notes folder and passes it with `--input-file`. The bridge deletes the note as soon as it has read it, whether the review is accepted or refused.

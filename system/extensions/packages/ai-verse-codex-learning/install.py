@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Portable extension package/install/setup interface for AI-Verse Distribution."""
 import argparse
+import base64
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import stat
 import subprocess
@@ -14,7 +16,7 @@ import tempfile
 import zipfile
 
 from bridge import Bridge, DEFAULT_ROOT, ID, VERSION, atomic_json, read_json, safe, utc
-from lifecycle import definition, merge
+from lifecycle import claude_build, claude_definition, definition, is_ours_claude, merge
 
 SOURCE = Path(__file__).resolve().parent
 FILES = ("bridge.py", "lifecycle.py", "install.py", "maintenance.py", "inspect_runtime.py",
@@ -356,6 +358,289 @@ def remove(root):
             "extension_files_preserved": True, "trust_modified": False}
 
 
+# ---------------------------------------------------------------------------
+# Claude Code adapter: manages only ROOT/.claude/settings.local.json and one record file.
+# It never touches .codex/, the shared registry entry, the install receipt or config.json.
+# ---------------------------------------------------------------------------
+CLAUDE_SUBCOMMANDS = ("review", "sources", "query", "intent")
+
+
+def claude_paths(root):
+    return (root / ".claude/settings.local.json",
+            root / ".aiverse/extensions" / ID / "claude-adapter.json")
+
+
+def _package_verified(root):
+    try:
+        registry = read_json(root / ".aiverse/extensions/registry.json", root)
+        entry = registry.get("extensions", {}).get(ID, {})
+        receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
+        expected = {name: sha(SOURCE / name) for name in FILES}
+        installed = {name: sha(safe(root / f".aiverse/extensions/{ID}" / name, root, file=True)) for name in FILES}
+        return (isinstance(entry, dict) and entry.get("id") == ID and entry.get("installed") is True
+                and entry.get("version") == VERSION and receipt.get("files") == expected and installed == expected)
+    except (OSError, ValueError):
+        return False
+
+
+def _claude_load(path, root):
+    """Return (bytes or None, parsed object). A file that is not a JSON object is refused untouched."""
+    if not path.exists():
+        return None, {}
+    raw = safe(path, root, file=True).read_bytes()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise ValueError("existing Claude settings file is not valid JSON; preserve it")
+    if not isinstance(value, dict):
+        raise ValueError("existing Claude settings file is not a JSON object; preserve it")
+    if "hooks" in value and not isinstance(value["hooks"], dict):
+        raise ValueError("existing Claude hooks are malformed; preserve them")
+    permissions = value.get("permissions", {})
+    if not isinstance(permissions, dict) or not isinstance(permissions.get("allow", []), list):
+        raise ValueError("existing Claude permissions are malformed; preserve them")
+    for event, groups in value.get("hooks", {}).items():
+        if not isinstance(groups, list) or any(not isinstance(g, dict) or not isinstance(g.get("hooks"), list)
+                                               for g in groups):
+            raise ValueError("existing Claude hook groups are malformed; preserve them")
+    return raw, value
+
+
+def _claude_dump(value):
+    return (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _claude_rules(root, python):
+    prefix = " ".join(shlex.quote(v) for v in [python, str(root / ".aiverse/extensions" / ID / "bridge.py"),
+                                               "--harness", "claude"])
+    folder = (root / "runtime/codex-learning/claude-input").as_posix()
+    rules = [f"Bash({prefix} {name}:*)" for name in CLAUDE_SUBCOMMANDS]
+    rules.append(f"Edit(/{folder}/**)")
+    return rules
+
+
+def _strip_ours(hooks, root):
+    for event, groups in list(hooks.items()):
+        kept = []
+        for group in groups:
+            handlers = [h for h in group["hooks"] if not is_ours_claude(h, root)]
+            if handlers:
+                kept.append({**group, "hooks": handlers})
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
+
+
+def _claude_write(settings_file, record_file, settings_bytes, record):
+    settings_file.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_bytes(settings_file, settings_bytes)
+    _atomic_write_bytes(record_file, (json.dumps(record, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+
+
+def _claude_rollback(settings_file, record_file, before_settings, before_record):
+    for path, payload in ((settings_file, before_settings), (record_file, before_record)):
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            _restore_bytes(path, payload)
+
+
+def claude_install(root, options):
+    root = Path(root).resolve()
+    if not _package_verified(root):
+        raise ValueError("install the learning package first (install) and make sure its files match the package")
+    settings_file, record_file = claude_paths(root)
+    safe(settings_file, root)
+    safe(record_file, root)
+    receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
+    python = str(Path(options.get("python") or receipt.get("python") or sys.executable).absolute())
+    build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
+    before_settings, settings = _claude_load(settings_file, root)
+    before_record = record_file.read_bytes() if record_file.exists() else None
+    record = json.loads(before_record) if before_record else None
+    if record is not None and (not isinstance(record, dict) or record.get("schema_version") != 1):
+        raise ValueError("unsupported Claude adapter record; preserve it")
+
+    if record is None:
+        permissions = settings.get("permissions", {})
+        record = {"schema_version": 1,
+                  "original": ({"absent": True} if before_settings is None
+                               else {"bytes_base64": base64.b64encode(before_settings).decode("ascii")}),
+                  "original_auto_memory": ({"present": True, "value": settings["autoMemoryEnabled"]}
+                                           if "autoMemoryEnabled" in settings else {"present": False}),
+                  "added_allow_rules": [], "exact_restore_ok": True}
+    elif before_settings is None or sha_bytes(before_settings) != record.get("settings_sha256"):
+        record["exact_restore_ok"] = False
+
+    hooks = settings.setdefault("hooks", {}) if "hooks" in settings else {}
+    _strip_ours(hooks, root)
+    generated = claude_definition(root, python, build=build)
+    for event, groups in generated["hooks"].items():
+        hooks.setdefault(event, []).extend(groups)
+    settings["hooks"] = hooks
+
+    permissions = settings.setdefault("permissions", {})
+    allow = permissions.setdefault("allow", [])
+    desired = _claude_rules(root, python)
+    previously_ours = [rule for rule in record["added_allow_rules"] if rule in allow]
+    for rule in previously_ours:
+        if rule not in desired:
+            allow.remove(rule)
+    added = [rule for rule in record["added_allow_rules"] if rule in desired and rule in allow]
+    for rule in desired:
+        if rule not in allow:
+            allow.append(rule)
+            added.append(rule)
+    record["added_allow_rules"] = added
+    settings["autoMemoryEnabled"] = False
+
+    record.update({"written_hooks": generated["hooks"], "written_auto_memory": False, "build": build,
+                   "python": python, "updated_at": utc()})
+    data = _claude_dump(settings)
+    record["settings_sha256"] = sha_bytes(data)
+    try:
+        _claude_write(settings_file, record_file, data, record)
+    except Exception:
+        _claude_rollback(settings_file, record_file, before_settings, before_record)
+        raise
+    return {"state": "installed", "settings": str(settings_file), "build": build,
+            "allow_rules_added": list(added), "auto_memory": "off for this project",
+            "exact_restore_ok": record["exact_restore_ok"], "codex_modified": False,
+            "next_step": "Start a new Claude Code chat from this folder. The first time, Claude Code may ask you to trust the folder."}
+
+
+def sha_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def claude_remove(root):
+    root = Path(root).resolve()
+    settings_file, record_file = claude_paths(root)
+    safe(settings_file, root)
+    safe(record_file, root)
+    if not record_file.exists():
+        return {"state": "absent", "message": "No Claude adapter record; nothing was changed."}
+    before_record = record_file.read_bytes()
+    record = json.loads(before_record)
+    before_settings, settings = _claude_load(settings_file, root)
+    left_in_place = []
+    if record.get("exact_restore_ok") is True and before_settings is not None \
+            and sha_bytes(before_settings) == record.get("settings_sha256"):
+        if record["original"].get("absent"):
+            settings_file.unlink(missing_ok=True)
+        else:
+            _atomic_write_bytes(settings_file, base64.b64decode(record["original"]["bytes_base64"]))
+        mode = "exact"
+    else:
+        mode = "selective"
+        original_bytes = None if record["original"].get("absent") else base64.b64decode(record["original"]["bytes_base64"])
+        original = json.loads(original_bytes) if original_bytes else {}
+        written = {event: [h for g in groups for h in g["hooks"]] for event, groups in record.get("written_hooks", {}).items()}
+        hooks = settings.get("hooks", {})
+        for event, groups in list(hooks.items()):
+            kept = []
+            for group in groups:
+                handlers = []
+                for handler in group["hooks"]:
+                    if is_ours_claude(handler, root):
+                        if handler in written.get(event, []):
+                            continue
+                        left_in_place.append(f"hook {event} (changed after install)")
+                    handlers.append(handler)
+                if handlers:
+                    kept.append({**group, "hooks": handlers})
+            if kept:
+                hooks[event] = kept
+            else:
+                del hooks[event]
+        if "hooks" in settings and not hooks and "hooks" not in original:
+            del settings["hooks"]
+        permissions = settings.get("permissions", {})
+        allow = permissions.get("allow", [])
+        for rule in record.get("added_allow_rules", []):
+            if rule in allow:
+                allow.remove(rule)
+        if "allow" in permissions and not allow and "allow" not in original.get("permissions", {}):
+            del permissions["allow"]
+        if "permissions" in settings and not permissions and "permissions" not in original:
+            del settings["permissions"]
+        if settings.get("autoMemoryEnabled") == record.get("written_auto_memory") and "autoMemoryEnabled" in settings:
+            previous = record.get("original_auto_memory", {})
+            if previous.get("present"):
+                settings["autoMemoryEnabled"] = previous["value"]
+            else:
+                del settings["autoMemoryEnabled"]
+        elif "autoMemoryEnabled" in settings:
+            left_in_place.append("autoMemoryEnabled (changed after install)")
+        if settings or before_settings is not None:
+            if not settings and original_bytes is None:
+                settings_file.unlink(missing_ok=True)
+            else:
+                _atomic_write_bytes(settings_file, _claude_dump(settings))
+    try:
+        record_file.unlink()
+    except Exception:
+        _claude_rollback(settings_file, record_file, before_settings, before_record)
+        raise
+    return {"state": "removed", "restore": mode, "left_in_place": left_in_place, "codex_modified": False}
+
+
+def claude_doctor(root, python=None):
+    root = Path(root).resolve()
+    settings_file, record_file = claude_paths(root)
+    result = {"state": "setup-required", "package_files_verified": _package_verified(root),
+              "hooks_present": 0, "hooks_expected": 5, "build_matches": None, "allow_rules_missing": [],
+              "auto_memory_off": False, "exact_restore_ok": None, "execution_observed": False,
+              "review_observed": False, "guidance": []}
+    try:
+        _, settings = _claude_load(settings_file, root)
+    except (OSError, ValueError) as error:
+        result["guidance"].append(str(error))
+        return result
+    if record_file.exists():
+        result["exact_restore_ok"] = read_json(record_file, root).get("exact_restore_ok")
+    bridge = root / f".aiverse/extensions/{ID}/bridge.py"
+    build = sha(bridge) if bridge.is_file() else None
+    builds = set()
+    for event, groups in settings.get("hooks", {}).items():
+        for group in groups:
+            for handler in group["hooks"]:
+                if is_ours_claude(handler, root):
+                    result["hooks_present"] += 1
+                    builds.add(claude_build(handler))
+    result["build_matches"] = (builds == {build}) if builds else None
+    python = python or (read_json(record_file, root).get("python") if record_file.exists() else None)
+    if python:
+        allow = settings.get("permissions", {}).get("allow", [])
+        result["allow_rules_missing"] = [rule for rule in _claude_rules(root, python) if rule not in allow]
+    else:
+        result["allow_rules_missing"] = ["unknown (no record)"]
+    result["auto_memory_off"] = settings.get("autoMemoryEnabled") is False
+    events = root / "runtime/codex-learning/events.jsonl"
+    if events.exists() and events.stat().st_size <= 4_000_000 and build:
+        rows = []
+        for line in events.read_text(encoding="utf-8").splitlines()[-5000:]:
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+        claude_rows = [r for r in rows if r.get("harness") == "claude" and r.get("build") == build]
+        result["execution_observed"] = any(r.get("event") == "UserPromptSubmit" for r in claude_rows)
+        result["review_observed"] = any(r.get("event") == "review" and r.get("state") == "reviewed" for r in claude_rows)
+    if builds and result["build_matches"] is False:
+        result["state"] = "refresh-needed"
+        result["guidance"].append("The Claude hooks point at an older build: run claude-install again to refresh.")
+    elif (result["package_files_verified"] and result["hooks_present"] == 5 and not result["allow_rules_missing"]
+          and result["auto_memory_off"] and result["build_matches"]):
+        result["state"] = "ready" if result["execution_observed"] and result["review_observed"] else "installed"
+        if result["state"] == "installed":
+            result["guidance"].append("Hooks are in place. Open a new Claude Code chat in this folder to see them run.")
+    else:
+        result["guidance"].append("Run claude-install to set up the Claude Code hooks, permissions and memory switch.")
+    return result
+
+
 def setup(root, codex=None):
     root = Path(root).resolve()
     bridge = Bridge(root, create_runtime=False)
@@ -410,6 +695,7 @@ def setup(root, codex=None):
     events = root / "runtime/codex-learning/events.jsonl"
     if events.exists() and events.stat().st_size <= 4_000_000:
         rows = [json.loads(s) for s in events.read_text(encoding="utf-8").splitlines()[-5000:]]
+        rows = [r for r in rows if r.get("harness", "codex") == "codex"]
         build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
         result["execution_observed"] = any(r.get("build") == build and r.get("event") == "UserPromptSubmit" for r in rows)
         result["review_observed"] = any(
@@ -424,7 +710,8 @@ def setup(root, codex=None):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("command", choices=["package", "install", "setup", "doctor", "descriptor", "remove"])
+    p.add_argument("command", choices=["package", "install", "setup", "doctor", "descriptor", "remove",
+                                       "claude-install", "claude-doctor", "claude-remove"])
     p.add_argument("--root", default=str(DEFAULT_ROOT))
     p.add_argument("--output")
     for name in ("metadata", "python", "node", "skills-root", "skills-entrypoint", "codex"):
@@ -442,6 +729,12 @@ def main():
             result = install(root, options)
         elif args.command == "remove":
             result = remove(root)
+        elif args.command == "claude-install":
+            result = claude_install(root, options)
+        elif args.command == "claude-remove":
+            result = claude_remove(root)
+        elif args.command == "claude-doctor":
+            result = claude_doctor(root, args.python)
         else:
             result = setup(root, args.codex)
             if args.command == "descriptor":

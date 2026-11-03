@@ -81,3 +81,7 @@ and use explicit scoped inputs first. Missing/uncertain declarations keep worksp
 candidates restricted and operator candidates as drafts. Explicit `workspace_local`
 intent stays restricted even when the method is portable. Existing proposal/auto
 policy still controls activation. Do not set declarations just to pass a gate.
+
+## Claude Code input
+
+In Claude Code the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused.

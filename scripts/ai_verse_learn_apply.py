@@ -54,6 +54,7 @@ REASONS = {
     "stored_unavailable": "what is already stored could not be read, so novelty cannot be checked",
     "competing": "another sentence in the same conversation window is about the same thing and says something different",
     "goal_owner_unavailable": "no goal owner is active yet",
+    "auto_blocked": "automatic saving is blocked until the owner write itself can be fenced (allow_unfenced_auto is false)",
     "fenced": "the worker no longer held the right to write",
     "owner_unavailable": "the owner that would save it was not available",
     "owner_refused": "the owner asked for clarification instead of saving",
@@ -328,11 +329,15 @@ def proposal(item: Dict[str, Any], reason: str, ref: str) -> Dict[str, Any]:
     return {"state": "proposed", "reason": reason, "inbox": {"candidate_kind": "claude-code-learning-proposal", "summary": " ".join(lines)[:1500], "refs": [ref]}}
 
 
-def mode_still_auto(root: Path) -> bool:
+def read_config(root: Path) -> Dict[str, Any]:
     try:
-        return json.loads((root / ".aiverse" / "learn" / "config.json").read_text(encoding="utf-8")).get("mode") == "auto"
+        return json.loads((root / ".aiverse" / "learn" / "config.json").read_text(encoding="utf-8"))
     except Exception:
-        return False
+        return {}
+
+
+def mode_still_auto(root: Path) -> bool:
+    return read_config(root).get("mode") == "auto"
 
 
 def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
@@ -342,6 +347,10 @@ def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
         return proposal(item, item["reason"], ref)
     if mode != "auto":
         return proposal(item, "propose_mode", ref)
+    # The fence below stops at the host adapter's dispatch; it cannot reach the owner subprocess without editing the adapter and
+    # the owners, which this change does not do. Until then auto stays blocked unless the member explicitly accepts that gap.
+    if read_config(root).get("allow_unfenced_auto") is not True:
+        return proposal(item, "auto_blocked", ref)
     key = effect_key(session_key, item)
     deadline, parent = request.get("deadline", float("inf")), request.get("parent_pid")
 

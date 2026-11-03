@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { learnPaths, loadConfig } from './learn-common.mjs';
+import { ingest, openStore } from './learn-store.mjs';
 import { splitText } from './learn-window.mjs';
 import { buildPrompt, reviewerArgs, run } from './learn-worker.mjs';
 import { REPO } from './test-learn-support.mjs';
@@ -180,6 +181,98 @@ test('compaction replaces the transcript BEFORE any drain: unread history is sti
   assert.equal(allText(learnPaths(root).base).includes('hunter2'), false);
   assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'handoff_used'));
   assert.equal(fs.readdirSync(path.join(learnPaths(root).base, 'handoff')).length, 0); // consumed
+});
+
+const handoffDir = (root) => path.join(learnPaths(root).base, 'handoff');
+
+test('the handoff keeps only messages of a known scope: no cwd, an unmanifested folder and a cwd outside the Core are never written', () => {
+  const root = core();
+  workspace(root, 'alpha');
+  fs.mkdirSync(path.join(root, 'workspaces', 'ghost'));
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [
+    userLine('o1', 'operator message that may be kept', root),
+    userLine('w1', 'workspace alpha message that may be kept', path.join(root, 'workspaces', 'alpha')),
+    userLine('n1', 'NOCWD message that must not be kept', null),
+    userLine('g1', 'GHOST folder message that must not be kept', path.join(root, 'workspaces', 'ghost')),
+    userLine('x1', 'OUTSIDE message that must not be kept', path.dirname(root)),
+  ]);
+  hookEvent(root, 'precompact', s);
+  const text = fs.readFileSync(path.join(handoffDir(root), fs.readdirSync(handoffDir(root))[0]), 'utf8');
+  assert.ok(text.includes('operator message') && text.includes('workspace alpha message'));
+  for (const bad of ['NOCWD', 'GHOST', 'OUTSIDE']) assert.equal(text.includes(bad), false, bad);
+});
+
+test('adopting a handoff keeps the part offset: a partly reviewed long message is not replayed from its start', async () => {
+  const root = core({ window_chars: 1000 });
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const big = ['LINEONE', 'LINETWO', 'LINETHREE', 'LINEFOUR'].map((w) => `${w} ${'word '.repeat(170)}`.trim()).join('\n');
+  writeTranscript(s.transcript_path, [userLine('big', big, root), userLine('small', 'a small message after the big one', root)]);
+  hookEvent(root, 'precompact', s);
+  const db = await openStore(root);
+  ingest(db, root); // registers the source and the handoff
+  const { fp } = db.prepare('SELECT fp FROM sources').get();
+  db.prepare('UPDATE sources SET line = 0, part = 2 WHERE fp = ?').run(fp); // parts 1 and 2 were already reviewed
+  db.close();
+  writeTranscript(s.transcript_path, [userLine('n0', 'a completely different transcript now', root)]);
+  hookEvent(root, 'end', s);
+  await drain(root);
+  const prompts = calls().map((c) => c.prompt).join('\n');
+  assert.ok(prompts.includes('LINETHREE') && prompts.includes('LINEFOUR') && prompts.includes('a small message after'));
+  assert.equal(prompts.includes('LINEONE') || prompts.includes('LINETWO'), false);
+});
+
+test('a replacement that keeps the first line and is detected only by its first records still adopts the handoff at cursor 0', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const header = assistantLine('h', 'the same opening record in every version', root);
+  writeTranscript(s.transcript_path, [header, userLine('x1', 'original message number one', root), userLine('x2', 'original message number two', root), userLine('x3', 'original message number three', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [header, userLine('y1', 'rewritten message number one', root), userLine('y2', 'rewritten message number two', root), userLine('y3', 'rewritten message number three', root)]);
+  hookEvent(root, 'end', s);
+  await drain(root);
+  markersOnce(['original message number one', 'original message number two', 'original message number three', 'rewritten message number one', 'rewritten message number three']);
+  assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'handoff_used'));
+});
+
+test('handoff housekeeping: caps by count (oldest first), drops stale temp files, runs even when learning is off, and frees a closed source', async () => {
+  const root = core({ mode: 'off' });
+  const dir = handoffDir(root);
+  fs.mkdirSync(dir, { recursive: true });
+  const now = Date.now();
+  for (let i = 0; i < 60; i += 1) {
+    const f = path.join(dir, `k-${i}.jsonl`);
+    fs.writeFileSync(f, '{}\n');
+    const t = new Date(now - (100 - i) * 1000); // k-59 is the newest
+    fs.utimesSync(f, t, t);
+  }
+  const tmp = path.join(dir, 'old.jsonl.tmp');
+  fs.writeFileSync(tmp, 'x');
+  const old = new Date(now - 3 * 3600 * 1000);
+  fs.utimesSync(tmp, old, old);
+  hookEvent(root, 'stop', session(root)); // mode off: still housekeeping
+  const left = fs.readdirSync(dir).sort();
+  assert.equal(left.length, 50);
+  assert.ok(left.includes('k-59.jsonl') && !left.includes('k-0.jsonl') && !left.includes('old.jsonl.tmp'));
+  // a handoff whose source is closed is deleted on the next ingest
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [userLine('a1', 'message to hand over before compaction', root)]);
+  hookEvent(root, 'precompact', s);
+  const db = await openStore(root);
+  ingest(db, root);
+  const row = db.prepare('SELECT session, fp, path FROM handoffs').get();
+  assert.ok(fs.existsSync(row.path));
+  db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(row.session, row.fp);
+  ingest(db, root);
+  assert.equal(fs.existsSync(row.path), false);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM handoffs').get().n, 0);
+  db.close();
 });
 
 test('a handoff that was not needed (transcript not replaced) does not cause a second review', async () => {

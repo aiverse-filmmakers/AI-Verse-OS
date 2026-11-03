@@ -12,14 +12,14 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { learnPaths } from './learn-common.mjs';
+import { learnPaths, pruneRuntime } from './learn-common.mjs';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0,
   due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
   anchor TEXT DEFAULT '', path TEXT, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
-CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, PRIMARY KEY(session, fp));
+CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, fp));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
 CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
@@ -67,29 +67,14 @@ export const release = (db, name, owner) => db.prepare('DELETE FROM claims WHERE
 
 // -- ingest: spool files become rows, once ---------------------------------------------------------------------
 
-const DAY = 24 * 3600 * 1000;
-
-// Event files that nothing processed for 30 days, abandoned temp files after a day, quarantined bad events after 14 days.
-function prune(spool, now) {
-  const sweep = (dir, test, maxAge) => {
-    let names = [];
-    try { names = fs.readdirSync(dir); } catch { return; }
-    for (const n of names) {
-      try {
-        const file = path.join(dir, n);
-        if (test(n) && now - fs.statSync(file).mtimeMs > maxAge) fs.rmSync(file, { force: true });
-      } catch {}
-    }
-  };
-  sweep(spool, (n) => n.endsWith('.tmp'), DAY);
-  sweep(spool, (n) => n.endsWith('.json'), 30 * DAY);
-  sweep(path.join(spool, 'bad'), () => true, 14 * DAY);
-  sweep(path.join(path.dirname(spool), 'handoff'), () => true, 30 * DAY);
-}
-
 export function ingest(db, root, now = Date.now()) {
   const { spool } = learnPaths(root);
-  prune(spool, now);
+  pruneRuntime(root, now);
+  // a handoff of a source that is closed or gone has nothing left to give
+  for (const h of db.prepare('SELECT h.session, h.fp, h.path FROM handoffs h LEFT JOIN sources s ON s.session = h.session AND s.fp = h.fp WHERE s.closed = 1 OR s.fp IS NULL').all()) {
+    fs.rmSync(h.path, { force: true });
+    db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(h.session, h.fp);
+  }
   let names = [];
   try {
     names = fs.readdirSync(spool).filter((n) => n.endsWith('.json')).sort();
@@ -136,7 +121,7 @@ function applyEvent(db, event, now) {
     db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(key, event.handoff.fp);
     const old = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, event.handoff.fp)?.path;
     if (old && old !== event.handoff.path) fs.rmSync(old, { force: true });
-    db.prepare('INSERT OR REPLACE INTO handoffs(session, fp, path) VALUES(?, ?, ?)').run(key, event.handoff.fp, event.handoff.path);
+    db.prepare('INSERT OR REPLACE INTO handoffs(session, fp, path, head, hn) VALUES(?, ?, ?, ?, ?)').run(key, event.handoff.fp, event.handoff.path, event.handoff.head, event.handoff.hn);
   }
   if (event.handoff_failed) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, now, 'handoff_failed');
 }

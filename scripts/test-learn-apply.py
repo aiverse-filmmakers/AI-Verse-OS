@@ -113,7 +113,7 @@ def committed(c, mode="auto", scope="operator", host=None, root=None, **extra):
     item = plan_one(c, scope)
     base = root or Path(tempfile.mkdtemp())
     (base / ".aiverse" / "learn").mkdir(parents=True, exist_ok=True)
-    (base / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode}))
+    (base / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode, "allow_unfenced_auto": True}))
     return learn.commit(base, {"item": item, "mode": mode, "scope": scope, "session_key": "k", **extra}, host=(FakeModule, host or FakeHost()))
 
 
@@ -291,7 +291,7 @@ class Commit(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         item = plan_one(cand())
         (root / ".aiverse" / "learn").mkdir(parents=True)
-        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off"}))
+        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off", "allow_unfenced_auto": True}))
         off = learn.commit(root, {"item": item, "mode": "auto", "scope": "operator", "session_key": "k"}, host=(FakeModule, host))
         self.assertEqual(off["reason"], "fenced")
         self.assertEqual(host.calls, [])
@@ -320,7 +320,7 @@ class Commit(unittest.TestCase):
         # auto is switched off during the Brain read
         host = Slow()
         root = Path(tempfile.mkdtemp())
-        host.on_read = lambda: (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off"}))
+        host.on_read = lambda: (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off", "allow_unfenced_auto": True}))
         out = committed(goal, host=host, root=root)
         self.assertEqual(out["reason"], "fenced")
         self.assertNotIn("brain.intent.capture", host.calls)
@@ -330,10 +330,19 @@ class Commit(unittest.TestCase):
         host.on_read = lambda: None
         item = plan_one(cand())
         (root / ".aiverse" / "learn").mkdir(parents=True)
-        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "auto"}))
+        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "auto", "allow_unfenced_auto": True}))
         owners = learn.Owners(root, "k", "operator", (FakeModule, host), fence=lambda: (_ for _ in ()).throw(learn.Refused("fenced")))
         with self.assertRaises(learn.Refused):
             owners.preference(item, "key", "ref")
+        self.assertEqual(host.calls, [])
+
+    def test_auto_is_blocked_by_default_because_the_owner_write_cannot_be_fenced(self):
+        host = FakeHost()
+        root = Path(tempfile.mkdtemp())
+        (root / ".aiverse" / "learn").mkdir(parents=True)
+        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "auto"}))
+        out = learn.commit(root, {"item": plan_one(cand()), "mode": "auto", "scope": "operator", "session_key": "k"}, host=(FakeModule, host))
+        self.assertEqual((out["state"], out["reason"]), ("proposed", "auto_blocked"))
         self.assertEqual(host.calls, [])
 
     def test_auto_goal_goes_through_brain_only_when_ready(self):
@@ -364,7 +373,7 @@ class RealProfileOwner(unittest.TestCase):
     def commit(self, c, mode="auto"):
         item = plan_one(c)
         (self.root / ".aiverse" / "learn").mkdir(parents=True, exist_ok=True)
-        (self.root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode}))
+        (self.root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode, "allow_unfenced_auto": True}))
         return learn.commit(self.root, {"item": item, "mode": mode, "scope": "operator", "session_key": "k"})
 
     def test_auto_preference_written_through_the_owner_once(self):

@@ -45,7 +45,7 @@ export function core(configOverrides = {}) {
   const fake = path.join(root, 'fake-claude.mjs');
   fs.writeFileSync(fake, FAKE_CLAUDE);
   fs.mkdirSync(path.join(root, '.aiverse', 'learn'), { recursive: true });
-  const config = { mode: 'auto', python: PYTHON, claude_command: [fake], idle_seconds: 1, ...configOverrides };
+  const config = { mode: 'auto', python: PYTHON, claude_command: [fake], idle_seconds: 1, allow_unfenced_auto: true, ...configOverrides };
   fs.writeFileSync(path.join(root, '.aiverse', 'learn', 'config.json'), JSON.stringify(config));
   const env = {
     FAKE_LOG: path.join(root, 'fake.log'), FAKE_REVIEW: path.join(root, 'review.json'), FAKE_CONFIG: path.join(root, '.aiverse', 'learn', 'config.json'),

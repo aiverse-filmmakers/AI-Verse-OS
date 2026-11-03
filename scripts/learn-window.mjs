@@ -99,14 +99,20 @@ export function readWindow(lines, cursor, budget, scopeOf) {
 }
 
 // What PreCompact hands over so compaction cannot erase unread history: only the user messages, as transcript-shaped lines
-// that remember their original line number. A message with any secret-like text is dropped whole, never stored.
-export function handoffLines(lines) {
+// that remember their original line number. A message with any secret-like text is dropped whole, never stored, and so is a
+// message with no cwd, an unmanifested workspace folder or a cwd outside the Core (the same scope rules as a window).
+export const headHash = (lines, n) => sha(lines.slice(0, n).join('\n'), 16);
+export const HEAD_RECORDS = 3;
+
+export function handoffLines(lines, scopeOf) {
   const out = [];
   lines.forEach((raw, line) => {
     let entry = null;
     try { entry = JSON.parse(raw); } catch {}
     const message = toMessage(entry, line);
     if (!message || message.role !== 'user' || SECRET.test(message.text)) return;
+    const scope = scopeOf(message.cwd);
+    if (scope === null || scope === 'unscoped') return; // only a known operator or workspace scope is ever persisted
     out.push(JSON.stringify({ type: 'user', uuid: message.id, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
   });
   return out;

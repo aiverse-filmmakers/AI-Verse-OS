@@ -21,6 +21,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   review_timeout_seconds: 120,
   claude_command: ['claude'],
   python: null,
+  allow_unfenced_auto: false,
 });
 
 // Numeric settings are clamped so a typo cannot stop progress (window_chars 0) or remove a cost cap.
@@ -100,4 +101,28 @@ export function isMain(metaUrl) {
   } catch {
     return false;
   }
+}
+
+const DAY = 24 * 3600 * 1000;
+export const HANDOFF_MAX_FILES = 50;
+export const HANDOFF_MAX_BYTES = 64 * 1024 * 1024;
+
+// Cheap, database-free housekeeping that the hook runs even when learning is off: abandoned temp files, old or excess handoffs
+// (oldest first, capped by count and total size), old event files and quarantined events. Never creates anything.
+export function pruneRuntime(root, now = Date.now()) {
+  const { base, spool } = learnPaths(root);
+  const list = (dir) => { try { return fs.readdirSync(dir).map((n) => { const f = path.join(dir, n); const st = fs.statSync(f); return st.isFile() ? { f, n, age: now - st.mtimeMs, size: st.size } : null; }).filter(Boolean); } catch { return []; } };
+  const drop = (entries, test, maxAge) => entries.filter((e) => test(e.n) && e.age > maxAge).forEach((e) => fs.rmSync(e.f, { force: true }));
+  drop(list(spool), (n) => n.endsWith('.tmp'), DAY);
+  drop(list(spool), (n) => n.endsWith('.json'), 30 * DAY);
+  drop(list(path.join(spool, 'bad')), () => true, 14 * DAY);
+  const dir = path.join(base, 'handoff');
+  drop(list(dir), (n) => n.endsWith('.tmp'), 60 * 60 * 1000);
+  drop(list(dir), () => true, 30 * DAY);
+  const kept = list(dir).filter((e) => e.n.endsWith('.jsonl')).sort((a, b) => a.age - b.age); // newest first
+  let bytes = 0;
+  kept.forEach((e, i) => {
+    bytes += e.size;
+    if (i >= HANDOFF_MAX_FILES || bytes > HANDOFF_MAX_BYTES) fs.rmSync(e.f, { force: true });
+  });
 }

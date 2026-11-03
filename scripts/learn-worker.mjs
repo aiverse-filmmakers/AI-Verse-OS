@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { isEnabled, isMain, learnPaths, loadConfig, resolveScope, sha } from './learn-common.mjs';
 import { resolveClaude } from './learn-claude.mjs';
 import { acquire, allowance, holds, ingest, openStore, recordReview, release, renew, tx } from './learn-store.mjs';
-import { fingerprint, readLines, readSource } from './learn-window.mjs';
+import { fingerprint, headHash, readLines, readSource } from './learn-window.mjs';
 import { computeWriteCommandFingerprint, submitWriteCommand } from './write-command.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -168,10 +168,13 @@ function adoptHandoff(db, key, source) {
   const handoff = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, source.fp);
   if (!handoff || !fs.existsSync(handoff.path)) return false;
   let start = 0;
+  let part = 0;
   try {
-    start = readLines(handoff.path).filter((raw) => { try { return JSON.parse(raw).orig < source.line; } catch { return false; } }).length;
+    const origs = readLines(handoff.path).map((raw) => { try { return JSON.parse(raw).orig; } catch { return -1; } });
+    start = origs.filter((o) => o < source.line).length;
+    if (source.part > 0 && origs[start] === source.line) part = source.part; // a long message already partly reviewed continues at its part
   } catch { return false; }
-  db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, path) VALUES(?, ?, ?, ?)').run(key, `h:${source.fp}`, start, handoff.path);
+  db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, part, path) VALUES(?, ?, ?, ?, ?)').run(key, `h:${source.fp}`, start, part, handoff.path);
   db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(key, source.fp);
   db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(key, source.fp);
   noteFailure(db, key, 'handoff_used');
@@ -185,6 +188,15 @@ function restartSource(db, key, source) {
   return { ...source, line: 0, part: 0, anchor_line: -1, anchor: '' };
 }
 
+function headChanged(db, session, source) {
+  const h = db.prepare('SELECT head, hn FROM handoffs WHERE session = ? AND fp = ?').get(session.key, source.fp);
+  if (!h || !h.head) return false;
+  try {
+    const lines = readLines(session.transcript);
+    return lines.length < h.hn || headHash(lines, h.hn) !== h.head;
+  } catch { return false; }
+}
+
 // The first open source that has a pending plan or something left to read.
 function nextWork(ctx, session) {
   const { root, db } = ctx;
@@ -196,6 +208,9 @@ function nextWork(ctx, session) {
   for (let source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY id').all(session.key)) {
     const pending = db.prepare('SELECT body FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').get(session.key, source.fp, source.line, source.part);
     if (pending) return { source, live, review: JSON.parse(pending.body) };
+    // Same first line but different first records: the handoff's head no longer matches the live transcript, so it was replaced
+    // even if the cursor is still 0 and no anchor can show it.
+    if (!source.path && headChanged(db, session, source)) { if (adoptHandoff(db, session.key, source)) return nextWork(ctx, session); }
     let window = readSource(source, source.path || session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
     if (!source.path && (!window || window.replaced) && adoptHandoff(db, session.key, source)) return nextWork(ctx, session);
     if (window?.replaced) {

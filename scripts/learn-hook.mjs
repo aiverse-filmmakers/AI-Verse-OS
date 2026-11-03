@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, learnPaths, loadConfig, sessionKey, sha, spoolEvent } from './learn-common.mjs';
-import { fingerprint, handoffLines, readLines } from './learn-window.mjs';
+import { isEnabled, isMain, learnPaths, loadConfig, pruneRuntime, resolveScope, sessionKey, sha, spoolEvent } from './learn-common.mjs';
+import { fingerprint, handoffLines, HEAD_RECORDS, headHash, readLines } from './learn-window.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const MAX_STDIN = 1024 * 1024;
@@ -50,9 +50,15 @@ function handoff(root, key, transcript, now) {
     const dir = path.join(learnPaths(root).base, 'handoff');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${key}-${now}-${sha(transcript + now, 8)}.jsonl`);
-    fs.writeFileSync(`${file}.tmp`, `${handoffLines(lines).join('\n')}\n`);
-    fs.renameSync(`${file}.tmp`, file);
-    return { handoff: { fp, path: file } };
+    try {
+      fs.writeFileSync(`${file}.tmp`, `${handoffLines(lines, (cwd) => resolveScope(root, cwd)).join('\n')}\n`);
+      fs.renameSync(`${file}.tmp`, file);
+    } catch (error) {
+      fs.rmSync(`${file}.tmp`, { force: true }); // no half-written copy is left behind
+      throw error;
+    }
+    const hn = Math.min(HEAD_RECORDS, lines.length);
+    return { handoff: { fp, path: file, head: headHash(lines, hn), hn } };
   } catch {
     return { handoff_failed: true };
   }
@@ -60,6 +66,7 @@ function handoff(root, key, transcript, now) {
 
 export function handleEvent(root, event, payload, now = Date.now(), start = startWorker) {
   const config = loadConfig(root);
+  try { pruneRuntime(root, now); } catch {} // housekeeping runs whether or not learning is on; it creates nothing
   if (!isEnabled(config) || process.env.AIVERSE_LEARN_REVIEW) return false;
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) return false;
   if (event === 'start') {
@@ -76,6 +83,7 @@ export function handleEvent(root, event, payload, now = Date.now(), start = star
     config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns },
     ...(event === 'precompact' ? handoff(root, key, transcript, now) : {}),
   });
+  if (event === 'precompact') try { pruneRuntime(root, now); } catch {} // the new file may have crossed the cap
   start(root);
   return true;
 }

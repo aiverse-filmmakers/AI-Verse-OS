@@ -74,7 +74,7 @@ export function scanTranscript(file, { from = 0, anchor = '', maxRecords = BATCH
     const gaps = [];
     let held = 0;
     let carry = Buffer.alloc(0);
-    let skipping = null;
+    let skipping = null; // for a line too large to hold: what its bytes have shown so far (see Shape)
     let lineStart = from;
     let position = from;
     let end = from;
@@ -87,7 +87,8 @@ export function scanTranscript(file, { from = 0, anchor = '', maxRecords = BATCH
       for (let i = 0; i < read; i += 1) {
         if (buffer[i] !== 10) continue;
         if (skipping) {
-          if (/"type"\s*:\s*"user"/.test(skipping.toString('utf8'))) gaps.push({ seq: lineStart, bytes: position + i - lineStart });
+          skipping.feed(buffer.subarray(begin, i)); // the rest of the line, up to its end
+          if (skipping.unresolved()) gaps.push({ seq: lineStart, bytes: position + i - lineStart });
         } else {
           const record = parseLine(Buffer.concat([carry, buffer.subarray(begin, i)]));
           if (record) { records.push({ ...record, seq: lineStart }); held += record.text.length; }
@@ -99,15 +100,35 @@ export function scanTranscript(file, { from = 0, anchor = '', maxRecords = BATCH
         end = lineStart;
         if (records.length >= maxRecords || held >= maxBytes) break scan;
       }
-      if (!skipping) {
+      if (skipping) skipping.feed(buffer.subarray(begin, read));
+      else {
         carry = Buffer.concat([carry, buffer.subarray(begin, read)]);
-        if (carry.length > maxRecordBytes) { skipping = carry.subarray(0, 4096); carry = Buffer.alloc(0); }
+        if (carry.length > maxRecordBytes) { skipping = new Shape(); skipping.feed(carry); carry = Buffer.alloc(0); }
       }
       position += read;
     }
     return { records, gaps, end, anchor: end > 0 ? anchorOf(fd, end) : '', done };
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+// What a line too large to hold turns out to be, judged from ALL of its bytes in any property order: every `"type":"..."` value that
+// appears anywhere in it, and whether it carries a marker of generated or tool content. Only a line that is clearly not a human
+// message (an assistant record, a tool result, a generated record, another record type) is ignored; a user-shaped line, or one
+// whose shape cannot be told, is an UNRESOLVED gap.
+class Shape {
+  constructor() { this.types = new Set(); this.generated = false; this.tail = ''; }
+  feed(chunk) {
+    const text = this.tail + chunk.toString('latin1');
+    for (const m of text.matchAll(/"type"\s*:\s*"([A-Za-z_-]{1,40})"/g)) this.types.add(m[1]);
+    if (/"(?:isMeta|isSidechain|isCompactSummary|isVisibleInTranscriptOnly|queueTranscriptOnly|toolUseResult|sourceToolAssistantUUID)"\s*:\s*(?!false|null)/.test(text)) this.generated = true;
+    this.tail = text.slice(-96);
+  }
+  unresolved() {
+    if (this.generated || this.types.has('tool_result')) return false;
+    const record = ['assistant', 'system', 'attachment', 'summary', 'progress'].some((t) => this.types.has(t)) && !this.types.has('user');
+    return !record; // user-shaped, or no recognisable type at all
   }
 }
 

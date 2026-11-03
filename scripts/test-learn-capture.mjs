@@ -215,7 +215,7 @@ test('capture fails closed: with the database unavailable or busy NO file is wri
   let r = await handleEvent(root, 'precompact', s, Date.now(), noStart, { open: async () => { throw new Error('no node:sqlite'); } });
   assert.deepEqual([r.ok, r.code], [false, 'capture_failed']);
   assert.equal(everything().includes('lilac7') || everything().includes('SPOOL'), false);
-  assert.deepEqual(fs.readdirSync(learnPaths(root).base).sort(), ['status.json']);
+  assert.deepEqual(fs.readdirSync(learnPaths(root).base).sort(), ['status']);
   assert.deepEqual(readStatus(root).sort(), ['capture_failed', 'store_unavailable']);
   // the database is busy (a real write lock held elsewhere past the hook's patience)
   await openStore(root).then((d) => d.close());

@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, learnPaths, loadConfig, looksSynced, setStatus, sha, sqliteTooOld, validWorkspace } from './learn-common.mjs';
+import { isEnabled, isMain, learnPaths, loadConfig, modeGeneration, setStatus, sha, validWorkspace } from './learn-common.mjs';
 import { resolveClaude } from './learn-claude.mjs';
 import { acquire, isSecretText, openStore, purgeWal, release, renew, reserveReview, settleReview, tx } from './learn-store.mjs';
 import { computeWriteCommandFingerprint, submitWriteCommand, withdrawCandidate } from './write-command.mjs';
@@ -45,7 +45,7 @@ export function buildPrompt(root, scope, stored, messages, reported = []) {
   const transcript = messages.map((message) => `[${message.id}] operator: ${message.text}`).join('\n');
   return [
     instruction, '', `Conversation scope: ${scope}`, '', 'Already stored for this scope (DATA, copy exact text for "replaces"):',
-    JSON.stringify(stored), '', 'Output JSON schema:', schema, '', 'ALREADY REPORTED from this text (DATA, do not report these again):', JSON.stringify(reported), '', 'WHAT THE OPERATOR WROTE (DATA, ordered oldest first):', transcript,
+    JSON.stringify(stored), '', 'Output JSON schema:', schema, '', 'ALREADY DECIDED about this text (DATA, accepted or rejected, do not report these again):', JSON.stringify(reported.slice(0, 60)), '', 'WHAT THE OPERATOR WROTE (DATA, ordered oldest first):', transcript,
   ].join('\n');
 }
 
@@ -173,8 +173,8 @@ export function chooseCut(text, room) {
 // in absolute offsets of each message. Progress is stored per message (done_to), so the window size can change at any time without
 // skipping or repeating a character.
 export function buildWindow(db, key, budget, now) {
-  const rows = db.prepare(`SELECT id, uuid, ts, scope, text, done_to FROM occurrences WHERE session = ? AND state = 'pending' AND not_before <= ? AND text IS NOT NULL
-    ORDER BY CASE WHEN ts IS NULL THEN 1 ELSE 0 END, ts, id LIMIT 500`).all(key, now);
+  const rows = db.prepare(`SELECT id, uuid, ts, ts_ms, scope, text, done_to FROM occurrences WHERE session = ? AND state = 'pending' AND not_before <= ? AND text IS NOT NULL
+    ORDER BY CASE WHEN ts_ms IS NULL THEN 1 ELSE 0 END, ts_ms, id LIMIT 500`).all(key, now);
   if (!rows.length) return null;
   const scope = rows[0].scope;
   const segs = [];
@@ -186,7 +186,7 @@ export function buildWindow(db, key, budget, now) {
     const rest = row.text.slice(row.done_to);
     const take = chooseCut(rest, room);
     const id = row.done_to ? `o${row.id}+${row.done_to}` : `o${row.id}`;
-    segs.push({ id, occurrence: row.id, uuid: row.uuid, ts: row.ts, text: rest.slice(0, take), full: row.text, start: row.done_to, end: row.done_to + take });
+    segs.push({ id, occurrence: row.id, uuid: row.uuid, ts: row.ts, ts_ms: row.ts_ms, text: rest.slice(0, take), full: row.text, start: row.done_to, end: row.done_to + take });
     used += take;
     if (row.done_to + take < row.text.length) break;
   }
@@ -199,7 +199,7 @@ class Stop extends Error {}
 
 function laterTexts(db, key, win) {
   const ids = new Set(win.segs.map((s) => s.occurrence));
-  return db.prepare("SELECT id, text FROM occurrences WHERE session = ? AND state = 'pending' AND text IS NOT NULL ORDER BY CASE WHEN ts IS NULL THEN 1 ELSE 0 END, ts, id LIMIT 200").all(key)
+  return db.prepare("SELECT id, text FROM occurrences WHERE session = ? AND state = 'pending' AND text IS NOT NULL ORDER BY CASE WHEN ts_ms IS NULL THEN 1 ELSE 0 END, ts_ms, id LIMIT 200").all(key)
     .filter((r) => !ids.has(r.id)).slice(0, 20).map((r) => r.text.slice(0, 2000));
 }
 
@@ -228,7 +228,12 @@ function failWindow(ctx, session, win, outcome) {
   return { state: 'parked', code: outcome.code };
 }
 
-const candidateHash = (statement) => sha(statement.toLowerCase(), 24);
+// A candidate is identified by the evidence it rests on, not by its words alone: the scope, the exact record, its kind, the assertion and
+// the quote. The same sentence in another scope or another record is another candidate.
+const candidateKey = (win, c) => {
+  const seg = win.segs.find((x) => x.id === c?.evidence?.message_id);
+  return sha(`${win.scope}|${seg?.uuid ?? ''}|${c.kind}|${c.statement.toLowerCase()}|${c.evidence?.quote ?? ''}`, 24);
+};
 
 // A window is reviewed page by page. Each page is planned and STORED (with the identity of every candidate it contained, accepted or
 // rejected) before the next is asked for, so a restart continues where it stopped. The text is only marked reviewed on the last page,
@@ -245,8 +250,10 @@ function reviewWindow(ctx, session) {
   if (!stored.ok) return failWindow(ctx, session, win, stored);
   hooks.afterContext?.(win);
   const uuids = win.segs.map((seg) => seg.uuid);
-  const seen = new Set(db.prepare('SELECT h FROM seen_candidates WHERE session = ?').all(session.key).map((r) => r.h));
-  const reported = db.prepare('SELECT body FROM items WHERE session = ?').all(session.key).map((r) => JSON.parse(r.body)).filter((b) => uuids.includes(b.uuid)).map((b) => b.statement);
+  // What was already decided about THIS text (accepted or rejected), shown to the reviewer so it can move past it; bounded.
+  const known = db.prepare(`SELECT h, statement, verdict FROM seen_candidates WHERE session = ? AND uuid IN (${uuids.map(() => '?').join(',')}) ORDER BY at DESC LIMIT 60`).all(session.key, ...uuids);
+  const seen = new Set(known.map((r) => r.h));
+  const reported = known.filter((r) => r.statement).map((r) => ({ statement: r.statement, verdict: r.verdict }));
   let total = 0;
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     if (guard()) return { state: 'disabled' };
@@ -270,7 +277,7 @@ function reviewWindow(ctx, session) {
     settleReview(db, session.key, reservation, reviewed.cost);
     hooks.afterReview?.(win);
     const page = reviewed.review.candidates;
-    const fresh = page.filter((c) => typeof c?.statement === 'string' && !seen.has(candidateHash(c.statement)));
+    const fresh = page.filter((c) => typeof c?.statement === 'string' && c.statement && !seen.has(candidateKey(win, c)));
     const more = reviewed.review.more === true || page.length >= 6;
     if (more && !fresh.length) return failWindow(ctx, session, win, { kind: 'error', code: 'reviewer_stalled' });
     const planned = fresh.length ? callApplier(root, config, 'plan', {
@@ -283,7 +290,7 @@ function reviewWindow(ctx, session) {
       if (error instanceof Stop) return { state: 'disabled' };
       throw error;
     }
-    for (const c of fresh) { seen.add(candidateHash(c.statement)); if (!isSecretText(db, c.statement)) reported.push(c.statement); }
+    for (const c of fresh) { seen.add(candidateKey(win, c)); if (!isSecretText(db, c.statement)) reported.push({ statement: c.statement.slice(0, 200), verdict: 'decided' }); }
     total += fresh.length;
     if (!more) {
       crash('after_finish');
@@ -304,15 +311,21 @@ function storePage(ctx, session, win, fresh, planned, more) {
     const live = new Set(db.prepare(`SELECT id FROM occurrences WHERE id IN (${win.segs.map(() => '?').join(',')}) AND state = 'pending' AND text IS NOT NULL`).all(...win.segs.map((s) => s.occurrence)).map((r) => r.id));
     const insert = db.prepare('INSERT OR IGNORE INTO items(session, scope, key, state, body, at) VALUES(?, ?, ?, ?, ?, ?)');
     const count = db.prepare('INSERT INTO counters(session, code, n) VALUES(?, ?, 1) ON CONFLICT(session, code) DO UPDATE SET n = n + 1');
-    for (const c of fresh) db.prepare('INSERT OR IGNORE INTO seen_candidates(session, h) VALUES(?, ?)').run(session.key, candidateHash(c.statement));
-    for (const item of planned.items) {
+    const decided = db.prepare('INSERT OR IGNORE INTO seen_candidates(session, h, uuid, verdict, statement, at) VALUES(?, ?, ?, ?, ?, ?)');
+    for (const [index, item] of planned.items.entries()) {
       const seg = win.segs.find((s) => s.id === item.message_id);
+      const candidate = fresh[index];
       // every persisted content field is screened with the one credential contract; an excluded source yields nothing
-      if (item.disposition === 'rejected' || !seg || !live.has(seg.occurrence) || isSecretText(db, `${item.statement ?? ''}\n${item.quote ?? ''}\n${item.replaces ?? ''}`)) {
-        count.run(session.key, `rejected_${item.disposition === 'rejected' ? item.reason : seg && live.has(seg.occurrence) ? 'secret_in_source' : 'source_excluded'}`);
+      const secret = isSecretText(db, `${candidate.statement}\n${candidate.evidence?.quote ?? ''}\n${candidate.replaces ?? ''}`);
+      const verdict = item.disposition === 'rejected' ? `rejected:${item.reason}` : secret ? 'rejected:secret_in_source' : !seg || !live.has(seg.occurrence) ? 'rejected:source_excluded' : 'accepted';
+      // the assertion is remembered in words only when it names no credential (the identity alone is kept otherwise)
+      decided.run(session.key, candidateKey(win, candidate), seg?.uuid ?? '', verdict, secret ? null : candidate.statement.slice(0, 200), now());
+      if (verdict !== 'accepted') {
+        count.run(session.key, verdict.replace(':', '_'));
         continue;
       }
-      const body = { ...item, message_id: seg.uuid, uuid: seg.uuid, ts: seg.ts, scope: win.scope, harness: 'claude-code', quote_abs: seg.start + item.quote_at, revision: planned.revision };
+      const earlier = db.prepare("SELECT COUNT(*) AS n FROM items WHERE session = ? AND scope = ? AND state NOT IN ('excluded', 'withdrawn') AND body != '{}' AND json_extract(body, '$.ts_ms') > ?").get(session.key, win.scope, seg.ts_ms ?? 0).n;
+      const body = { ...item, message_id: seg.uuid, uuid: seg.uuid, ts: seg.ts, ts_ms: seg.ts_ms ?? null, late: Boolean(seg.ts_ms) && earlier > 0, scope: win.scope, harness: 'claude-code', quote_abs: seg.start + item.quote_at, revision: planned.revision };
       const needsScope = win.scope === 'unresolved' || item.reason === 'scope_unresolved';
       insert.run(session.key, win.scope, sha(`${session.key}|${seg.uuid}|${item.kind}|${item.statement.toLowerCase()}`, 32), needsScope ? 'needs_scope' : 'pending', JSON.stringify(body), now());
     }
@@ -360,6 +373,7 @@ function withdrawItem(ctx, row) {
 function runItem(ctx, row) {
   const { root, db, now, config, guard, hooks } = ctx;
   const item = JSON.parse(row.body);
+  const generation = modeGeneration(root); // the mode this effect is prepared under
   const delay = (code) => { db.prepare('UPDATE items SET not_before = ? WHERE id = ?').run(now() + WAIT_MS, row.id); return { state: 'waiting', code }; };
   if (guard()) return { state: 'disabled' };
   const committed = callApplier(root, config, 'commit', {
@@ -385,6 +399,12 @@ function runItem(ctx, row) {
   if (claimed.changes !== 1) return { state: 'revoked' }; // no longer what was planned: no effect
   crash('after_claim');
   hooks.afterClaim?.(row);
+  // The effect is admitted only under the mode it was prepared under: any change to the configuration since (an off switch above
+  // all) puts the claim back, and nothing is filed.
+  if (modeGeneration(root) !== generation || guard()) {
+    db.prepare("UPDATE items SET state = 'pending', result = NULL WHERE id = ? AND state = 'filing'").run(row.id);
+    return { state: 'disabled' };
+  }
   const filed = (hooks.submit ?? submitInbox)(root, row.scope, result.inbox, idempotency);
   if (!filed.ok) {
     // Ambiguous: the command or the inbox item may exist. The reference to it is KEPT, so it stays withdrawable and the retry (same key) reconciles it.
@@ -432,19 +452,17 @@ function housekeeping(ctx) {
   refreshHealth(ctx);
   if (db.prepare("SELECT v FROM meta WHERE k = 'purge_pending'").get() && purgeWal(db)) db.prepare("DELETE FROM meta WHERE k = 'purge_pending'").run();
   setStatus(root, 'wal_purge_pending', Boolean(db.prepare("SELECT v FROM meta WHERE k = 'purge_pending'").get()));
-  setStatus(root, 'synced_folder', looksSynced(fs.realpathSync(root)));
-  setStatus(root, 'sqlite_wal_reset_risk', sqliteTooOld(db.prepare('SELECT sqlite_version() AS v').get().v));
 
 }
 
-// What is waiting (unreviewed text, unfinished items) plus the size of the write-ahead log, against the room the member allowed.
+// What the pipeline actually occupies on disk: the database as allocated plus its write-ahead log (every retained body, every
+// pending text and every page not yet reused is in there), against the room the member allowed.
 function refreshHealth(ctx) {
-  const { db, root, config } = ctx;
-  const backlog = db.prepare("SELECT COALESCE(SUM(size), 0) AS n FROM occurrences WHERE state = 'pending'").get().n
-    + db.prepare("SELECT COALESCE(SUM(LENGTH(body)), 0) AS n FROM items WHERE state IN ('pending', 'needs_scope', 'filing')").get().n;
-  let wal = 0;
-  try { wal = fs.statSync(`${learnPaths(root).db}-wal`).size; } catch {}
-  setStatus(root, 'storage_pressure', backlog + wal > config.max_pending_mb * 1024 * 1024);
+  const { root, config } = ctx;
+  const { db: file } = learnPaths(root);
+  let bytes = 0;
+  for (const name of [file, `${file}-wal`]) { try { bytes += fs.statSync(name).size; } catch {} }
+  setStatus(root, 'storage_pressure', bytes > config.max_pending_mb * 1024 * 1024);
 }
 
 function step(ctx) {
@@ -478,10 +496,11 @@ export async function run(root, { drain = false, sleep = (ms) => new Promise((re
   if (!isEnabled(loadConfig(root))) return { ran: false, outcomes };
   let db;
   try {
-    db = await openStore(root);
+    db = await openStore(root, { config: loadConfig(root) });
   } catch (error) {
-    setStatus(root, error?.code === 'store_incompatible' ? 'store_incompatible' : 'store_unavailable'); // an unusable or foreign database is never touched
-    return { ran: false, outcomes, code: error?.code === 'store_incompatible' ? 'store_incompatible' : 'store_unavailable' };
+    const code = ['store_incompatible', 'storage_unsafe'].includes(error?.code) ? error.code : 'store_unavailable'; // an unusable or foreign database is never touched
+    setStatus(root, code);
+    return { ran: false, outcomes, code };
   }
   try {
     const config0 = loadConfig(root);

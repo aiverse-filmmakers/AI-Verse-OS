@@ -52,13 +52,14 @@ const scope = (input.match(/Conversation scope: (\\S+)/) || [])[1] || '';
 let answer;
 if (mode === 'facts' || mode === 'repeat' || mode === 'rejects') {
   const window = input.split('WHAT THE OPERATOR WROTE')[1] || '';
-  const reported = JSON.parse((input.split('ALREADY REPORTED from this text (DATA, do not report these again):')[1] || '[]').split('\\n')[1] || '[]').map((x) => x.toLowerCase());
+  const marker = 'ALREADY DECIDED about this text (DATA, accepted or rejected, do not report these again):';
+  const reported = JSON.parse((input.split(marker)[1] || '[]').split('\\n')[1] || '[]').map((x) => String(x.statement).toLowerCase()); // what the reviewer was TOLD, not how often it was asked
   const facts = [];
   for (const m of window.matchAll(/\\[(o[\\d+]+)\\] operator: ([^\\n]*)/g)) for (const f of m[2].matchAll(/I always want (FACT\\d+) notes\\./g)) facts.push({ id: m[1], text: f[0] });
-  const calls = fs.readFileSync(process.env.FAKE_LOG, 'utf8').trim().split('\\n').length;
   const usable = mode === 'repeat' ? facts : facts.filter((f) => !reported.includes(f.text.toLowerCase()));
-  const make = (f, confidence = 0.95) => ({ kind: 'preference', category: 'communication', statement: f.text, scope_hint: 'general', exception: false, tentative: false, confidence, replaces: null, evidence: { message_id: f.id, quote: f.text } });
-  if (mode === 'rejects' && calls === 1) answer = { candidates: Array.from({ length: 6 }, (_, i) => make({ id: facts[0].id, text: 'I always want FACT' + facts[0].text.match(/FACT(\\d+)/)[1] + ' notes.' }, 0.1)).map((c, i) => ({ ...c, statement: 'I always want junk' + i + ' notes.', evidence: { ...c.evidence, quote: c.evidence.quote } })), more: true };
+  const make = (f, confidence = 0.95, statement = f.text) => ({ kind: 'preference', category: 'communication', statement, scope_hint: 'general', exception: false, tentative: false, confidence, replaces: null, evidence: { message_id: f.id, quote: f.text } });
+  const junk = facts.length ? Array.from({ length: 6 }, (_, i) => 'I always want junk' + i + ' notes.').filter((j) => !reported.includes(j.toLowerCase())) : [];
+  if (mode === 'rejects' && junk.length) answer = { candidates: junk.map((j) => make(facts[0], 0.1, j)), more: true };
   else answer = { candidates: usable.slice(0, 6).map((f) => make(f)), more: mode === 'repeat' ? true : usable.length > 6 };
 } else {
   const scoped = process.env.FAKE_REVIEW + '.' + scope.replace(':', '_');
@@ -79,7 +80,7 @@ export function core(configOverrides = {}) {
   const fake = path.join(root, 'fake-claude.mjs');
   fs.writeFileSync(fake, FAKE_CLAUDE);
   fs.mkdirSync(path.join(root, '.aiverse', 'learn'), { recursive: true });
-  const config = { mode: 'propose', python: PYTHON, claude_command: [fake], idle_seconds: 1, ...configOverrides };
+  const config = { mode: 'propose', python: PYTHON, claude_command: [fake], idle_seconds: 1, accept_storage_risk: true, ...configOverrides };
   fs.writeFileSync(path.join(root, '.aiverse', 'learn', 'config.json'), JSON.stringify(config));
   Object.assign(process.env, {
     FAKE_LOG: path.join(root, 'fake.log'), FAKE_REVIEW: path.join(root, 'review.json'), FAKE_CONFIG: path.join(root, '.aiverse', 'learn', 'config.json'),
@@ -113,6 +114,8 @@ export const candidate = (kind, statement, quote, message = 'o1', extra = {}) =>
   evidence: { message_id: message, quote }, ...(kind === 'preference' ? { category: 'communication' } : {}), ...extra,
 });
 
+// The state of the health conditions, read the way the member would.
+export const status = (root) => (fs.existsSync(path.join(root, 'runtime', 'learn', 'status')) ? fs.readdirSync(path.join(root, 'runtime', 'learn', 'status')).filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).sort() : []);
 export const calls = () => (fs.existsSync(process.env.FAKE_LOG) ? fs.readFileSync(process.env.FAKE_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
 export const shown = (c) => c.prompt.split('WHAT THE OPERATOR WROTE')[1] ?? '';
 export const occurrences = (text) => calls().reduce((n, c) => n + shown(c).split(text).length - 1, 0);

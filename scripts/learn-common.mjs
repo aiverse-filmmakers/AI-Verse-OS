@@ -20,6 +20,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   max_budget_usd: 0.15,
   review_timeout_seconds: 120,
   max_pending_mb: 256,
+  accept_storage_risk: false,
   claude_command: ['claude'],
   python: null,
 });
@@ -56,7 +57,7 @@ export const isEnabled = (config) => config.mode === 'propose' || config.mode ==
 
 export function learnPaths(root) {
   const base = path.join(root, 'runtime', 'learn');
-  return { base, db: path.join(base, 'learn.db'), status: path.join(base, 'status.json') };
+  return { base, db: path.join(base, 'learn.db'), status: path.join(base, 'status') };
 }
 
 export const sha = (value, length = 24) => crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
@@ -71,39 +72,56 @@ export function isMain(metaUrl) {
   }
 }
 
-// The visible health state: runtime/learn/status.json holds the set of problems that exist right now ({ code, codes, at }), written
-// atomically so a reader never sees half of it. Conditions are independent: setting one never hides or clears another. Best effort:
-// when the disk itself is the problem the caller reports through its exit code as well.
-export function readStatus(root) {
+// The visible health state: one small file per condition in runtime/learn/status/ (<code>.json). Conditions are independent and each
+// is written or removed on its own, so two processes updating different conditions can never lose each other's (there is no shared
+// file to read, change and rewrite). Best effort, and never through a link: when the disk or the path is the problem the caller
+// reports through its exit code as well.
+const CODE = /^[a-z][a-z0-9_]{1,40}$/;
+
+function statusDirectory(root, create) {
+  const { base, status } = learnPaths(root);
   try {
-    const value = JSON.parse(fs.readFileSync(learnPaths(root).status, 'utf8'));
-    return Array.isArray(value.codes) ? value.codes.filter((c) => typeof c === 'string') : [];
+    for (const dir of [path.dirname(base), base]) if (fs.existsSync(dir) && fs.lstatSync(dir).isSymbolicLink()) return null;
+    if (fs.existsSync(status)) return fs.lstatSync(status).isDirectory() ? status : null;
+    if (!create) return null;
+    fs.mkdirSync(status, { recursive: true, mode: 0o700 });
+    return fs.lstatSync(status).isDirectory() && !fs.lstatSync(status).isSymbolicLink() ? status : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readStatus(root) {
+  const dir = statusDirectory(root, false);
+  try {
+    return dir ? fs.readdirSync(dir).filter((n) => n.endsWith('.json') && CODE.test(n.slice(0, -5))).map((n) => n.slice(0, -5)).sort() : [];
   } catch {
     return [];
   }
 }
 
 export function setStatus(root, code, on = true) {
+  if (!CODE.test(code)) return;
   try {
-    const current = readStatus(root);
-    const next = on ? [...new Set([...current, code])] : current.filter((c) => c !== code);
-    if (next.join() === current.join()) return;
-    const { base, status } = learnPaths(root);
-    fs.mkdirSync(base, { recursive: true, mode: 0o700 });
-    const temp = `${status}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
-    fs.writeFileSync(temp, JSON.stringify({ code: next[0] ?? 'ok', codes: next, at: new Date().toISOString() }));
-    fs.renameSync(temp, status);
+    const dir = statusDirectory(root, on);
+    if (!dir) return;
+    const file = path.join(dir, `${code}.json`);
+    if (!on) { fs.rmSync(file, { force: true }); return; }
+    if (fs.existsSync(file)) return;
+    const temp = path.join(dir, `.${code}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`);
+    fs.writeFileSync(temp, JSON.stringify({ code, at: new Date().toISOString() }));
+    fs.renameSync(temp, file);
   } catch {}
 }
 
-// Storage the pipeline cannot rely on: a database in a folder a cloud-sync client or a network share manages (SQLite documents that
-// WAL does not work over network filesystems and that live database files must not be synced), or a SQLite older than the fix for
-// the WAL-reset bug (3.51.3, unless the vendor backported it). Only names are inspected; the filesystem type is not.
-const SYNCED = /(?:^|[\\/])(?:Dropbox|OneDrive[^\\/]*|Google ?Drive|iCloud ?Drive|Mobile Documents|CloudStorage|Box|pCloud|MEGA|Nextcloud|ownCloud|Sync)(?:[\\/]|$)|^\\\\|^\/(?:Volumes|mnt|net|run\/media)\//i;
-export const looksSynced = (target) => SYNCED.test(target);
-export function sqliteTooOld(version) {
-  const [a, b, c] = String(version).split('.').map(Number);
-  return a < 3 || (a === 3 && (b < 51 || (b === 51 && c < 3)));
+// A generation of the configuration: any change to the file, however small, is a new generation. An effect is admitted only under
+// the generation it was prepared under, so a switch to off (or any edit) between preparing and doing it stops it.
+export function modeGeneration(root) {
+  try {
+    return sha(fs.readFileSync(path.join(root, CONFIG_REL), 'utf8'), 24);
+  } catch {
+    return 'absent';
+  }
 }
 
 // Scope binding of one record, from the cwd it was written in. cwd is an ACCESS boundary, not a statement about meaning:
@@ -140,4 +158,17 @@ export function validWorkspace(root, id) {
   } catch {
     return false;
   }
+}
+
+// Storage the pipeline cannot rely on: a database in a folder a cloud-sync client or a network share manages (SQLite documents that
+// WAL does not work over network filesystems and that live database files must not be synced), or a SQLite older than the fix for
+// the WAL-reset bug (3.51.3, unless the vendor backported it). Only names are inspected; the filesystem type is not.
+const SYNCED = /(?:^|[\\/])(?:Dropbox|OneDrive[^\\/]*|Google ?Drive|iCloud ?Drive|Mobile Documents|CloudStorage|Box|pCloud|MEGA|Nextcloud|ownCloud|Sync)(?:[\\/]|$)|^\\\\|^\/(?:Volumes|mnt|net|run\/media)\//i;
+export const looksSynced = (target) => SYNCED.test(target);
+export function sqliteTooOld(version) {
+  const [a, b, c] = String(version).split('.').map(Number);
+  if (!(a >= 3)) return true;
+  // fixed in 3.51.3 and backported to the 3.50 line (3.50.7) and the 3.44 line (3.44.6)
+  if (a > 3 || b > 51 || (b === 51 && c >= 3)) return false;
+  return !((b === 50 && c >= 7) || (b === 44 && c >= 6));
 }

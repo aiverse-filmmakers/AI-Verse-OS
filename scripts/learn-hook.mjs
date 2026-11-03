@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code hook entry for automatic learning: stop | precompact | end | start.
+// Claude Code hook entry for automatic learning: prompt | stop | precompact | end | start.
 //
 // At each of these boundaries it reads what was said since the last time (the human records of the transcript, in bounded batches),
 // screens it, and records each batch in the journal (learn-store) in one transaction together with the read position, then starts
@@ -7,10 +7,13 @@
 // must never reach disk before the credential screen can be consulted), the hook says so on stderr, exits 1, and sets the visible
 // `capture_failed` health state. The transcript itself is untouched, so the next boundary reads the same text again.
 //
-// What exit 1 does and does not mean: Claude Code treats it as a non-blocking error notice. It does NOT stop a compaction and it
-// does NOT protect anything. The design therefore captures at every Stop, so PreCompact only has the last turn to recover; if
-// both fail around a compaction, that text is lost to learning. Exit 2 would block the compaction, which could fail the very request
-// that triggered it, so it is deliberately not used. The hook does nothing at all while learning is off.
+// The compaction policy, stated once. Nothing here ever blocks a compaction (exit 2 would, but a chat stopped at its context limit is a
+// worse outcome than a missed statement). Instead text is captured EARLY: at every prompt submission (which also covers a turn the
+// user interrupted, when no Stop ever fires) and at every Stop, so PreCompact only has the last turn to recover. If capture fails, the
+// hook exits 1 (a non-blocking notice in Claude Code: it protects nothing) and raises the visible `capture_failed` health state, which
+// stays until a later capture succeeds; text compacted away while it was failing may be lost to learning, and that is the stated risk.
+// A record too large to hold is an unresolved gap (`capture_incomplete`) that stays visible until it is resolved. The hook does
+// nothing at all while learning is off.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -48,13 +51,16 @@ export function startWorker(root) {
   child.unref();
 }
 
-async function openQuietly(root) {
+async function openQuietly(root, config) {
   process.removeAllListeners('warning'); // node:sqlite's experimental notice must never reach the chat
   const { openStore } = await import('./learn-store.mjs');
-  return openStore(root, { busyMs: 3000 });
+  return openStore(root, { busyMs: 3000, config });
 }
 
-const REASONS = { stop: 'idle', precompact: 'before_compaction', end: 'session_end', start: 'session_start' };
+const REASONS = { prompt: 'capture', stop: 'idle', precompact: 'before_compaction', end: 'session_end', start: 'session_start' };
+// The prompt hook runs in front of every request and must be quick and silent: it stops after a few seconds' worth of batches (the read
+// position is committed per batch, so the next boundary continues) and never starts the worker.
+const PROMPT_BUDGET_MS = 3000;
 // At these boundaries the saved read position is not trusted at all: everything is read again (records are unique by uuid).
 const DESTRUCTIVE = new Set(['precompact', 'end', 'start']);
 
@@ -74,15 +80,16 @@ export async function handleEvent(root, event, payload, now = Date.now(), start 
   let db = null;
   try {
     try {
-      db = await open(root);
+      db = await open(root, config);
     } catch (error) {
-      setStatus(root, error?.code === 'store_incompatible' ? 'store_incompatible' : 'store_unavailable');
+      setStatus(root, ['store_incompatible', 'storage_unsafe'].includes(error?.code) ? error.code : 'store_unavailable');
       throw error;
     }
     const saved = db.prepare('SELECT path, off, anchor FROM captures WHERE session = ?').get(key);
     let cursor = !DESTRUCTIVE.has(event) && saved && saved.path === transcript ? { from: saved.off, anchor: saved.anchor } : { from: 0, anchor: '' };
     const { ingestBatch } = await import('./learn-store.mjs');
     let incomplete = false;
+    const began = Date.now();
     for (let batches = 0; batches < 100000; batches += 1) {
       let scanned;
       try {
@@ -96,17 +103,19 @@ export async function handleEvent(root, event, payload, now = Date.now(), start 
         key, session_id: sessionId, transcript_path: transcript, reason, at: now,
         config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns }, records, gaps: scanned.gaps,
         offset: { path: transcript, end: scanned.end, anchor: scanned.anchor },
-      }, now);
+      }, now, () => isEnabled(loadConfig(root)));
       if (scanned.gaps.length) incomplete = true;
       if (!stored.purged) setStatus(root, 'wal_purge_pending'); // an old copy of a late-found credential may still be in the log; the worker retries
-      if (scanned.done) break;
+      if (scanned.done || (event === 'prompt' && Date.now() - began > PROMPT_BUDGET_MS)) break;
       cursor = { from: scanned.end, anchor: scanned.anchor };
     }
     setStatus(root, 'capture_failed', false);
-    setStatus(root, 'capture_incomplete', incomplete);
-    start(root);
+    // coverage failures stay outstanding until resolved: the state follows the journal, not this scan
+    setStatus(root, 'capture_incomplete', incomplete || db.prepare('SELECT COUNT(*) AS n FROM gaps WHERE resolved = 0').get().n > 0);
+    if (event !== 'prompt') start(root);
     return { ok: true, via: 'journal' };
-  } catch {
+  } catch (error) {
+    if (error?.code === 'disabled') return { ok: true, via: 'skipped' }; // switched off in the middle: nothing was written
     setStatus(root, 'capture_failed');
     return { ok: false, code: 'capture_failed' };
   } finally {

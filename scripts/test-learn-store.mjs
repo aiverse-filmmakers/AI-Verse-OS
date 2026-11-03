@@ -50,7 +50,7 @@ test('forty hooks at once lose nothing: each either records its batch or fails c
   for (let i = 0; i < 4; i += 1) assert.equal(hookEvent(root, 'end', { session_id: `s${i}`, transcript_path: transcript, cwd: root }).status, 0);
   assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM occurrences')[0].n, 8); // 4 sessions x 2 records, each once
   assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM sessions')[0].n, 4);
-  assert.deepEqual(fs.readdirSync(learnPaths(root).base).filter((n) => !/^learn\.db/.test(n) && n !== 'status.json'), []); // no other file was ever written
+  assert.deepEqual(fs.readdirSync(learnPaths(root).base).filter((n) => !/^learn\.db/.test(n) && n !== 'status'), []); // no other file was ever written
 });
 
 test('six processes race for an expired lease: exactly one wins; the old holder fails every ownership check', async () => {
@@ -148,9 +148,9 @@ test('windows are measured in absolute offsets: any budget, changed at any time,
   const root = core();
   const text = Array.from({ length: 60 }, (_, i) => `Sentence ${i} says something quite ordinary.`).join(' ') + ' The end.';
   const db = await openStore(root);
-  db.prepare("INSERT INTO occurrences(harness, session, uuid, scope, text, size, at) VALUES('claude-code', 'k', 'u', 'operator', ?, ?, 0)").run(text, text.length);
-  db.prepare("INSERT INTO occurrences(harness, session, uuid, scope, text, size, at) VALUES('claude-code', 'k', 'v', 'operator', ?, ?, 0)").run('Second message, identical words.', 32);
-  db.prepare("INSERT INTO occurrences(harness, session, uuid, scope, text, size, at) VALUES('claude-code', 'k', 'w', 'operator', ?, ?, 0)").run('Second message, identical words.', 32);
+  db.prepare("INSERT INTO occurrences(harness, session, uuid, origin, scope, text, size, at) VALUES('claude-code', 'k', 'u', 'k', 'operator', ?, ?, 0)").run(text, text.length);
+  db.prepare("INSERT INTO occurrences(harness, session, uuid, origin, scope, text, size, at) VALUES('claude-code', 'k', 'v', 'k', 'operator', ?, ?, 0)").run('Second message, identical words.', 32);
+  db.prepare("INSERT INTO occurrences(harness, session, uuid, origin, scope, text, size, at) VALUES('claude-code', 'k', 'w', 'k', 'operator', ?, ?, 0)").run('Second message, identical words.', 32);
   let seen = '';
   const budgets = [500, 3000, 400, 900, 1500, 400, 10000];
   for (let i = 0; i < 40; i += 1) {

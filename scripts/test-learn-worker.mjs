@@ -13,7 +13,7 @@ import { openStore } from './learn-store.mjs';
 import { bindItems, buildPrompt, reviewerArgs, reviewerEnv, run } from './learn-worker.mjs';
 import {
   REPO, allText, appendTranscript, assistantLine, calls, candidate, capture, core, dumpDb, hookEvent, inboxFiles, inboxText, items, mutate, occurrences, peek, preferences,
-  review, session, setMode, shown, timePasses, userLine, workerAsync, workerProcess, workspace, writeTranscript,
+  review, session, setMode, shown, status, timePasses, userLine, workerAsync, workerProcess, workspace, writeTranscript,
 } from './test-learn-support.mjs';
 
 const drain = (root) => run(root, { drain: true });
@@ -308,7 +308,7 @@ test('a failed range is parked and retried; later ranges go on; pending evidence
   process.env.FAKE_MODE = 'quota';
   await drain(full);
   process.env.FAKE_MODE = 'ok';
-  assert.equal(JSON.parse(fs.readFileSync(learnPaths(full).status, 'utf8')).code, 'storage_pressure');
+  assert.ok(status(full).includes('storage_pressure'));
   assert.equal(peek(full, "SELECT COUNT(*) AS n FROM occurrences WHERE state = 'pending'")[0].n, 1);
 });
 

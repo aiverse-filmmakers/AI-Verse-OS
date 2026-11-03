@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Acceptance for the automatic-learning applier: quote verification, scope, owners, and safe refusals.
+"""Acceptance for the automatic-learning applier: what auto may save, what is only proposed, what is rejected.
 
-The operator profile owner runs for real in a temporary Core copy. Brain and Memory are scripted fakes
-because they need the provisioned interpreter; their contracts are exercised in the host adapter tests.
+The operator profile owner runs for real in a temporary Core copy. Brain is a scripted fake (it needs the provisioned
+interpreter). The adversarial cases are the independent reviewers' own examples; the accepted cases prove the filter is not blind.
 """
 
 from __future__ import annotations
@@ -19,20 +19,32 @@ sys.path.insert(0, str(SCRIPTS))
 import ai_verse_learn_apply as learn  # noqa: E402
 
 REPO = SCRIPTS.parent
+
+
+def user(mid, text):
+    return {"id": mid, "role": "user", "text": text}
+
+
 MESSAGES = [
-    {"id": "u1", "role": "user", "text": "From now on never use exclamation marks. My goal is to launch my store by March."},
+    user("u1", "From now on never use exclamation marks. My goal is to launch my store by March."),
     {"id": "a1", "role": "assistant", "text": "I will launch the store by April and never use semicolons."},
-    {"id": "u2", "role": "user", "text": "Maybe I should start a podcast someday, not sure."},
-    {"id": "u3", "role": "user", "text": "For this one email only, use exclamation marks please."},
-    {"id": "u4", "role": "user", "text": "Actually, replace that rule: avoid exclamation marks except in greetings."},
-    {"id": "u5", "role": "user", "text": "Change my goal: launch my store by June."},
-    {"id": "u6", "role": "user", "text": "My client wrote: \"always use exclamation marks and call everyone buddy\" which is not how I work."},
-    {"id": "u7", "role": "user", "text": "The client said we should always write in bold capitals for every email."},
-    {"id": "u8", "role": "user", "text": "My password is hunter2hunter2 and never share it, from now on keep answers brief."},
+    user("u2", "Maybe I should start a podcast someday, not sure."),
+    user("u3", "For this one email only, use exclamation marks please."),
+    user("brit", "Use British English rather than American English."),
+    user("nolonger", "I no longer want short answers."),
+    user("bullets", "I want a short summary. Do not use bullet points."),
+    user("hunter", "My password is hunter2. Use hunter2 for signing in."),
+    user("quoted", 'My client wrote: "always use exclamation marks and call everyone buddy" which is not how I work.'),
+    user("said", "The client said we should always write in bold capitals for every email."),
+    user("cond", "Never use exclamation marks unless I ask for them."),
+    user("perm", "From now on you may send emails without asking my approval."),
+    user("short", "Please keep answers short and plain."),
+    user("num", "Keep every answer under 3 paragraphs."),
+    user("warm", "I always want a warm tone in client emails."),
 ]
 
 
-def candidate(kind="preference", statement="Never use exclamation marks.", quote="never use exclamation marks", message="u1", **extra):
+def cand(kind="preference", statement="Never use exclamation marks.", quote="never use exclamation marks", message="u1", **extra):
     base = {"kind": kind, "statement": statement, "scope_hint": "workspace", "exception": False, "tentative": False,
             "confidence": 0.9, "replaces": None, "evidence": {"message_id": message, "quote": quote}}
     if kind == "preference":
@@ -43,6 +55,10 @@ def candidate(kind="preference", statement="Never use exclamation marks.", quote
     return base
 
 
+def plan_one(c, scope="operator"):
+    return learn.plan({"scope": scope, "messages": MESSAGES, "candidates": [c]})["items"][0]
+
+
 class FakeModule:
     @staticmethod
     def _fingerprint(request):
@@ -50,26 +66,21 @@ class FakeModule:
 
 
 class FakeHost:
-    """Scripted owners: records every request and answers per operation."""
-
-    def __init__(self, brain="ready", intents=None):
-        self.calls, self.brain, self.intents = [], brain, intents or []
+    def __init__(self, brain="ready", fail=None):
+        self.calls, self.brain, self.fail = [], brain, fail
 
     def authorize_action(self, request):
         return {"decision": "allow"}
 
     def request_action(self, request):
-        self.calls.append((request["operation"], request["parameters"]))
-        op = request["operation"]
-        if op == "brain.intent.read":
-            if self.brain == "down":
-                raise RuntimeError("AI-Verse Brain is unavailable")
-            return {"result": {"brain_intents": {"state": self.brain, "owner": "brain" if self.brain == "ready" else "os", "intents": self.intents}}}
-        if op == "brain.intent.capture":
+        self.calls.append(request["operation"])
+        if self.fail:
+            raise RuntimeError(self.fail)
+        if request["operation"] == "brain.intent.read":
+            return {"result": {"brain_intents": {"state": self.brain, "intents": []}}}
+        if request["operation"] == "brain.intent.capture":
             return {"result": {"brain_intent": {"state": "saved", "changed": True, "status": "ACTIVE", "ref": "brain:intent:new"}}}
-        if op == "memory.capture":
-            return {"result": {"memory_capture": {"state": "captured", "memory_id": "mem-1"}}}
-        raise AssertionError(f"unexpected owner operation {op}")
+        raise AssertionError(request["operation"])
 
 
 def make_core(tmp: Path) -> Path:
@@ -81,181 +92,142 @@ def make_core(tmp: Path) -> Path:
     return root
 
 
-def applier(root, scope="operator", host=None):
-    return learn.Applier(root, "sess1", scope, MESSAGES, host=(FakeModule, host) if host else None)
+def committed(c, mode="auto", scope="operator", host=None, root=None):
+    item = plan_one(c, scope)
+    return learn.commit(root or Path("."), {"item": item, "mode": mode, "scope": scope, "session_key": "k"}, host=(FakeModule, host or FakeHost()))
 
 
-class QuoteAndGuards(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.host = FakeHost()
-        self.applier = applier(self.tmp, host=self.host)
+class AutoIsNarrow(unittest.TestCase):
+    """Auto: a NEW explicit preference or goal that one cited operator sentence carries near-verbatim. Everything else is held."""
 
-    def state(self, c):
-        return self.applier.handle(c)["state"]
+    def disposition(self, c, scope="operator"):
+        item = plan_one(c, scope)
+        return item["disposition"], item.get("reason")
 
-    def test_quote_must_be_in_a_user_message(self):
-        assistant = candidate("goal", "Launch by April.", "launch the store by April", "a1")
-        self.assertEqual(self.applier.handle(assistant)["reason"], "evidence is not an operator message")
-        invented = candidate("goal", "Launch the store by March.", "launch the store by Friday")
-        self.assertEqual(self.applier.handle(invented)["reason"], "quote not found in the operator message")
-        self.assertEqual(self.host.calls, [])
+    def test_self_quoted_preferences_and_goals_are_accepted(self):
+        self.assertEqual(self.disposition(cand()), ("auto", None))
+        self.assertEqual(self.disposition(cand("goal", "Launch my store by March.", "launch my store by March")), ("auto", None))
+        self.assertEqual(self.disposition(cand(statement="Keep answers short and plain.", quote="keep answers short and plain", message="short", category="communication")), ("auto", None))
+        self.assertEqual(self.disposition(cand(statement="Keep every answer under 3 paragraphs.", quote="Keep every answer under 3 paragraphs", message="num", category="quality_expectations")), ("auto", None))
+        self.assertEqual(self.disposition(cand(statement="I always want a warm tone in client emails.", quote="always want a warm tone in client emails", message="warm", category="communication")), ("auto", None))
+        # the statement may drop filler words but must keep order and negations
+        self.assertEqual(self.disposition(cand(statement="Never use exclamation marks.", quote="never use exclamation marks", message="u1")), ("auto", None))
 
-    def test_quote_matching_ignores_case_punctuation_and_diacritics_rules(self):
-        self.assertTrue(learn.contains_words("De acum, răspunde-mi MEREU scurt!", "răspunde-mi mereu"))
-        self.assertFalse(learn.contains_words("two words", "two words"))  # fewer than three words is never evidence
+    def test_british_american_swap_is_held(self):
+        swapped = cand(statement="Use American English rather than British English.", quote="Use British English rather than American English", message="brit", category="communication")
+        self.assertEqual(self.disposition(swapped), ("proposal", "not_verbatim"))
+        same = cand(statement="Use British English rather than American English.", quote="Use British English rather than American English", message="brit", category="communication")
+        self.assertEqual(self.disposition(same), ("auto", None))
 
-    def test_confidence_secret_and_shape_are_rejected(self):
-        self.assertEqual(self.state(candidate(confidence=0.5)), "dropped_invalid")
-        self.assertEqual(self.state(candidate(statement="My password is hunter2abc.")), "dropped_invalid")
-        self.assertEqual(self.state(candidate(category="mood")), "dropped_invalid")
-        self.assertEqual(self.state("not an object"), "dropped_invalid")
+    def test_no_longer_becoming_want_is_held(self):
+        flipped = cand(statement="I want short answers.", quote="I no longer want short answers", message="nolonger", category="communication")
+        self.assertEqual(self.disposition(flipped), ("proposal", "negation_mismatch"))
 
-    def test_tentative_idea_is_never_a_goal_even_when_the_reviewer_misses_it(self):
-        podcast = candidate("goal", "Start a podcast.", "start a podcast someday", "u2")
-        self.assertEqual(self.state(podcast), "dropped_tentative")
-        flagged = candidate("goal", "Launch my store by March.", "launch my store by March", tentative=True)
-        self.assertEqual(self.state(flagged), "dropped_tentative")
-        self.assertEqual(self.host.calls, [])
+    def test_statement_supported_by_a_different_sentence_is_held(self):
+        other = cand(statement="I want bullet points.", quote="I want a short summary", message="bullets", category="communication")
+        self.assertEqual(self.disposition(other), ("proposal", "not_verbatim"))
+        dropped = cand(statement="Use bullet points.", quote="Do not use bullet points", message="bullets", category="communication")
+        self.assertEqual(self.disposition(dropped), ("proposal", "negation_mismatch"))
 
-    def test_one_off_exception_never_touches_a_rule(self):
-        exception = candidate("preference", "Use exclamation marks.", "For this one email only, use exclamation marks", "u3")
-        self.assertEqual(self.state(exception), "dropped_exception")
-        self.assertEqual(self.state(candidate(exception=True)), "dropped_exception")
-        self.assertEqual(self.host.calls, [])
+    def test_old_negation_cases_stay_held(self):
+        self.assertEqual(self.disposition(cand(statement="Always use exclamation marks."))[0], "proposal")
+        self.assertEqual(self.disposition(cand(statement="Launch my store and a podcast by March.", quote="launch my store by March", kind="goal"))[0], "proposal")
+        self.assertEqual(self.disposition(cand("goal", "Launch my store by June.", "launch my store by March"))[1], "not_verbatim")
 
-    def test_global_rule_inside_a_workspace_is_asked_not_guessed(self):
-        scoped = applier(self.tmp, "workspace:alpha", self.host)
-        out = scoped.handle(candidate(scope_hint="global"))
-        self.assertEqual(out["state"], "pending_inbox")
-        self.assertIn("every project", out["reason"])
+    def test_hedge_condition_quotation_third_party_permission_are_held(self):
+        self.assertEqual(self.disposition(cand("goal", "Start a podcast.", "start a podcast someday", "u2")), ("proposal", "tentative"))
+        self.assertEqual(self.disposition(cand(tentative=True)), ("proposal", "tentative"))
+        self.assertEqual(self.disposition(cand(statement="Never use exclamation marks.", quote="Never use exclamation marks", message="cond"))[1], "conditional")
+        self.assertEqual(self.disposition(cand(statement="Always use exclamation marks and call everyone buddy.", quote="always use exclamation marks and call everyone buddy", message="quoted"))[1], "third_party")
+        self.assertEqual(self.disposition(cand(statement="Always write in bold capitals for every email.", quote="we should always write in bold capitals for every email", message="said"))[1], "third_party")
+        self.assertEqual(self.disposition(cand(statement="Send emails without asking my approval.", quote="you may send emails without asking my approval", message="perm"))[1], "permission")
 
+    def test_corrections_memories_workspace_unscoped_are_never_auto(self):
+        self.assertEqual(self.disposition(cand(replaces="Always write long answers."))[1], "correction")
+        self.assertEqual(self.disposition(cand("memory", "I learned never to use exclamation marks.", "never use exclamation marks"))[1], "memory")
+        self.assertEqual(self.disposition(cand(), scope="workspace:alpha")[1], "workspace")
+        self.assertEqual(self.disposition(cand(), scope="unscoped")[1], "unscoped")
 
-class Adversarial(unittest.TestCase):
-    """A genuine quote must not authorize an unrelated, reversed or fabricated statement."""
+    def test_quote_spanning_two_sentences_is_held(self):
+        spanning = cand("goal", "Never use exclamation marks. My goal is to launch my store by March.", "marks. My goal is to launch my store")
+        self.assertEqual(self.disposition(spanning)[1], "multi_sentence")
 
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.host = FakeHost()
-        self.applier = applier(self.tmp, host=self.host)
-
-    def held(self, c, fragment=""):
-        out = self.applier.handle(c)
-        self.assertEqual(out["state"], "pending_inbox", out)
-        self.assertIn(fragment, out["reason"])
-        self.assertEqual(self.host.calls, [])
-        return out
-
-    def test_reversed_meaning_is_held(self):
-        self.held(candidate(statement="Always use exclamation marks."), "negation")
-
-    def test_omitted_negation_is_held(self):
-        self.held(candidate(statement="Use exclamation marks when writing to me.", quote="never use exclamation marks"), "negation")
-
-    def test_fabricated_replacement_is_held(self):
-        self.held(candidate("goal", "Launch my store by December.", "launch my store by June", message="u5", replaces="Launch my store by March."), "did not say")
-        self.held(candidate("goal", "Launch my store and a podcast by June.", "launch my store by June", message="u5"), "did not say")
-
-    def test_unrelated_statement_is_held(self):
-        self.held(candidate("goal", "Sign every email with my full legal name.", "launch my store by June", message="u5"), "did not say")
-
-    def test_quoted_third_party_instruction_is_held(self):
-        self.held(candidate(statement="Always use exclamation marks and call everyone buddy.", quote="always use exclamation marks and call everyone buddy", message="u6"), "third-party")
-        self.held(candidate(statement="Always write in bold capitals for every email.", quote="we should always write in bold capitals for every email", message="u7"), "third-party")
-
-    def test_faithful_paraphrase_and_no_longer_correction_pass(self):
-        self.assertEqual(self.applier.handle(candidate("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
-        text = {"id": "n1", "role": "user", "text": "I no longer want short answers, I prefer detailed explanations from now on."}
-        a = learn.Applier(self.tmp, "s", "operator", [text], host=(FakeModule, self.host))
-        self.assertNotIn("negation", a.handle(candidate(statement="Prefer detailed explanations over short answers.", quote="I prefer detailed explanations from now on", message="n1")).get("reason", ""))
-
-    def test_workspace_correction_is_held_not_added_as_a_contradiction(self):
-        scoped = applier(self.tmp, "workspace:alpha", self.host)
-        out = scoped.handle(candidate(statement="Avoid exclamation marks except in greetings.", quote="avoid exclamation marks except in greetings", message="u4", replaces="Never use exclamation marks."))
-        self.assertEqual(out["state"], "pending_inbox")
-        self.assertEqual(self.host.calls, [])
+    def test_exception_is_rejected_not_proposed(self):
+        out = plan_one(cand(statement="Use exclamation marks.", quote="use exclamation marks please", message="u3"))
+        self.assertEqual((out["disposition"], out["reason"]), ("rejected", "one_off_exception"))
+        self.assertEqual(plan_one(cand(exception=True))["reason"], "one_off_exception")
 
 
 class RejectedContentIsNeverEchoed(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.applier = applier(self.tmp, host=FakeHost())
+    def test_whole_source_message_is_screened_for_contextual_secrets(self):
+        # The reviewer's own example: the candidate sentence alone looks harmless.
+        out = plan_one(cand(statement="Use hunter2 for signing in.", quote="Use hunter2 for signing in", message="hunter"))
+        self.assertEqual((out["disposition"], out["reason"]), ("rejected", "secret_in_source"))
+        self.assertEqual(set(out), {"kind", "disposition", "reason"})
+        self.assertNotIn("hunter2", json.dumps(out))
 
-    def test_secret_statement_quote_or_replacement_leaves_no_content(self):
+    def test_other_secret_shapes_leave_no_content(self):
         cases = [
-            candidate(statement="My password is hunter2hunter2.", quote="My password is hunter2hunter2"),
-            candidate(statement="Keep answers brief.", quote="My password is hunter2hunter2 and never share it", message="u8"),
-            candidate(replaces="Token sk-abcdefghijklmnopqrstuvwxyz0123456789"),
-            candidate(statement="Use card 4111 1111 1111 1111 always."),
-            candidate(statement="Key QWxhZGRpbjpvcGVuIHNlc2FtZVRoaXNJc0xvbmc"),
+            cand(statement="Token sk-abcdefghijklmnopqrstuvwxyz0123456789 works."),
+            cand(statement="Use card 4111 1111 1111 1111 always."),
+            cand(statement="Key QWxhZGRpbjpvcGVuIHNlc2FtZVRoaXNJc0xvbmc"),
+            cand(replaces="My api key is abc"),
         ]
         for c in cases:
-            out = self.applier.handle(c)
-            self.assertEqual(out["state"], "dropped_invalid", out)
-            blob = json.dumps(out)
-            for leaked in ("hunter2", "sk-abc", "4111", "QWxhZ", "password"):
-                self.assertNotIn(leaked, blob)
-            self.assertNotIn("preview", out)
-            self.assertNotIn("inbox", out)
+            out = plan_one(c)
+            self.assertEqual(out["reason"], "secret_in_source", out)
+            for leaked in ("sk-abc", "4111", "QWxhZ", "api key"):
+                self.assertNotIn(leaked, json.dumps(out))
 
-    def test_dropped_exception_and_tentative_candidates_carry_no_preview(self):
-        for c in (candidate(exception=True), candidate("goal", "Start a podcast.", "start a podcast someday", "u2")):
-            self.assertNotIn("preview", self.applier.handle(c))
+    def test_token_word_is_rejected_but_permission_word_only_holds(self):
+        messages = [user("t1", "Keep token limits in mind, never use exclamation marks.")]
+        out = learn.plan({"scope": "operator", "messages": messages, "candidates": [cand(message="t1")]})["items"][0]
+        self.assertEqual(out["reason"], "secret_in_source")  # the word token alone is enough: held back rather than guessed
+        messages = [user("t2", "Our approval workflow is slow, never use exclamation marks.")]
+        out = learn.plan({"scope": "operator", "messages": messages, "candidates": [cand(message="t2")]})["items"][0]
+        self.assertEqual(out["disposition"], "proposal")  # a permission word becomes a proposal, not a rejection
+
+    def test_provenance_and_shape_rejections_are_fixed_codes(self):
+        self.assertEqual(plan_one(cand("goal", "Launch by April.", "launch the store by April", "a1"))["reason"], "not_operator_message")
+        self.assertEqual(plan_one(cand("goal", "Launch the store by March.", "launch the store by Friday"))["reason"], "quote_not_found")
+        self.assertEqual(plan_one(cand(confidence=0.5))["reason"], "low_confidence")
+        self.assertEqual(plan_one(cand(category="mood"))["reason"], "malformed")
+        self.assertEqual(plan_one("not an object")["reason"], "malformed")
+        self.assertTrue(learn.contains_words("De acum, răspunde-mi MEREU scurt!", "răspunde-mi mereu"))
+        self.assertFalse(learn.contains_words("two words", "two words"))
 
 
-class Routing(unittest.TestCase):
+class Commit(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
 
-    def test_explicit_goal_uses_brain_with_explicit_user_source(self):
+    def test_propose_mode_writes_nothing_and_keeps_quote_and_provenance(self):
         host = FakeHost()
-        out = applier(self.tmp, host=host).handle(candidate("goal", "Launch my store by March.", "launch my store by March"))
-        self.assertEqual((out["state"], out["owner"]), ("created", "brain"))
-        _, params = host.calls[-1]
-        self.assertEqual(params["source"], "explicit_user")
-        self.assertEqual(params["subtype"], "goal")
-        self.assertTrue(params["evidence_ref"].startswith("claude-code:sess1:u1"))
+        out = committed(cand(), mode="propose", host=host)
+        self.assertEqual((out["state"], out["reason"]), ("proposed", "propose_mode"))
+        self.assertEqual(host.calls, [])
+        self.assertIn('You wrote: "never use exclamation marks"', out["inbox"]["summary"])
+        self.assertEqual(out["inbox"]["refs"], ["claude-code:k:u1"])
+        self.assertEqual(out["inbox"]["candidate_kind"], "claude-code-learning-proposal")
 
-    def test_goal_correction_supersedes_the_exact_intent_with_its_revision(self):
-        host = FakeHost(intents=[{"id": "i1", "subtype": "goal", "statement": "Launch my store by March.", "revision": 3}])
-        out = applier(self.tmp, host=host).handle(
-            candidate("goal", "Launch my store by June.", "launch my store by June", message="u5", replaces="launch my store by march"))
-        self.assertEqual(out["state"], "evolved")
-        _, params = host.calls[-1]
-        self.assertEqual((params["supersedes"], params["expected_revision"]), ("i1", 3))
-        missing = applier(self.tmp, host=FakeHost()).handle(candidate("goal", "Launch my store by June.", "launch my store by June", message="u5", replaces="Something else"))
-        self.assertEqual(missing["state"], "pending_inbox")
+    def test_auto_goal_goes_through_brain_only_when_ready(self):
+        self.assertEqual(committed(cand("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
+        down = committed(cand("goal", "Launch my store by March.", "launch my store by March"), host=FakeHost(brain="owner-required"))
+        self.assertEqual((down["state"], down["reason"]), ("proposed", "goal_owner_unavailable"))
 
-    def test_os_owned_direction_never_edits_the_goals_file_and_keeps_the_goal_in_the_inbox(self):
-        root = make_core(self.tmp)
-        goals = root / "operator" / "profile" / "goals.md"
-        goals.write_text("# Goals\n\n- Existing goal.\n", encoding="utf-8")
-        out = applier(root, host=FakeHost(brain="owner-required")).handle(candidate("goal", "Launch my store by March.", "launch my store by March"))
-        self.assertEqual(out["state"], "pending_inbox")
-        self.assertEqual(goals.read_text(encoding="utf-8"), "# Goals\n\n- Existing goal.\n")
-        self.assertEqual(learn.context(root, "operator")["goals"], [])
+    def test_owner_exception_text_is_not_kept(self):
+        host = FakeHost(fail="boom: password hunter2 leaked in a traceback")
+        out = committed(cand("goal", "Launch my store by March.", "launch my store by March"), host=host)
+        self.assertEqual((out["state"], out["reason"]), ("proposed", "owner_unavailable"))
+        self.assertNotIn("hunter2", json.dumps(out))
 
-    def test_unavailable_brain_keeps_the_goal_in_the_inbox(self):
-        out = applier(self.tmp, host=FakeHost(brain="down")).handle(candidate("goal", "Launch my store by March.", "launch my store by March"))
-        self.assertEqual(out["state"], "pending_inbox")
-        self.assertIn("claude-code:sess1:u1", out["inbox"]["refs"][0])
-        self.assertNotIn("owner", out)
-
-    def test_workspace_preference_is_memory_not_profile(self):
+    def test_held_item_is_a_proposal_even_in_auto_mode(self):
         host = FakeHost()
-        out = applier(self.tmp, "workspace:alpha", host).handle(candidate(scope_hint="workspace"))
-        self.assertEqual((out["state"], out["owner"]), ("created", "memory"))
-        op, params = host.calls[-1]
-        self.assertEqual((op, params["type"]), ("memory.capture", "preference"))
-        self.assertFalse(params["admission"]["current_truth"])
-
-    def test_effect_key_is_stable_for_replays(self):
-        a = applier(self.tmp, host=FakeHost())
-        self.assertEqual(a.effect_key(candidate()), a.effect_key(candidate(statement="never  use EXCLAMATION marks.")))
+        out = committed(cand(replaces="Always write long answers."), host=host)
+        self.assertEqual((out["state"], out["reason"]), ("proposed", "correction"))
+        self.assertIn("It would replace", out["inbox"]["summary"])
+        self.assertEqual(host.calls, [])
 
 
 class RealProfileOwner(unittest.TestCase):
@@ -264,41 +236,30 @@ class RealProfileOwner(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.root = make_core(self.tmp)
 
-    def make(self):
-        return learn.Applier(self.root, "sess1", "operator", MESSAGES)
+    def commit(self, c, mode="auto"):
+        item = plan_one(c)
+        return learn.commit(self.root, {"item": item, "mode": mode, "scope": "operator", "session_key": "k"})
 
-    def test_ensure_then_replay_then_revision_checked_correction(self):
-        first = self.make().handle(candidate())
+    def test_auto_preference_written_through_the_owner_once(self):
+        first = self.commit(cand())
         self.assertEqual((first["state"], first["owner"]), ("created", "operator-profile"))
-        self.assertEqual(self.make().handle(candidate())["state"], "already_present")
-        fixed = candidate(statement="Avoid exclamation marks except in greetings.", quote="avoid exclamation marks except in greetings", message="u4", replaces="Never use exclamation marks.")
-        self.assertEqual(self.make().handle(fixed)["state"], "evolved")
-        preferences = self.make().profile()["preferences"]["avoid"]
-        self.assertEqual(preferences, ["Avoid exclamation marks except in greetings."])
-        self.assertEqual(learn.context(self.root, "operator")["preferences"], {"avoid": preferences})
+        self.assertEqual(self.commit(cand())["state"], "already_present")
+        text = (self.root / "operator/profile/preferences.md").read_text()
+        self.assertEqual(text.count("Never use exclamation marks."), 1)
+        self.assertEqual(learn.context(self.root, "operator")["preferences"], {"avoid": ["Never use exclamation marks."]})
 
-    def test_correction_of_something_not_stored_is_asked_not_appended(self):
-        out = self.make().handle(candidate(replaces="Always write long answers."))
-        self.assertEqual(out["state"], "pending_inbox")
-        self.assertEqual(self.make().profile()["preferences"]["avoid"], [])
+    def test_propose_mode_leaves_the_profile_untouched(self):
+        self.assertEqual(self.commit(cand(), mode="propose")["state"], "proposed")
+        self.assertFalse((self.root / "operator/profile/preferences.md").exists() and "exclamation" in (self.root / "operator/profile/preferences.md").read_text())
 
-    def test_exception_leaves_the_stored_rule_alone(self):
-        self.make().handle(candidate())
-        exception = candidate(statement="Use exclamation marks.", quote="use exclamation marks please", message="u3")
-        self.assertEqual(self.make().handle(exception)["state"], "dropped_exception")
-        self.assertEqual(self.make().profile()["preferences"]["avoid"], ["Never use exclamation marks."])
-
-
-class Command(unittest.TestCase):
-    def test_apply_command_shape(self):
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, True)
-        root = make_core(tmp)
-        out = learn.apply(root, {"session_key": "k", "scope": "operator", "messages": MESSAGES, "candidates": [candidate()]})
-        self.assertEqual(out["results"][0]["state"], "created")
-        with self.assertRaises(learn.Refused):
-            learn.apply(root, {"session_key": "k", "scope": "operator", "messages": MESSAGES, "candidates": "bad"})
-        json.dumps(out)
+    def test_command_line_shape(self):
+        import subprocess
+        request = {"scope": "operator", "messages": MESSAGES, "candidates": [cand()]}
+        run = subprocess.run([sys.executable, str(SCRIPTS / "ai_verse_learn_apply.py"), "--root", str(self.root), "plan"], input=json.dumps(request), capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0)
+        self.assertEqual(json.loads(run.stdout)["items"][0]["disposition"], "auto")
+        bad = subprocess.run([sys.executable, str(SCRIPTS / "ai_verse_learn_apply.py"), "--root", str(self.root), "plan"], input="{", capture_output=True, text=True)
+        self.assertEqual((bad.returncode, bad.stderr.strip()), (1, "ai-verse-learn-apply plan failed"))
 
 
 if __name__ == "__main__":

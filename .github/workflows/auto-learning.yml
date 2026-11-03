@@ -33,9 +33,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Test hook entry, durable queue and transcript window
-        run: node scripts/test-learn-hook.mjs
-      - name: Test worker, reviewer runner and applier end to end with a fake claude
+      - name: Resolve and spawn the claude command without a shell (real claude.cmd shim on Windows)
+        run: node scripts/test-learn-claude.mjs
+      - name: Test hook entry, store under competing processes and crashes, transcript window
+        run: node scripts/test-learn-store.mjs
+      - name: Test worker end to end with a fake claude, kill -9 replay, compaction and scopes
         run: node scripts/test-learn-worker.mjs
       - name: Test applier routing and safety
         run: python scripts/test-learn-apply.py

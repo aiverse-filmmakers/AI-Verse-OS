@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, learnPaths, loadConfig, pruneRuntime, resolveScope, sessionKey, spoolEvent } from './learn-common.mjs';
+import { createHandoff, isEnabled, isMain, learnPaths, loadConfig, pruneRuntime, resolveScope, sessionKey, spoolEvent } from './learn-common.mjs';
 import { fingerprint, handoffLines, HEAD_RECORDS, headHash, readLines } from './learn-window.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
@@ -52,18 +52,11 @@ function handoff(root, key, transcript, now) {
     fs.mkdirSync(dir, { recursive: true });
     // Exclusive creation under a random name: two handoffs in the same millisecond can never overwrite each other. The event that
     // names the file is written only after this returns, so a half-written file is never referenced (and is removed on failure).
-    const body = `${handoffLines(lines, (cwd) => resolveScope(root, cwd)).join('\n')}\n`;
+    const body = handoffLines(lines, (cwd) => resolveScope(root, cwd));
     let file = null;
     for (let attempt = 0; attempt < 5 && !file; attempt += 1) {
       const candidate = path.join(dir, `${key}-${now}-${crypto.randomBytes(4).toString('hex')}.jsonl`);
-      try {
-        fs.writeFileSync(candidate, body, { flag: 'wx' });
-        file = candidate;
-      } catch (error) {
-        if (error.code === 'EEXIST') continue; // someone else's file: never touched, try another name
-        fs.rmSync(candidate, { force: true }); // our own partial write
-        throw error;
-      }
+      if (createHandoff(candidate, body)) file = candidate; // a taken name is never touched; another is tried
     }
     if (!file) throw new Error('handoff_name_taken');
     const hn = Math.min(HEAD_RECORDS, lines.length);

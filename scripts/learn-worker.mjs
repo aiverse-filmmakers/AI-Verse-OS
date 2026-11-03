@@ -280,7 +280,7 @@ function review(ctx, session, { source, live, window }, guard) {
   if (!planned.ok) return fail(ctx, session, source, live, window, planned, guard);
   const body = {
     scope: window.scope, cost: reviewed.cost, model: ctx.config.model, messages: window.messages.length, skipped: window.skipped,
-    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, completed: window.completed,
+    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, completed: window.completed, uuidless: window.uuidless,
     items: planned.value.items.map((item) => ({ ...item, done: false })),
   };
   tx(db, () => {
@@ -325,7 +325,7 @@ function execute(ctx, session, { source, live }, body, guard) {
     messages: body.messages, skipped_outside_core: body.skipped || undefined,
     results: body.items.map(({ kind, state, reason, owner, ref }) => ({ kind, state, reason, owner, ref })),
   };
-  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, completed: body.completed };
+  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, completed: body.completed, uuidless: body.uuidless };
   return finish(ctx, session, source, live, window, receipt);
 }
 
@@ -338,6 +338,7 @@ function finish(ctx, session, source, live, window, receipt) {
     if (!holds(db, name, owner, ctx.now())) throw new Lost();
     if (receipt) db.prepare('INSERT INTO receipts(session, at, body) VALUES(?, ?, ?)').run(session.key, ctx.now(), JSON.stringify(receipt));
     crash('in_finish');
+    if (window.uuidless) db.prepare('INSERT INTO counters(session, code, n) VALUES(?, ?, ?) ON CONFLICT(session, code) DO UPDATE SET n = n + excluded.n').run(session.key, 'uuidless_records', window.uuidless);
     for (const uuid of window.completed ?? []) db.prepare('INSERT OR IGNORE INTO seen_records(session, uuid, fp) VALUES(?, ?, ?)').run(session.key, uuid, source.fp);
     db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ? WHERE session = ? AND fp = ?')
       .run(window.next.line, window.next.part, window.anchor_line, window.anchor, session.key, source.fp);

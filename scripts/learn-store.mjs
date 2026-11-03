@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, trans
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
   anchor TEXT DEFAULT '', path TEXT, ord INTEGER, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
 CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
+CREATE TABLE IF NOT EXISTS counters(session TEXT, code TEXT, n INTEGER DEFAULT 0, PRIMARY KEY(session, code));
 CREATE TABLE IF NOT EXISTS seen_records(session TEXT, uuid TEXT, fp TEXT, PRIMARY KEY(session, uuid));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
@@ -32,6 +33,21 @@ CREATE TABLE IF NOT EXISTS seen(name TEXT PRIMARY KEY, at INTEGER);
 // Databases made by earlier rounds. Everything is decided from PRAGMA table_info (columns and primary key), so it is safe on
 // every open and on a database that is already current. A table whose key or columns differ is rebuilt inside one transaction,
 // copying every row with a plain INSERT: a conflict is an error that rolls the whole rebuild back, never silently dropped rows.
+// Sources adopted from a handoff before generation order existed: take the place of the generation they came from (named in their
+// own fingerprint). When that generation cannot be found the order cannot be known, so the source is closed with a diagnostic
+// instead of being reviewed in a guessed order.
+function backfillOrder(db) {
+  for (const row of db.prepare('SELECT rowid AS id, session, fp FROM sources WHERE path IS NOT NULL AND closed = 0').all()) {
+    const origin = /^h:(.+?)(?::\d+)?$/.exec(row.fp)?.[1];
+    const parent = origin && db.prepare('SELECT rowid AS id FROM sources WHERE session = ? AND fp = ? AND path IS NULL').get(row.session, origin);
+    if (parent) db.prepare('UPDATE sources SET ord = ? WHERE rowid = ?').run(parent.id, row.id);
+    else {
+      db.prepare('UPDATE sources SET closed = 1 WHERE rowid = ?').run(row.id);
+      db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(row.session, Date.now(), 'order_unresolved');
+    }
+  }
+}
+
 const HANDOFFS_KEY = ['session', 'path'];
 const HANDOFFS_COLUMNS = ['session', 'fp', 'path', 'head', 'hn'];
 
@@ -39,8 +55,10 @@ function migrate(db) {
   const info = (table) => db.prepare(`PRAGMA table_info(${table})`).all();
   const names = (table) => info(table).map((r) => r.name);
   const key = (table) => info(table).filter((r) => r.pk > 0).sort((a, b) => a.pk - b.pk).map((r) => r.name);
-  for (const column of ['path TEXT', 'ord INTEGER']) {
-    if (!names('sources').includes(column.split(' ')[0])) db.exec(`ALTER TABLE sources ADD COLUMN ${column}`);
+  if (!names('sources').includes('path')) db.exec('ALTER TABLE sources ADD COLUMN path TEXT');
+  if (!names('sources').includes('ord')) {
+    db.exec('ALTER TABLE sources ADD COLUMN ord INTEGER');
+    backfillOrder(db);
   }
   const current = names('handoffs');
   if (HANDOFFS_COLUMNS.every((c) => current.includes(c)) && key('handoffs').join() === HANDOFFS_KEY.join()) return;

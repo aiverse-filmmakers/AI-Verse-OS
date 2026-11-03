@@ -89,9 +89,48 @@ export function spoolEvent(root, event) {
   fs.mkdirSync(spool, { recursive: true });
   const name = `${String(Date.now()).padStart(15, '0')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
   const temp = path.join(spool, `${name}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(event));
+  fs.writeFileSync(temp, JSON.stringify(ownEvent(event)));
   fs.renameSync(temp, path.join(spool, `${name}.json`));
   return name;
+}
+
+// Ownership by content, set when the file is created: an event carries a digest of itself as its first key, a handoff starts
+// with a header holding the digest of its body. Housekeeping deletes a file only when that digest still verifies, so a file
+// someone else made with a matching name, or a pipeline file that was modified since, is never removed.
+const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
+export const ownEvent = (event) => ({ aiverse_learn: digest(JSON.stringify(event)), ...event });
+
+export function eventIsOwned(text) {
+  try {
+    const { aiverse_learn: mark, ...rest } = JSON.parse(text);
+    return typeof mark === 'string' && mark === digest(JSON.stringify(rest));
+  } catch {
+    return false;
+  }
+}
+
+export function handoffIsOwned(text) {
+  const cut = text.indexOf('\n');
+  try {
+    const header = JSON.parse(text.slice(0, cut));
+    return header.aiverse_learn_handoff === 1 && header.digest === digest(text.slice(cut + 1));
+  } catch {
+    return false;
+  }
+}
+
+// Exclusive creation: returns false when the name is already taken (never touches the other file).
+export function createHandoff(file, bodyLines) {
+  const body = `${bodyLines.join('\n')}\n`;
+  const header = JSON.stringify({ aiverse_learn_handoff: 1, orig: -1, digest: digest(body) });
+  try {
+    fs.writeFileSync(file, `${header}\n${body}`, { flag: 'wx' });
+    return true;
+  } catch (error) {
+    if (error.code === 'EEXIST') return false;
+    fs.rmSync(file, { force: true }); // our own partial write
+    throw error;
+  }
 }
 
 // True when this module is the program being run (not imported, not `node -e`).
@@ -117,17 +156,15 @@ export const HANDOFF_NAME = /^[0-9a-f]{16}-\d+-[0-9a-f]{8}\.jsonl(?:\.tmp)?$/;
 export function pruneRuntime(root, now = Date.now()) {
   const { base, spool } = learnPaths(root);
   const list = (dir, pattern) => { try { return fs.readdirSync(dir).filter((n) => pattern.test(n)).map((n) => { const f = path.join(dir, n); const st = fs.statSync(f); return st.isFile() ? { f, n, age: now - st.mtimeMs, size: st.size } : null; }).filter(Boolean); } catch { return []; } };
-  const drop = (entries, test, maxAge) => entries.filter((e) => test(e.n) && e.age > maxAge).forEach((e) => fs.rmSync(e.f, { force: true }));
-  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.tmp'), DAY);
-  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.json'), 30 * DAY);
-  drop(list(path.join(spool, 'bad'), EVENT_NAME), () => true, 14 * DAY);
+  const owned = (e, check) => { try { return check(fs.readFileSync(e.f, 'utf8')); } catch { return false; } };
+  const drop = (entries, test, maxAge, check) => entries.filter((e) => test(e.n) && e.age > maxAge && owned(e, check)).forEach((e) => fs.rmSync(e.f, { force: true }));
+  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.json'), 30 * DAY, eventIsOwned);
   const dir = path.join(base, 'handoff');
-  drop(list(dir, HANDOFF_NAME), (n) => n.endsWith('.tmp'), 60 * 60 * 1000);
-  drop(list(dir, HANDOFF_NAME), () => true, 30 * DAY);
+  drop(list(dir, HANDOFF_NAME), (n) => n.endsWith('.jsonl'), 30 * DAY, handoffIsOwned);
   const kept = list(dir, HANDOFF_NAME).filter((e) => e.n.endsWith('.jsonl')).sort((a, b) => a.age - b.age); // newest first
   let bytes = 0;
   kept.forEach((e, i) => {
     bytes += e.size;
-    if (i >= HANDOFF_MAX_FILES || bytes > HANDOFF_MAX_BYTES) fs.rmSync(e.f, { force: true });
+    if ((i >= HANDOFF_MAX_FILES || bytes > HANDOFF_MAX_BYTES) && owned(e, handoffIsOwned)) fs.rmSync(e.f, { force: true });
   });
 }

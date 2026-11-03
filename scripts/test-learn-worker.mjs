@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { learnPaths, loadConfig } from './learn-common.mjs';
+import { createHandoff, learnPaths, loadConfig, sessionKey, spoolEvent } from './learn-common.mjs';
 import { ingest, openStore } from './learn-store.mjs';
 import { splitText } from './learn-window.mjs';
 import { buildPrompt, reviewerArgs, run } from './learn-worker.mjs';
@@ -240,43 +240,52 @@ test('a replacement that keeps the first line and is detected only by its first 
   assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'handoff_used'));
 });
 
-test('handoff housekeeping: off means untouched; on caps by count (oldest first), drops stale temp files, never touches foreign files, and frees a closed source', async () => {
+const DAYS = 24 * 3600 * 1000;
+const aged = (file, days) => { const t = new Date(Date.now() - days * DAYS); fs.utimesSync(file, t, t); };
+const hname = (i) => `${'a'.repeat(16)}-${1000 + i}-${'b'.repeat(8)}.jsonl`;
+
+test('housekeeping removes only what the pipeline created and still holds unchanged; off means untouched', async () => {
   const root = core({ mode: 'off' });
   const dir = handoffDir(root);
+  const { spool } = learnPaths(root);
   fs.mkdirSync(dir, { recursive: true });
-  const now = Date.now();
-  for (let i = 0; i < 60; i += 1) {
-    const f = path.join(dir, `${'a'.repeat(16)}-${1000 + i}-${'b'.repeat(8)}.jsonl`);
-    fs.writeFileSync(f, '{}\n');
-    const t = new Date(now - (100 - i) * 1000); // k-59 is the newest
-    fs.utimesSync(f, t, t);
-  }
-  const tmp = path.join(dir, `${'a'.repeat(16)}-1-${'c'.repeat(8)}.jsonl.tmp`);
-  const mine = path.join(dir, 'personal-notes.txt');
-  fs.writeFileSync(mine, 'my own notes');
-  fs.utimesSync(mine, new Date(now - 90 * 24 * 3600 * 1000), new Date(now - 90 * 24 * 3600 * 1000));
-  fs.mkdirSync(path.join(learnPaths(root).spool, 'bad'), { recursive: true });
-  for (const f of [path.join(learnPaths(root).spool, 'personal-notes.txt'), path.join(learnPaths(root).spool, 'bad', 'personal-notes.txt'), path.join(learnPaths(root).spool, 'keep.json'), path.join(learnPaths(root).spool, 'x.tmp')]) {
-    fs.writeFileSync(f, 'mine');
-    fs.utimesSync(f, new Date(now - 90 * 24 * 3600 * 1000), new Date(now - 90 * 24 * 3600 * 1000));
-  }
-  fs.writeFileSync(tmp, 'x');
-  const old = new Date(now - 3 * 3600 * 1000);
-  fs.utimesSync(tmp, old, old);
-  const before = [fs.readdirSync(dir).sort(), fs.readdirSync(learnPaths(root).spool).sort()];
+  fs.mkdirSync(path.join(spool, 'bad'), { recursive: true });
+  for (let i = 0; i < 60; i += 1) { createHandoff(path.join(dir, hname(i)), ['{}']); aged(path.join(dir, hname(i)), 1 + (60 - i) / 100); } // hname(59) is the newest
+  // a file with a matching name that this pipeline did not create, one it created and that was modified since, one unchanged and expired
+  const foreign = path.join(dir, `${'a'.repeat(16)}-1-${'f'.repeat(8)}.jsonl`);
+  fs.writeFileSync(foreign, '{"hello":"world"}\n');
+  const modified = path.join(dir, `${'a'.repeat(16)}-2-${'e'.repeat(8)}.jsonl`);
+  createHandoff(modified, ['{}']);
+  fs.appendFileSync(modified, '{"added":"by someone"}\n');
+  const expired = path.join(dir, `${'a'.repeat(16)}-3-${'d'.repeat(8)}.jsonl`);
+  createHandoff(expired, ['{}']);
+  for (const f of [foreign, modified, expired]) aged(f, 40);
+  const event = (n) => path.join(spool, `${String(n).padStart(15, '0')}-1-${'c'.repeat(8)}.json`);
+  fs.writeFileSync(event(1), '{"v":1}'); // matching name, not ours
+  const ownedEvent = spoolEvent(root, { v: 1, key: 'k' });
+  const ownedPath = path.join(spool, `${ownedEvent}.json`);
+  const editedEvent = spoolEvent(root, { v: 1, key: 'k2' });
+  const editedPath = path.join(spool, `${editedEvent}.json`);
+  fs.writeFileSync(editedPath, fs.readFileSync(editedPath, 'utf8').replace('k2', 'k3'));
+  const notes = [path.join(dir, 'personal-notes.txt'), path.join(spool, 'personal-notes.txt'), path.join(spool, 'bad', 'personal-notes.txt')];
+  for (const f of notes) { fs.writeFileSync(f, 'mine'); }
+  for (const f of [event(1), ownedPath, editedPath, ...notes]) aged(f, 90);
+  const snapshot = () => JSON.stringify([fs.readdirSync(dir).sort(), fs.readdirSync(spool).sort()]);
+  const before = snapshot();
   hookEvent(root, 'stop', session(root)); // learning is off: the hook does nothing to disk, not even housekeeping
-  assert.deepEqual([fs.readdirSync(dir).sort(), fs.readdirSync(learnPaths(root).spool).sort()], before);
-  // learning on: the next handoff runs housekeeping, which touches only names this pipeline generates
+  assert.equal(snapshot(), before);
   setMode(root, 'propose');
   const s0 = session(root);
   writeTranscript(s0.transcript_path, [userLine('a0', 'a message to hand over before compaction', root)]);
   hookEvent(root, 'precompact', s0);
-  const left = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl'));
-  assert.equal(left.length, 50);
-  assert.ok(left.includes(`${'a'.repeat(16)}-1059-${'b'.repeat(8)}.jsonl`) && !left.includes(`${'a'.repeat(16)}-1000-${'b'.repeat(8)}.jsonl`));
-  assert.equal(fs.existsSync(tmp), false);
-  // files that this pipeline did not create survive, however old and whatever their extension
-  for (const f of [mine, path.join(learnPaths(root).spool, 'personal-notes.txt'), path.join(learnPaths(root).spool, 'bad', 'personal-notes.txt'), path.join(learnPaths(root).spool, 'keep.json'), path.join(learnPaths(root).spool, 'x.tmp')]) assert.ok(fs.existsSync(f), f);
+  const left = fs.readdirSync(dir);
+  assert.equal(left.filter((n) => n.startsWith('aaaaaaaaaaaaaaaa-10')).length, 49); // 50 files allowed in all, oldest owned ones go first
+  assert.ok(left.includes(hname(59)) && !left.includes(hname(0)));
+  assert.ok(fs.existsSync(foreign) && fs.existsSync(modified), 'foreign and modified files survive');
+  assert.equal(fs.existsSync(expired), false, 'expired unchanged owned file is removed');
+  assert.ok(fs.existsSync(event(1)) && fs.existsSync(editedPath), 'foreign and modified events survive');
+  assert.equal(fs.existsSync(ownedPath), false, 'expired unchanged owned event is removed');
+  for (const f of notes) assert.ok(fs.existsSync(f), f);
   // a handoff whose source is closed is deleted on the next ingest
   const db = await openStore(root);
   ingest(db, root);
@@ -694,21 +703,80 @@ test('shipped Claude settings: the hooks are wired and built-in memory is not sw
   for (const groups of Object.values(settings.hooks)) assert.match(groups[0].hooks[0].command, /scripts\/learn-hook\.mjs/);
 });
 
-test('numeric settings are bounded and old event files are pruned', async () => {
+test('numeric settings are bounded', () => {
   const root = core({ window_chars: 0, idle_seconds: -5, max_budget_usd: 99, review_timeout_seconds: 'x' });
   const config = loadConfig(root);
   assert.deepEqual([config.window_chars, config.idle_seconds, config.max_budget_usd, config.review_timeout_seconds], [1000, 0, 2, 120]);
-  const { spool } = learnPaths(root);
-  fs.mkdirSync(path.join(spool, 'bad'), { recursive: true });
-  const old = new Date(Date.now() - 40 * 24 * 3600 * 1000);
-  const ev = (n) => `${String(n).padStart(15, '0')}-1-${'d'.repeat(8)}`;
-  for (const name of [`${ev(1)}.tmp`, `${ev(2)}.json`, `bad/${ev(3)}.json`]) { fs.writeFileSync(path.join(spool, name), '{}'); fs.utimesSync(path.join(spool, name), old, old); }
-  fs.writeFileSync(path.join(spool, `${ev(4)}.tmp`), 'x');
-  chat(root);
+});
+
+test('a record without a uuid is never learned from, even retained in two handoffs and the successor, across a restart; it is only counted', async () => {
+  const root = core({ window_chars: 1000 });
   review([]);
-  await drain(root);
-  assert.deepEqual(fs.readdirSync(spool).filter((n) => n !== 'bad').sort(), [`${ev(4)}.tmp`]);
-  assert.deepEqual(fs.readdirSync(path.join(spool, 'bad')), []);
+  setMode(root, 'propose');
+  const s = session(root);
+  const bare = (text) => JSON.stringify({ type: 'user', cwd: root, message: { role: 'user', content: text } });
+  const lines = (extra) => [assistantLine('h', 'opening record', root), bare('UUIDLESS statement I always want formal replies'), userLine('v1', 'valid record number one here', root), ...extra];
+  writeTranscript(s.transcript_path, lines([]));
+  hookEvent(root, 'precompact', s);
+  appendTranscript(s.transcript_path, [userLine('v2', 'valid record number two here', root)]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [userLine('c0', 'successor transcript record here', root), bare('UUIDLESS statement I always want formal replies')]);
+  hookEvent(root, 'end', s);
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_finish' });
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  timePasses(root);
+  workerProcess(root);
+  assert.equal(occurrences('UUIDLESS'), 0);
+  assert.equal(occurrences('valid record number one here'), 1);
+  assert.equal(occurrences('valid record number two here'), 1);
+  assert.equal(occurrences('successor transcript record here'), 1);
+  assert.ok(peek(root, "SELECT n FROM counters WHERE code = 'uuidless_records'")[0].n >= 1);
+  assert.equal(inboxFiles(root).length, 0);
+});
+
+test('migration backfills the order of adopted sources from before generation order existed; an unresolvable one is closed with a diagnostic', async () => {
+  const root = core({ window_chars: 1000 });
+  review([]);
+  setMode(root, 'propose');
+  const { fingerprint, readLines } = await import('./learn-window.mjs');
+  const s = session(root);
+  const body = (w) => `${w} ${'word '.repeat(120)}`.trim();
+  writeTranscript(s.transcript_path, [userLine('c0', body('SUCCESSORLIVE'), root)]);
+  const live = fingerprint(readLines(s.transcript_path));
+  const origin = 'a'.repeat(24);
+  const hand = (name, texts) => { const f = path.join(handoffDir(root), name); fs.mkdirSync(handoffDir(root), { recursive: true }); createHandoff(f, texts.map((t, i) => JSON.stringify({ type: 'user', uuid: `${name}-${i}`, cwd: root, orig: i + 1, message: { role: 'user', content: body(t) } }))); return f; };
+  const good = hand(`${'1'.repeat(16)}-1-${'a'.repeat(8)}.jsonl`, ['OLDPREFERENCE', 'CORRECTIONMESSAGE']);
+  const lost = hand(`${'2'.repeat(16)}-2-${'b'.repeat(8)}.jsonl`, ['NEVERREVIEWED']);
+  const db = await openStore(root);
+  const key = sessionKey(s.session_id);
+  db.prepare('INSERT INTO sessions(key, session_id, transcript, reason, due_at) VALUES(?, ?, ?, ?, ?)').run(key, s.session_id, s.transcript_path, 'session_end', Date.now() - 1000);
+  db.prepare('INSERT INTO sources(session, fp, closed) VALUES(?, ?, 1)').run(key, origin); // rowid 1: the generation that was replaced
+  db.prepare('INSERT INTO sources(session, fp) VALUES(?, ?)').run(key, live); // rowid 2: the successor, already open
+  db.prepare('INSERT INTO sources(session, fp, path) VALUES(?, ?, ?)').run(key, `h:${origin}:1`, good); // rowid 3: adopted history, order unknown
+  db.prepare('INSERT INTO sources(session, fp, path) VALUES(?, ?, ?)').run(key, `h:${'9'.repeat(24)}:1`, lost); // no such ancestor
+  db.exec('ALTER TABLE sources DROP COLUMN ord'); // a database as the previous round left it
+  db.close();
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_finish' });
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  timePasses(root);
+  workerProcess(root);
+  const order = ['OLDPREFERENCE', 'CORRECTIONMESSAGE', 'SUCCESSORLIVE'].map((w) => calls().findIndex((c) => (c.prompt.split('CONVERSATION WINDOW')[1] ?? '').includes(w)));
+  assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.equal(occurrences('NEVERREVIEWED'), 0);
+  assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'order_unresolved'));
+});
+
+test('the launcher writes nothing when learning is off, missing or unreadable, however late it is started', () => {
+  for (const config of ['off', 'missing', 'broken']) {
+    const root = core({ mode: 'off' });
+    const file = path.join(root, '.aiverse', 'learn', 'config.json');
+    if (config === 'missing') fs.rmSync(file);
+    if (config === 'broken') fs.writeFileSync(file, '{');
+    const run = spawnSync(process.execPath, [path.join(root, 'scripts', 'learn-launch.mjs'), '--root', root, '--drain'], { encoding: 'utf8', env: process.env });
+    assert.equal(run.status, 0);
+    assert.equal(fs.existsSync(path.join(root, 'runtime', 'learn')), false, config);
+  }
 });
 
 test('the real hook starts a real detached worker that finishes the review on its own', async () => {

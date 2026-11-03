@@ -16,6 +16,15 @@ function status(code) {
   } catch (error) { /* nothing more can be recorded */ }
 }
 
+// Learning off, unconfigured or unreadable: this program does nothing at all, not even leave a diagnostic file.
+function enabled() {
+  try {
+    const mode = JSON.parse(fs.readFileSync(path.join(root, '.aiverse', 'learn', 'config.json'), 'utf8')).mode;
+    return mode === 'propose' || mode === 'auto';
+  } catch (error) { return false; }
+}
+if (!enabled()) process.exit(0);
+
 const parts = process.versions.node.split('.').map(Number);
 if (parts[0] < 22 || (parts[0] === 22 && parts[1] < 13)) {
   status('node_too_old');

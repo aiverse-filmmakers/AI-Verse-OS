@@ -69,6 +69,7 @@ export function readWindow(lines, cursor, budget, scopeOf, skip = null) {
   let scope = null;
   let skipped = 0;
   const completed = [];
+  let uuidless = 0;
   let line = cursor.line;
   let part = cursor.part;
   scan: for (; line < lines.length; line += 1, part = 0) {
@@ -83,6 +84,8 @@ export function readWindow(lines, cursor, budget, scopeOf, skip = null) {
       if (own === null) { skipped += 1; continue; }
       if (scope && own !== scope) break;
       scope = own;
+      // A record without a uuid cannot be told apart from a retained copy of itself, so it is never learned from (counted only).
+      if (!message.uuid) { if (part === 0) uuidless += 1; continue; }
       // a retained copy of a record already reviewed from another source of this chat (handoff vs live): not reviewed twice
       if (skip && part === 0 && message.uuid && skip.has(message.uuid)) continue;
     } else if (own === null || own !== scope) {
@@ -98,7 +101,7 @@ export function readWindow(lines, cursor, budget, scopeOf, skip = null) {
   }
   const anchorLine = part > 0 ? line : line - 1;
   return {
-    messages, scope: scope ?? 'unscoped', next: { line, part }, atEnd: line >= lines.length, skipped, completed,
+    messages, scope: scope ?? 'unscoped', next: { line, part }, atEnd: line >= lines.length, skipped, completed, uuidless,
     anchor_line: anchorLine >= 0 && anchorLine < lines.length ? anchorLine : -1,
     anchor: anchorLine >= 0 && anchorLine < lines.length ? lineHash(lines[anchorLine]) : '',
     hasEligible: messages.some(isEligible),
@@ -117,10 +120,10 @@ export function handoffLines(lines, scopeOf) {
     let entry = null;
     try { entry = JSON.parse(raw); } catch {}
     const message = toMessage(entry, line);
-    if (!message || message.role !== 'user' || SECRET.test(message.text)) return;
+    if (!message || message.role !== 'user' || !message.uuid || SECRET.test(message.text)) return;
     const scope = scopeOf(message.cwd);
     if (scope === null || scope === 'unscoped') return; // only a known operator or workspace scope is ever persisted
-    out.push(JSON.stringify({ type: 'user', uuid: message.uuid || undefined, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
+    out.push(JSON.stringify({ type: 'user', uuid: message.uuid, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
   });
   return out;
 }

@@ -176,12 +176,13 @@ test('fingerprint and anchor: a replaced transcript is not read as the old one',
   const source = { fp, line: first.next.line, part: 0, anchor_line: first.anchor_line, anchor: first.anchor, backup: null, backup_lines: 0 };
   appendTranscript(file, [userLine('c', 'third message appended later on', root)]);
   assert.equal(readSource(source, file, 24000, scopeOf(root)).messages[0].id, 'c');
-  // same length, same first line, different second line: anchor mismatch
+  // same first line, different history before the cursor: reported as replaced so the caller restarts, never read as the old one
   writeTranscript(file, [userLine('a', 'first message of the first transcript', root), userLine('z', 'completely different second message', root), userLine('c', 'third message appended later on', root)]);
-  assert.equal(readSource(source, file, 24000, scopeOf(root)), null);
+  assert.equal(readSource(source, file, 24000, scopeOf(root)).replaced, true);
   // different first line: a different source altogether
   writeTranscript(file, [userLine('n', 'a brand new transcript after compaction', root)]);
   assert.equal(readSource({ ...source, line: 0, anchor_line: -1, anchor: '' }, file, 24000, scopeOf(root)), null);
+  assert.equal(readSource(source, path.join(root, 'missing.jsonl'), 24000, scopeOf(root)), null);
   assert.notEqual(fingerprint(readLines(file)), fp);
 });
 

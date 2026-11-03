@@ -19,6 +19,8 @@ Everything else is a proposal. Raw exception text is never kept: reasons are fix
 from __future__ import annotations
 
 import argparse
+import os
+import time
 import hashlib
 import importlib.util
 import json
@@ -46,7 +48,11 @@ REASONS = {
     "not_verbatim": "the statement is not close enough to what you wrote",
     "negation_mismatch": "the statement does not mirror the negation in what you wrote",
     "multi_sentence": "it is not supported by one single sentence of yours",
+    "question": "what you wrote was a question, not an instruction",
+    "retraction": "you seem to have changed your mind in the same message or a later one",
+    "conflicts_stored": "it overlaps with something already stored without being the same",
     "goal_owner_unavailable": "no goal owner is active yet",
+    "fenced": "the worker no longer held the right to write",
     "owner_unavailable": "the owner that would save it was not available",
     "owner_refused": "the owner asked for clarification instead of saving",
 }
@@ -66,6 +72,11 @@ CONDITION = re.compile(r"\b(if|unless|except|when|whenever|only|but|however|alth
 ATTRIBUTION = re.compile(r"\b(said|says|wrote|writes|replied|asked|told me|according to|email from|message from|quote[sd]?|client wants|boss wants|he wants|she wants|they want)\b", re.IGNORECASE)
 HEDGE = re.compile(r"\b(maybe|perhaps|might|someday|some day|one day|not sure|thinking (?:about|of)|considering|what if|poate|cândva|candva)\b", re.IGNORECASE)
 ONE_OFF = re.compile(r"\b(just|only) (?:for )?(?:this|today)|\bthis (?:one )?(?:time|once|email|message)\b|\bone[- ]off\b|\bdoar (?:de data asta|acum|pentru acesta)\b", re.IGNORECASE)
+QUESTION = re.compile(r"^\W*(?:should|could|would|can|shall|(?:do|does|did)(?!\s+not\b)(?!n['\u2019]t)|is|are|am|will|what|how|why|when|where|which|who)\b", re.IGNORECASE)
+RETRACT = re.compile(r"\b(?:actually|changed my mind|scratch that|ignore that|never ?mind|on second thought|i meant|forget (?:that|it)|correction|instead)\b", re.IGNORECASE)
+SELF_FRAME = re.compile(r"^\W*(?:my (?:preference|rule|goal|priority|instruction)\b|i (?:prefer|want|like|need|always|never|decided)\b)", re.IGNORECASE)
+# Words a faithful statement may drop. Dropping any other word (fewer, only, in my emails...) can flip or widen the meaning.
+DELETABLE = STOPWORDS | {"goal", "priority", "preference", "rule", "instruction", "going", "forward", "remember", "note", "is", "was", "get", "new", "decided", "need", "thanks", "thank", "ok", "okay"}
 NO_LONGER = re.compile(r"\b(?:no longer|not anymore|nu mai)\b", re.IGNORECASE)
 
 
@@ -92,9 +103,12 @@ def sentence_of(text: str, quote: str) -> Optional[str]:
     return next((s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if contains_words(s, quote)), None)
 
 
-def inside_quotation(text: str, quote: str) -> bool:
-    spans = re.findall(r"[\"“„«]([^\"”»]{3,})[\"”»]", text)
-    return any(contains_words(span, quote) for span in spans)
+def quoted_by_someone_else(sentence: str, quote: str) -> bool:
+    """The quote sits inside quotation marks that the operator did not frame as their own (My preference is "..." is theirs)."""
+    for match in re.finditer(r"[\"\u201c\u201e\u00ab]([^\"\u201d\u00bb]{3,})[\"\u201d\u00bb]", sentence):
+        if contains_words(match.group(1), quote) and not SELF_FRAME.match(sentence):
+            return True
+    return False
 
 
 def near_verbatim(statement: str, sentence: str) -> Optional[str]:
@@ -108,10 +122,13 @@ def near_verbatim(statement: str, sentence: str) -> Optional[str]:
     rest = iter(t)
     if not all(w in rest for w in s if w not in ADDABLE):  # `in` on an iterator consumes it: an ordered subsequence test
         return "not_verbatim"
-    kept = [w for w in s if w not in STOPWORDS]
-    total = [w for w in t if w not in STOPWORDS]
-    if total and len(kept) < 0.7 * len(total):
-        return "not_verbatim"
+    # every word of the sentence is kept except filler: a deleted qualifier ("fewer", "only") would change the meaning
+    spare = list(s)
+    for w in t:
+        if w in spare:
+            spare.remove(w)
+        elif w not in DELETABLE:
+            return "not_verbatim"
     return None
 
 
@@ -128,7 +145,7 @@ def load_host(root: Path):
 
 # -- plan: screening, no writes -----------------------------------------------------------------------------
 
-def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: List[str], stored: List[str]) -> Dict[str, Any]:
     """A rejected result carries a fixed code and the kind, never any candidate content."""
 
     def reject(code: str) -> Dict[str, Any]:
@@ -177,8 +194,14 @@ def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]]) -> Dict[st
         reason = "multi_sentence"
     elif PERMISSION.search(text):
         reason = "permission"
-    elif inside_quotation(text, evidence["quote"]) or ATTRIBUTION.search(sentence):
+    elif quoted_by_someone_else(sentence, evidence["quote"]) or ATTRIBUTION.search(sentence):
         reason = "third_party"
+    elif sentence.rstrip().endswith("?") or QUESTION.match(sentence):
+        reason = "question"
+    elif RETRACT.search(text) or any(RETRACT.search(t) for t in later):
+        reason = "retraction"
+    elif conflicts_with_stored(statement, stored):
+        reason = "conflicts_stored"
     elif CONDITION.search(sentence):
         reason = "conditional"
     else:
@@ -186,12 +209,31 @@ def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]]) -> Dict[st
     return {**item, "disposition": "proposal" if reason else "auto", "reason": reason}
 
 
+def conflicts_with_stored(statement: str, stored: List[str]) -> bool:
+    """Something stored that overlaps this statement without being the same text: an unmarked correction. Never a NEW save."""
+    mine = {w for w in tokens(statement) if w not in STOPWORDS}
+    for old in stored:
+        if norm(old) == norm(statement):
+            continue
+        theirs = {w for w in tokens(old) if w not in STOPWORDS}
+        if mine and theirs and len(mine & theirs) / len(mine | theirs) >= 0.5:
+            return True
+    return False
+
+
 def plan(request: Dict[str, Any]) -> Dict[str, Any]:
     messages = {m["id"]: m for m in request["messages"]}
+    order = [m["id"] for m in request["messages"] if m["role"] == "user"]
+    st = request.get("stored") or {}
+    stored = [x for v in (st.get("preferences") or {}).values() for x in v] + list(st.get("goals") or [])
     candidates = request.get("candidates")
     if not isinstance(candidates, list):
         raise Refused("malformed")
-    return {"items": [classify(c, request["scope"], messages) for c in candidates[:6]]}
+    def later_than(c: Any) -> List[str]:
+        mid = c.get("evidence", {}).get("message_id") if isinstance(c, dict) and isinstance(c.get("evidence"), dict) else None
+        return [messages[i]["text"] for i in order[order.index(mid) + 1 :]] if mid in order else []
+
+    return {"items": [classify(c, request["scope"], messages, later_than(c), stored) for c in candidates[:6]]}
 
 
 # -- commit: one item ---------------------------------------------------------------------------------------
@@ -255,6 +297,13 @@ def proposal(item: Dict[str, Any], reason: str, ref: str) -> Dict[str, Any]:
     return {"state": "proposed", "reason": reason, "inbox": {"candidate_kind": "claude-code-learning-proposal", "summary": " ".join(lines)[:1500], "refs": [ref]}}
 
 
+def mode_still_auto(root: Path) -> bool:
+    try:
+        return json.loads((root / ".aiverse" / "learn" / "config.json").read_text(encoding="utf-8")).get("mode") == "auto"
+    except Exception:
+        return False
+
+
 def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
     item, mode, scope, session_key = request["item"], request["mode"], request["scope"], request["session_key"]
     ref = f"claude-code:{session_key}:{item['message_id']}"
@@ -263,6 +312,10 @@ def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
     if mode != "auto":
         return proposal(item, "propose_mode", ref)
     key = effect_key(session_key, item)
+    # Fence right before the owner call: the deadline the worker set (its lease is only trusted that long), the worker still
+    # being our parent (POSIX), and the switch still being on. Otherwise this child writes nothing.
+    if time.time() * 1000 > request.get("deadline", float("inf")) or (os.name == "posix" and request.get("parent_pid") and os.getppid() != request["parent_pid"]) or not mode_still_auto(root):
+        return proposal(item, "fenced", ref)
     try:
         owners = Owners(root, session_key, scope, host)
         return owners.preference(item, key, ref) if item["kind"] == "preference" else owners.goal(item, key, ref)

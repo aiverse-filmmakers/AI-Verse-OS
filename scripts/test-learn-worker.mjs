@@ -8,9 +8,10 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { learnPaths } from './learn-common.mjs';
+import { learnPaths, loadConfig } from './learn-common.mjs';
 import { splitText } from './learn-window.mjs';
 import { buildPrompt, reviewerArgs, run } from './learn-worker.mjs';
+import { REPO } from './test-learn-support.mjs';
 import {
   allText, appendTranscript, assistantLine, calls, candidate, core, dumpDb, hookEvent, inboxFiles, inboxText, mutate, peek, preferences, receipts,
   review, session, setMode, timePasses, userLine, workerAsync, workerProcess, workspace, writeTranscript,
@@ -135,47 +136,84 @@ test('kill -9 at every point between owner write, item record, receipt/cursor an
   }
 });
 
-test('compaction, cursor 0: a replaced transcript of equal length is a new source and the snapshot is still reviewed, once each', async () => {
+const markersOnce = (markers) => {
+  const prompts = calls().map((c) => c.prompt);
+  for (const marker of markers) assert.equal(prompts.filter((p) => p.includes(marker)).length, 1, marker);
+};
+
+test('PreCompact keeps no copy of the transcript: a password in it appears nowhere on disk, and the unreviewed range is reviewed before compaction', async () => {
   const root = core();
   review([]);
   setMode(root, 'propose');
   const s = session(root);
-  writeTranscript(s.transcript_path, [userLine('a1', 'old transcript message number one', root), userLine('a2', 'old transcript message number two', root)]);
+  writeTranscript(s.transcript_path, [userLine('a1', 'My password is hunter2 and tool output says hunter2 too', root), assistantLine('a2', 'secret reply hunter2', root), userLine('a3', 'plain message number three here', root)]);
   hookEvent(root, 'precompact', s);
-  writeTranscript(s.transcript_path, [userLine('b1', 'new transcript message number one', root), userLine('b2', 'new transcript message number two', root)]);
-  hookEvent(root, 'end', s);
-  await drain(root);
-  appendTranscript(s.transcript_path, [userLine('b3', 'post compaction message number three', root)]);
-  hookEvent(root, 'end', s);
-  await drain(root);
-  const prompts = calls().map((c) => c.prompt);
-  for (const marker of ['old transcript message number one', 'old transcript message number two', 'new transcript message number one', 'new transcript message number two', 'post compaction message number three']) {
-    assert.equal(prompts.filter((p) => p.includes(marker)).length, 1, marker);
-  }
-  assert.equal(prompts.length, 3);
-  assert.equal(fs.readdirSync(learnPaths(root).snapshots).length, 0); // consumed snapshots are removed
+  assert.equal(allText(learnPaths(root).base).includes('hunter2'), false); // the event is a pointer, not a copy
+  assert.equal(fs.existsSync(path.join(learnPaths(root).base, 'snapshots')), false);
+  await drain(root); // the worker reviews the range right away (reason before_compaction), as the hook starts it
+  assert.equal(calls().length, 1);
+  for (const where of [allText(learnPaths(root).base), dumpDb(root), allText(path.join(root, 'operator'))]) assert.equal(where.includes('hunter2'), false);
 });
 
-test('compaction, cursor > 0: unreviewed old history comes from the snapshot, a longer replacement and later messages follow', async () => {
+test('compaction: a replaced transcript is a new source; history reviewed before it is not repeated; later messages are reviewed once', async () => {
   const root = core();
   review([]);
   setMode(root, 'propose');
   const s = session(root);
   writeTranscript(s.transcript_path, [userLine('a1', 'old history message number one', root), userLine('a2', 'old history message number two', root)]);
-  hookEvent(root, 'stop', s);
-  await run(root, { drain: true });
-  appendTranscript(s.transcript_path, [userLine('a3', 'old history message number three', root), userLine('a4', 'old history message number four', root)]);
   hookEvent(root, 'precompact', s);
+  await drain(root);
+  appendTranscript(s.transcript_path, [userLine('a3', 'old history message number three', root)]);
+  hookEvent(root, 'precompact', s);
+  await drain(root);
   writeTranscript(s.transcript_path, [userLine('b0', 'summary of the compacted conversation', root), ...['b1', 'b2', 'b3', 'b4', 'b5'].map((id) => userLine(id, `new history message ${id} here`, root))]);
   hookEvent(root, 'stop', s);
   await drain(root);
   appendTranscript(s.transcript_path, [userLine('b6', 'new history message b6 after everything', root)]);
   hookEvent(root, 'end', s);
   await drain(root);
-  const prompts = calls().map((c) => c.prompt);
-  for (const marker of ['number one', 'number two', 'number three', 'number four', 'summary of the compacted', 'message b1 here', 'message b5 here', 'message b6 after']) {
-    assert.equal(prompts.filter((p) => p.includes(marker)).length, 1, marker);
-  }
+  markersOnce(['number one', 'number two', 'number three', 'summary of the compacted', 'message b1 here', 'message b5 here', 'message b6 after']);
+  assert.equal(peek(root, "SELECT COUNT(*) AS n FROM sources WHERE closed = 1")[0].n, 1);
+});
+
+test('a replacement that keeps the first line is not stranded: the source restarts on what is there and says history was replaced', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  const header = userLine('h', 'the same first line in every version', root);
+  writeTranscript(s.transcript_path, [header, userLine('x1', 'original message number one', root), userLine('x2', 'original message number two', root)]);
+  hookEvent(root, 'stop', s);
+  await drain(root);
+  writeTranscript(s.transcript_path, [header, userLine('y1', 'rewritten message number one', root), userLine('y2', 'rewritten message number two', root), userLine('y3', 'rewritten message number three', root)]);
+  hookEvent(root, 'stop', s);
+  await drain(root);
+  markersOnce(['original message number one', 'rewritten message number one', 'rewritten message number two', 'rewritten message number three']);
+  assert.deepEqual(peek(root, 'SELECT code FROM failures').map((r) => r.code), ['history_replaced']);
+  assert.equal(peek(root, 'SELECT line, closed FROM sources')[0].line, 4);
+  assert.equal(peek(root, 'SELECT closed FROM sources')[0].closed, 0);
+});
+
+test('assistant text from another scope never joins an operator window (and the other way round)', async () => {
+  const root = core();
+  workspace(root, 'alpha');
+  const alpha = path.join(root, 'workspaces', 'alpha');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [
+    userLine('o1', 'From now on never use exclamation marks please.', root),
+    assistantLine('a1', 'ALPHA-CONFIDENTIAL plan details from the workspace', alpha),
+    userLine('w1', 'Client Alpha likes blue headlines in every deck.', alpha),
+    assistantLine('a2', 'OPERATOR-ONLY answer text', root),
+    assistantLine('a3', 'NOCWD answer text', null),
+  ]);
+  setMode(root, 'propose');
+  hookEvent(root, 'end', s);
+  review([]);
+  await drain(root);
+  const [operatorPrompt, alphaPrompt] = calls().map((c) => c.prompt.split('CONVERSATION WINDOW')[1]);
+  assert.equal(operatorPrompt.includes('ALPHA-CONFIDENTIAL'), false);
+  assert.equal(alphaPrompt.includes('ALPHA-CONFIDENTIAL') || alphaPrompt.includes('OPERATOR-ONLY') || alphaPrompt.includes('NOCWD'), false);
+  assert.ok(operatorPrompt.includes('never use exclamation') && alphaPrompt.includes('blue headlines'));
 });
 
 test('a session moving between the operator, a workspace, an unmanifested folder and no cwd keeps each scope apart; nothing is promoted', async () => {
@@ -335,16 +373,42 @@ test('quota and a missing claude wait without spending attempts and without keep
   assert.equal(peek(root, 'SELECT attempts FROM sessions')[0].attempts, 0);
 });
 
-test('a deferred chat is left for the next hook or drain, not busy-waited on', async () => {
+test('a deferred chat: the worker waits for it up to its horizon, and leaves it for the next hook beyond that', async () => {
   const root = core();
   chat(root);
   review([]);
   process.env.FAKE_MODE = 'quota';
   await drain(root);
   process.env.FAKE_MODE = 'ok';
-  const result = await run(root, { sleep: () => { throw new Error('must not sleep'); } });
-  assert.deepEqual(result.outcomes, []);
+  const beyond = await run(root, { maxWaitMs: 10 * 60 * 1000, sleep: () => { throw new Error('must not sleep'); } });
+  assert.deepEqual(beyond.outcomes, []);
+  let slept = 0;
+  await run(root, { sleep: async () => { slept += 1; setMode(root, 'off'); } }); // default horizon covers the 30 minute wait
+  assert.equal(slept, 1);
   assert.equal(calls().length, 1);
+});
+
+test('shipped Claude settings: the hooks are wired and built-in memory is not switched off while learning is dormant', () => {
+  const settings = JSON.parse(fs.readFileSync(path.join(REPO, '.claude', 'settings.json'), 'utf8'));
+  assert.equal('autoMemoryEnabled' in settings, false);
+  assert.deepEqual(Object.keys(settings.hooks).sort(), ['PreCompact', 'SessionEnd', 'SessionStart', 'Stop']);
+  for (const groups of Object.values(settings.hooks)) assert.match(groups[0].hooks[0].command, /scripts\/learn-hook\.mjs/);
+});
+
+test('numeric settings are bounded and old event files are pruned', async () => {
+  const root = core({ window_chars: 0, idle_seconds: -5, max_budget_usd: 99, review_timeout_seconds: 'x' });
+  const config = loadConfig(root);
+  assert.deepEqual([config.window_chars, config.idle_seconds, config.max_budget_usd, config.review_timeout_seconds], [1000, 0, 2, 120]);
+  const { spool } = learnPaths(root);
+  fs.mkdirSync(path.join(spool, 'bad'), { recursive: true });
+  const old = new Date(Date.now() - 40 * 24 * 3600 * 1000);
+  for (const name of ['a.tmp', 'b.json', 'bad/c.json']) { fs.writeFileSync(path.join(spool, name), '{}'); fs.utimesSync(path.join(spool, name), old, old); }
+  fs.writeFileSync(path.join(spool, 'fresh.tmp'), 'x');
+  chat(root);
+  review([]);
+  await drain(root);
+  assert.deepEqual(fs.readdirSync(spool).filter((n) => n !== 'bad').sort(), ['fresh.tmp']);
+  assert.deepEqual(fs.readdirSync(path.join(spool, 'bad')), []);
 });
 
 test('the real hook starts a real detached worker that finishes the review on its own', async () => {

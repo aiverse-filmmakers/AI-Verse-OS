@@ -154,24 +154,40 @@ function liveFingerprint(session) {
   }
 }
 
+const noteFailure = (db, key, code) => db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, Date.now(), code);
+
+// A transcript generation that is gone: stop pointing at it. Unreviewed lines of it (cursor beyond 0) cannot be read any more.
 function closeSource(db, key, source) {
-  db.prepare('UPDATE sources SET closed = 1, backup = NULL WHERE session = ? AND fp = ?').run(key, source.fp);
-  if (source.backup) fs.rmSync(source.backup, { force: true });
-  if (source.line > 0 || source.backup) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, Date.now(), 'history_replaced');
+  db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(key, source.fp);
+  if (source.line > 0) noteFailure(db, key, 'history_replaced');
+}
+
+// Same first line but different history before the cursor: start over on what is there now, never strand the source.
+function restartSource(db, key, source) {
+  db.prepare("UPDATE sources SET line = 0, part = 0, anchor_line = -1, anchor = '', closed = 0 WHERE session = ? AND fp = ?").run(key, source.fp);
+  noteFailure(db, key, 'history_replaced');
+  return { ...source, line: 0, part: 0, anchor_line: -1, anchor: '' };
 }
 
 // The first open source that has a pending plan or something left to read.
 function nextWork(ctx, session) {
   const { root, db } = ctx;
   const live = liveFingerprint(session);
-  if (live) db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(session.key, live);
-  for (const source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY id').all(session.key)) {
+  if (live) {
+    db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(session.key, live);
+    db.prepare('UPDATE sources SET closed = 0 WHERE session = ? AND fp = ? AND closed = 1').run(session.key, live);
+  }
+  for (let source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY id').all(session.key)) {
     const pending = db.prepare('SELECT body FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').get(session.key, source.fp, source.line, source.part);
     if (pending) return { source, live, review: JSON.parse(pending.body) };
-    const window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    let window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    if (window?.replaced) {
+      source = restartSource(db, session.key, source);
+      window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    }
     if (window && (window.messages.length || window.next.line > source.line || window.next.part > source.part)) return { source, live, window };
     if (window && source.fp === live) continue; // nothing new yet in the live transcript
-    if (live || !source.backup) closeSource(db, session.key, source); // replaced, or gone: stop pointing at it
+    if (live) closeSource(db, session.key, source); // a different transcript is live now
   }
   return null;
 }
@@ -220,11 +236,11 @@ function review(ctx, session, { source, live, window }, guard) {
   const reviewed = runReviewer(root, ctx.config, buildPrompt(root, window.scope, stored.value, window.messages));
   if (reviewed.ok || reviewed.kind !== 'wait') recordReview(db, session.key, reviewed.cost ?? 0, now());
   if (!reviewed.ok) return fail(ctx, session, source, live, window, reviewed, guard);
-  const planned = callApplier(root, ctx.config, 'plan', { scope: window.scope, session_key: session.key, messages: window.messages, candidates: reviewed.review.candidates });
+  const planned = callApplier(root, ctx.config, 'plan', { scope: window.scope, session_key: session.key, messages: window.messages, candidates: reviewed.review.candidates, stored: stored.value });
   if (!planned.ok) return fail(ctx, session, source, live, window, planned, guard);
   const body = {
     scope: window.scope, cost: reviewed.cost, model: ctx.config.model, messages: window.messages.length, skipped: window.skipped,
-    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd, in_backup: window.inBackup,
+    next: window.next, anchor_line: window.anchor_line, anchor: window.anchor, at_end: window.atEnd,
     items: planned.value.items.map((item) => ({ ...item, done: false })),
   };
   tx(db, () => {
@@ -250,7 +266,7 @@ function execute(ctx, session, { source, live }, body, guard) {
     const blocked = guard();
     if (blocked) return blocked === 'lost' ? { state: 'lost' } : { state: 'disabled' };
     const mode = loadConfig(root).mode;
-    const committed = callApplier(root, ctx.config, 'commit', { mode, scope: body.scope, session_key: session.key, item });
+    const committed = callApplier(root, ctx.config, 'commit', { mode, scope: body.scope, session_key: session.key, item, parent_pid: process.pid, deadline: Date.now() + 20000 });
     if (!committed.ok) return wait(ctx, session, committed.code);
     crash('after_owner');
     const result = committed.value;
@@ -269,7 +285,7 @@ function execute(ctx, session, { source, live }, body, guard) {
     messages: body.messages, skipped_outside_core: body.skipped || undefined,
     results: body.items.map(({ kind, state, reason, owner, ref }) => ({ kind, state, reason, owner, ref })),
   };
-  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end, inBackup: body.in_backup };
+  const window = { next: body.next, anchor_line: body.anchor_line, anchor: body.anchor, atEnd: body.at_end };
   return finish(ctx, session, source, live, window, receipt);
 }
 
@@ -277,14 +293,13 @@ function execute(ctx, session, { source, live }, body, guard) {
 function finish(ctx, session, source, live, window, receipt) {
   const { db, owner } = ctx;
   const name = `session:${session.key}`;
-  const more = !window.atEnd || window.inBackup;
-  const exhausted = source.backup && window.next.line >= source.backup_lines;
+  const more = !window.atEnd;
   tx(db, () => {
     if (!holds(db, name, owner, ctx.now())) throw new Lost();
     if (receipt) db.prepare('INSERT INTO receipts(session, at, body) VALUES(?, ?, ?)').run(session.key, ctx.now(), JSON.stringify(receipt));
     crash('in_finish');
-    db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ?, backup = ? WHERE session = ? AND fp = ?')
-      .run(window.next.line, window.next.part, window.anchor_line, window.anchor, exhausted ? null : source.backup, session.key, source.fp);
+    db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ? WHERE session = ? AND fp = ?')
+      .run(window.next.line, window.next.part, window.anchor_line, window.anchor, session.key, source.fp);
     db.prepare('DELETE FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').run(session.key, source.fp, source.line, source.part);
     const others = db.prepare('SELECT COUNT(*) AS n FROM sources WHERE session = ? AND closed = 0 AND fp != ?').get(session.key, source.fp).n > 0;
     const row = db.prepare('SELECT due_at FROM sessions WHERE key = ?').get(session.key);
@@ -293,11 +308,10 @@ function finish(ctx, session, source, live, window, receipt) {
     db.prepare('UPDATE sessions SET attempts = 0, blocked = NULL, not_before = 0, due_at = ? WHERE key = ?').run(due, session.key);
   });
   crash('after_finish');
-  if (exhausted) fs.rmSync(source.backup, { force: true });
   return { state: receipt ? 'reviewed' : 'skipped_no_user_message', results: receipt?.results };
 }
 
-function fail(ctx, session, source, live, window, outcome) {
+function fail(ctx, session, source, live, window, outcome, guard) {
   const { db } = ctx;
   if (outcome.kind === 'wait') return wait(ctx, session, outcome.code);
   const attempts = (db.prepare('SELECT attempts FROM sessions WHERE key = ?').get(session.key).attempts ?? 0) + 1;
@@ -307,7 +321,8 @@ function fail(ctx, session, source, live, window, outcome) {
   }
   // Terminal for this range only (no screened candidate exists yet, so nothing is lost): note it without content, move past
   // it, and the rest of the chat continues as the next range.
-  if (!isEnabled(loadConfig(ctx.root))) return { state: 'disabled' };
+  const blocked = guard();
+  if (blocked) return { state: blocked === 'lost' ? 'lost' : 'disabled' };
   const filed = submitInbox(ctx.root, window.scope, {
     candidate_kind: 'claude-code-learning-failed',
     summary: `A range of a Claude Code conversation could not be reviewed automatically (${outcome.code}, chat ${session.key}). Say "learn from this conversation" in that chat if it still matters.`,
@@ -328,7 +343,7 @@ function writeStatus(root, code) {
   } catch {}
 }
 
-export async function run(root, { drain = false, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxWaitMs = 10 * 60 * 1000, owner = crypto.randomUUID(), now = Date.now } = {}) {
+export async function run(root, { drain = false, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxWaitMs = 35 * 60 * 1000, owner = crypto.randomUUID(), now = Date.now } = {}) {
   const outcomes = [];
   if (!isEnabled(loadConfig(root))) return { ran: false, outcomes };
   let db;
@@ -382,7 +397,9 @@ function parseArgs(argv) {
   return args;
 }
 
-if (isMain(import.meta.url)) {
-  const { root, drain } = parseArgs(process.argv.slice(2));
-  run(root, { drain }).catch(() => {}).finally(() => process.exit(0));
+export function main(argv) {
+  const { root, drain } = parseArgs(argv);
+  return run(root, { drain }).catch(() => {}).finally(() => process.exit(0));
 }
+
+if (isMain(import.meta.url)) main(process.argv.slice(2));

@@ -23,6 +23,12 @@ export const DEFAULT_CONFIG = Object.freeze({
   python: null,
 });
 
+// Numeric settings are clamped so a typo cannot stop progress (window_chars 0) or remove a cost cap.
+const BOUNDS = {
+  idle_seconds: [0, 3600], max_pending_turns: [1, 100], min_gap_seconds: [0, 86400], max_reviews_per_session_per_day: [1, 100],
+  max_reviews_per_day: [1, 500], window_chars: [1000, 200000], max_budget_usd: [0.01, 2], review_timeout_seconds: [10, 600],
+};
+
 export function loadConfig(root) {
   const config = { ...DEFAULT_CONFIG };
   try {
@@ -34,7 +40,9 @@ export function loadConfig(root) {
       const ok = Array.isArray(fallback)
         ? Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === 'string')
         : typeof value === typeof (fallback ?? '');
-      if (ok) config[key] = value;
+      if (!ok) continue;
+      const range = BOUNDS[key];
+      config[key] = range && typeof value === 'number' ? (Number.isFinite(value) ? Math.min(range[1], Math.max(range[0], value)) : fallback) : value;
     }
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -46,7 +54,7 @@ export const isEnabled = (config) => config.mode === 'propose' || config.mode ==
 
 export function learnPaths(root) {
   const base = path.join(root, 'runtime', 'learn');
-  return { base, db: path.join(base, 'learn.db'), spool: path.join(base, 'spool'), snapshots: path.join(base, 'snapshots') };
+  return { base, db: path.join(base, 'learn.db'), spool: path.join(base, 'spool') };
 }
 
 export const sessionKey = (sessionId) => crypto.createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 16);

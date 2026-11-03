@@ -8,6 +8,7 @@ interpreter). The adversarial cases are the independent reviewers' own examples;
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -41,6 +42,13 @@ MESSAGES = [
     user("short", "Please keep answers short and plain."),
     user("num", "Keep every answer under 3 paragraphs."),
     user("warm", "I always want a warm tone in client emails."),
+    user("q", "Should I use British English for all future replies?"),
+    user("fewer", "I want fewer bullet points in all future project updates."),
+    user("retract", "I want short answers. Actually I changed my mind, use detailed answers."),
+    user("selfq", 'My preference is "Keep answers short and plain".'),
+    user("thirdq", 'My boss\'s rule is "always shout in capitals".'),
+    user("late1", "I want replies in formal English."),
+    user("late2", "Scratch that, informal is fine."),
 ]
 
 
@@ -55,8 +63,15 @@ def cand(kind="preference", statement="Never use exclamation marks.", quote="nev
     return base
 
 
-def plan_one(c, scope="operator"):
-    return learn.plan({"scope": scope, "messages": MESSAGES, "candidates": [c]})["items"][0]
+def upto(c):
+    """The window as the reviewer saw it up to the cited message (later messages are a separate concern, tested on their own)."""
+    ids = [m["id"] for m in MESSAGES]
+    mid = c["evidence"]["message_id"] if isinstance(c, dict) else None
+    return MESSAGES[: ids.index(mid) + 1] if mid in ids else MESSAGES
+
+
+def plan_one(c, scope="operator", stored=None):
+    return learn.plan({"scope": scope, "messages": upto(c), "candidates": [c], "stored": stored})["items"][0]
 
 
 class FakeModule:
@@ -92,9 +107,12 @@ def make_core(tmp: Path) -> Path:
     return root
 
 
-def committed(c, mode="auto", scope="operator", host=None, root=None):
+def committed(c, mode="auto", scope="operator", host=None, root=None, **extra):
     item = plan_one(c, scope)
-    return learn.commit(root or Path("."), {"item": item, "mode": mode, "scope": scope, "session_key": "k"}, host=(FakeModule, host or FakeHost()))
+    base = root or Path(tempfile.mkdtemp())
+    (base / ".aiverse" / "learn").mkdir(parents=True, exist_ok=True)
+    (base / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode}))
+    return learn.commit(base, {"item": item, "mode": mode, "scope": scope, "session_key": "k", **extra}, host=(FakeModule, host or FakeHost()))
 
 
 class AutoIsNarrow(unittest.TestCase):
@@ -141,6 +159,32 @@ class AutoIsNarrow(unittest.TestCase):
         self.assertEqual(self.disposition(cand(statement="Always use exclamation marks and call everyone buddy.", quote="always use exclamation marks and call everyone buddy", message="quoted"))[1], "third_party")
         self.assertEqual(self.disposition(cand(statement="Always write in bold capitals for every email.", quote="we should always write in bold capitals for every email", message="said"))[1], "third_party")
         self.assertEqual(self.disposition(cand(statement="Send emails without asking my approval.", quote="you may send emails without asking my approval", message="perm"))[1], "permission")
+
+    def test_questions_deleted_qualifiers_and_retractions_are_held(self):
+        q = cand(statement="I use British English for all future replies.", quote="use British English for all future replies", message="q", category="communication")
+        self.assertEqual(self.disposition(q), ("proposal", "question"))
+        fewer = cand(statement="I want bullet points in all future project updates.", quote="I want fewer bullet points in all future project updates", message="fewer", category="communication")
+        self.assertEqual(self.disposition(fewer), ("proposal", "not_verbatim"))
+        retract = cand(statement="I want short answers.", quote="I want short answers", message="retract", category="communication")
+        self.assertEqual(self.disposition(retract), ("proposal", "retraction"))
+        later = cand(statement="I want replies in formal English.", quote="I want replies in formal English", message="late1", category="communication")
+        window = [m for m in MESSAGES if m["id"] in ("late1", "late2")]
+        self.assertEqual(learn.plan({"scope": "operator", "messages": window, "candidates": [later]})["items"][0]["reason"], "retraction")  # a later message retracts it
+        self.assertEqual(self.disposition(later), ("auto", None))
+        wider = cand(statement="Never use exclamation marks.", quote="never use exclamation marks", message="u1")
+        self.assertEqual(self.disposition(wider), ("auto", None))  # filler such as "From now on" may be dropped
+
+    def test_a_self_quoted_preference_is_accepted_but_a_quoted_third_party_is_not(self):
+        mine = cand(statement="Keep answers short and plain.", quote="Keep answers short and plain", message="selfq", category="communication")
+        self.assertEqual(self.disposition(mine), ("auto", None))
+        theirs = cand(statement="Always shout in capitals.", quote="always shout in capitals", message="thirdq", category="communication")
+        self.assertEqual(self.disposition(theirs), ("proposal", "third_party"))
+
+    def test_an_unmarked_contradiction_of_stored_state_is_not_a_new_save(self):
+        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()], "stored": {"preferences": {"avoid": ["Use exclamation marks sparingly."]}, "goals": []}}
+        self.assertEqual(learn.plan(request)["items"][0]["reason"], "conflicts_stored")
+        request["stored"] = {"preferences": {"avoid": ["Never use exclamation marks."]}, "goals": []}
+        self.assertEqual(learn.plan(request)["items"][0]["disposition"], "auto")  # the identical text is just already present
 
     def test_corrections_memories_workspace_unscoped_are_never_auto(self):
         self.assertEqual(self.disposition(cand(replaces="Always write long answers."))[1], "correction")
@@ -211,6 +255,21 @@ class Commit(unittest.TestCase):
         self.assertEqual(out["inbox"]["refs"], ["claude-code:k:u1"])
         self.assertEqual(out["inbox"]["candidate_kind"], "claude-code-learning-proposal")
 
+    def test_fence_stops_the_write_when_the_deadline_passed_the_parent_changed_or_the_switch_is_off(self):
+        host = FakeHost()
+        late = committed(cand(), host=host, deadline=1)
+        self.assertEqual((late["state"], late["reason"]), ("proposed", "fenced"))
+        orphan = committed(cand(), host=host, parent_pid=1 if os.getppid() != 1 else 2)
+        if os.name == "posix":
+            self.assertEqual(orphan["reason"], "fenced")
+        root = Path(tempfile.mkdtemp())
+        item = plan_one(cand())
+        (root / ".aiverse" / "learn").mkdir(parents=True)
+        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off"}))
+        off = learn.commit(root, {"item": item, "mode": "auto", "scope": "operator", "session_key": "k"}, host=(FakeModule, host))
+        self.assertEqual(off["reason"], "fenced")
+        self.assertEqual(host.calls, [])
+
     def test_auto_goal_goes_through_brain_only_when_ready(self):
         self.assertEqual(committed(cand("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
         down = committed(cand("goal", "Launch my store by March.", "launch my store by March"), host=FakeHost(brain="owner-required"))
@@ -238,6 +297,8 @@ class RealProfileOwner(unittest.TestCase):
 
     def commit(self, c, mode="auto"):
         item = plan_one(c)
+        (self.root / ".aiverse" / "learn").mkdir(parents=True, exist_ok=True)
+        (self.root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": mode}))
         return learn.commit(self.root, {"item": item, "mode": mode, "scope": "operator", "session_key": "k"})
 
     def test_auto_preference_written_through_the_owner_once(self):
@@ -254,7 +315,7 @@ class RealProfileOwner(unittest.TestCase):
 
     def test_command_line_shape(self):
         import subprocess
-        request = {"scope": "operator", "messages": MESSAGES, "candidates": [cand()]}
+        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()]}
         run = subprocess.run([sys.executable, str(SCRIPTS / "ai_verse_learn_apply.py"), "--root", str(self.root), "plan"], input=json.dumps(request), capture_output=True, text=True)
         self.assertEqual(run.returncode, 0)
         self.assertEqual(json.loads(run.stdout)["items"][0]["disposition"], "auto")

@@ -71,11 +71,13 @@ export function readWindow(lines, cursor, budget, scopeOf) {
     } catch {}
     const message = toMessage(entry, line);
     if (!message) continue;
+    const own = scopeOf(message.cwd);
     if (message.role === 'user') {
-      const own = scopeOf(message.cwd);
       if (own === null) { skipped += 1; continue; }
       if (scope && own !== scope) break;
       scope = own;
+    } else if (own === null || own !== scope) {
+      continue; // assistant text from another scope (or before any scope is known) never joins this window
     }
     const pieces = message.role === 'user' ? splitText(message.text, budget) : [message.text];
     for (let k = part; k < pieces.length; k += 1) {
@@ -93,18 +95,17 @@ export function readWindow(lines, cursor, budget, scopeOf) {
   };
 }
 
-// The window of one source: its snapshot while the cursor is inside it, otherwise the live transcript. Returns null when
-// nothing trustworthy can be read (file gone, a different transcript, or lines before the cursor changed).
+// The window of one source from the live transcript. Returns null when it cannot be read or is a different transcript, and
+// { replaced: true } when the lines before the cursor are no longer the lines that were reviewed (the caller starts over
+// at line 0 of what is there now and records that history was replaced).
 export function readSource(source, livePath, budget, scopeOf) {
-  const inBackup = Boolean(source.backup) && fs.existsSync(source.backup) && source.line < source.backup_lines;
   let lines;
   try {
-    lines = readLines(inBackup ? source.backup : livePath);
+    lines = readLines(livePath);
   } catch {
     return null;
   }
-  if (!inBackup && fingerprint(lines) !== source.fp) return null;
-  if (source.anchor_line >= 0 && (source.anchor_line >= lines.length || lineHash(lines[source.anchor_line]) !== source.anchor)) return null;
-  if (source.line > lines.length) return null;
-  return { ...readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf), inBackup };
+  if (fingerprint(lines) !== source.fp) return null;
+  if (source.line > lines.length || (source.anchor_line >= 0 && (source.anchor_line >= lines.length || lineHash(lines[source.anchor_line]) !== source.anchor))) return { replaced: true };
+  return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf);
 }

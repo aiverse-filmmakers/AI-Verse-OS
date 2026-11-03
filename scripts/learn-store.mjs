@@ -2,7 +2,7 @@
 // worker only. Hooks never open it; they drop one file per event into runtime/learn/spool and the worker ingests those.
 //
 //   sessions  one row per chat: debounce, backoff, wake time
-//   sources   one row per transcript generation (fingerprint): cursor (line, part), anchor, snapshot
+//   sources   one row per transcript generation (fingerprint): cursor (line, part) and anchor. No transcript copy is ever kept
 //   claims    named leases with an owner token: 'worker' and 'session:<key>'. A lease past its expiry can be taken over
 //             by exactly one contender (a single conditional statement), and its former holder fails every ownership check
 //   reviews   the screened plan for one reviewed range, written before any owner is called and updated per item
@@ -18,7 +18,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0,
   due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
-  anchor TEXT DEFAULT '', backup TEXT, backup_lines INTEGER DEFAULT 0, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
+  anchor TEXT DEFAULT '', closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
 CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
@@ -32,7 +32,7 @@ export async function openStore(root) {
   const { base, db: file } = learnPaths(root);
   fs.mkdirSync(base, { recursive: true });
   const db = new DatabaseSync(file);
-  db.exec('PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+  db.exec('PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
   db.exec(SCHEMA);
   return db;
 }
@@ -66,8 +66,28 @@ export const release = (db, name, owner) => db.prepare('DELETE FROM claims WHERE
 
 // -- ingest: spool files become rows, once ---------------------------------------------------------------------
 
+const DAY = 24 * 3600 * 1000;
+
+// Event files that nothing processed for 30 days, abandoned temp files after a day, quarantined bad events after 14 days.
+function prune(spool, now) {
+  const sweep = (dir, test, maxAge) => {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { return; }
+    for (const n of names) {
+      try {
+        const file = path.join(dir, n);
+        if (test(n) && now - fs.statSync(file).mtimeMs > maxAge) fs.rmSync(file, { force: true });
+      } catch {}
+    }
+  };
+  sweep(spool, (n) => n.endsWith('.tmp'), DAY);
+  sweep(spool, (n) => n.endsWith('.json'), 30 * DAY);
+  sweep(path.join(spool, 'bad'), () => true, 14 * DAY);
+}
+
 export function ingest(db, root, now = Date.now()) {
   const { spool } = learnPaths(root);
+  prune(spool, now);
   let names = [];
   try {
     names = fs.readdirSync(spool).filter((n) => n.endsWith('.json')).sort();
@@ -109,18 +129,6 @@ function applyEvent(db, event, now) {
   db.prepare(`INSERT INTO sessions(key, session_id, transcript, reason, turns, due_at) VALUES(?, ?, ?, ?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET transcript = excluded.transcript, reason = excluded.reason, turns = excluded.turns, due_at = excluded.due_at`)
     .run(key, event.session_id, event.transcript_path, reason, turns, due);
-  if (event.snapshot) registerSnapshot(db, key, event.snapshot);
-  if (event.snapshot_code) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, now, event.snapshot_code);
-}
-
-// A snapshot belongs to the transcript generation whose first line it carries. A newer snapshot of the same generation
-// replaces the older one (it contains it), so a source holds exactly one.
-function registerSnapshot(db, key, snap) {
-  const old = db.prepare('SELECT backup FROM sources WHERE session = ? AND fp = ?').get(key, snap.fp)?.backup;
-  if (old && old !== snap.path) fs.rmSync(old, { force: true });
-  db.prepare(`INSERT INTO sources(session, fp, backup, backup_lines) VALUES(?, ?, ?, ?)
-    ON CONFLICT(session, fp) DO UPDATE SET backup = excluded.backup, backup_lines = excluded.backup_lines, closed = 0`)
-    .run(key, snap.fp, snap.path, snap.lines);
 }
 
 // -- rate ledger ---------------------------------------------------------------------------------------------

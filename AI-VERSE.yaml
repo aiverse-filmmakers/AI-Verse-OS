@@ -21,6 +21,7 @@ paths:
   automatic_learning:
     config: .aiverse/learn/config.json
     hook: scripts/learn-hook.mjs
+    launcher: scripts/learn-launch.mjs
     worker: scripts/learn-worker.mjs
     store: scripts/learn-store.mjs
     modes: [off, propose, auto]

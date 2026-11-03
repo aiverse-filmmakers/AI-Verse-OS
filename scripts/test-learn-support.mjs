@@ -115,9 +115,9 @@ export const hookEventAsync = (root, event, payload) => new Promise((resolve) =>
 
 // Runs the real worker as its own process (waits). `env` can inject a crash point.
 export const workerProcess = (root, env = {}, args = ['--drain']) =>
-  spawnSync(process.execPath, [...NODE, path.join(root, 'scripts', 'learn-worker.mjs'), '--root', root, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+  spawnSync(process.execPath, [path.join(root, 'scripts', 'learn-launch.mjs'), '--root', root, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
 export const workerAsync = (root, env = {}, args = ['--drain']) => new Promise((resolve) => {
-  const child = spawn(process.execPath, [...NODE, path.join(root, 'scripts', 'learn-worker.mjs'), '--root', root, ...args], { env: { ...process.env, ...env }, stdio: 'ignore' });
+  const child = spawn(process.execPath, [path.join(root, 'scripts', 'learn-launch.mjs'), '--root', root, ...args], { env: { ...process.env, ...env }, stdio: 'ignore' });
   child.on('exit', (code, signal) => resolve({ code, signal }));
 });
 

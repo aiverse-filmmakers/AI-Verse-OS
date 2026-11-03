@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Claude Code hook entry for automatic learning: stop | precompact | end | start.
-// It writes one durable event file (and, before a compaction, a copy of the transcript), starts the detached worker, prints
+// It writes one durable event file (a pointer to the transcript, never a copy of it), starts the detached worker, prints
 // nothing, never blocks the chat and always exits 0. It never opens the database, so there is no lock to lose an event to.
 // Mode off (or no config) does nothing at all.
 
@@ -9,8 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, learnPaths, loadConfig, sessionKey, sha, spoolEvent } from './learn-common.mjs';
-import { fingerprint, readLines } from './learn-window.mjs';
+import { isEnabled, isMain, loadConfig, sessionKey, spoolEvent } from './learn-common.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const MAX_STDIN = 1024 * 1024;
@@ -32,30 +31,12 @@ async function readPayload() {
 }
 
 export function startWorker(root) {
-  // --disable-warning keeps node:sqlite's experimental notice out of the worker's (ignored) stderr on Node 22.
-  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', path.join(SCRIPTS, 'learn-worker.mjs'), '--root', root], {
+  // The launcher runs on any Node, checks the version itself and leaves a diagnostic when it cannot start the worker.
+  const child = spawn(process.execPath, [path.join(SCRIPTS, 'learn-launch.mjs'), '--root', root], {
     detached: true, stdio: 'ignore', windowsHide: true, env: process.env,
   });
   child.on('error', () => {});
   child.unref();
-}
-
-// A copy of the whole transcript, taken before compaction can rewrite it. Bigger than the reader's limit: no copy, and the
-// event says so with a code the worker records.
-function snapshot(root, key, transcript, now) {
-  try {
-    const lines = readLines(transcript);
-    const fp = fingerprint(lines);
-    if (!fp) return {};
-    const { snapshots } = learnPaths(root);
-    fs.mkdirSync(snapshots, { recursive: true });
-    const file = path.join(snapshots, `${key}-${now}-${sha(transcript + now, 8)}.jsonl`);
-    fs.writeFileSync(`${file}.tmp`, `${lines.join('\n')}\n`);
-    fs.renameSync(`${file}.tmp`, file);
-    return { snapshot: { fp, path: file, lines: lines.length } };
-  } catch {
-    return { snapshot_code: 'snapshot_failed' };
-  }
 }
 
 export function handleEvent(root, event, payload, now = Date.now(), start = startWorker) {
@@ -74,7 +55,6 @@ export function handleEvent(root, event, payload, now = Date.now(), start = star
   spoolEvent(root, {
     v: 1, key, session_id: sessionId, transcript_path: transcript, cwd: typeof cwd === 'string' ? cwd : null, reason, at: now,
     config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns },
-    ...(event === 'precompact' ? snapshot(root, key, transcript, now) : {}),
   });
   start(root);
   return true;

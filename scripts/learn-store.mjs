@@ -1,89 +1,57 @@
-// The one durable primitive of automatic learning: a small SQLite database (WAL) at runtime/learn/learn.db, used by the
-// worker only. Hooks never open it; they drop one file per event into runtime/learn/spool and the worker ingests those.
+// The one durable store of automatic learning: a small SQLite database (WAL, synchronous=FULL) at runtime/learn/learn.db.
 //
-//   sessions  one row per chat: debounce, backoff, wake time
-//   sources   one row per transcript generation (fingerprint): cursor (line, part) and anchor. No transcript copy is ever kept
-//   claims    named leases with an owner token: 'worker' and 'session:<key>'. A lease past its expiry can be taken over
-//             by exactly one contender (a single conditional statement), and its former holder fails every ownership check
-//   reviews   the screened plan for one reviewed range, written before any owner is called and updated per item
-//   receipts, ledger, failures, seen   bookkeeping, holding only codes, counts and cited quotes already screened for secrets
+//   occurrences  the journal: one row per original human message, unique by (harness, session, uuid), with its authoritative
+//                scope binding and screened text. Text is removed only after it was reviewed; nothing unfinished is ever pruned
+//   items        what the reviewer found: the screened plan, one row per candidate, written BEFORE any owner is called, with the
+//                exact quote, its place in the message, the date, the scope, and later the owner's result
+//   sessions     one row per chat: wake time and backoff;  captures  how far the transcript was read
+//   secrets      salted hashes of credential values seen anywhere, so the value is dropped wherever it reappears
+//   claims       the single worker lease;  ledger  review accounting;  counters / failures  codes and counts only
 //
-// node:sqlite is built into Node 22.13+. On an older Node the store is unavailable and events simply wait in the spool.
+// Both the hook and the worker open it (the hook only when Node has node:sqlite; otherwise it leaves an envelope, see
+// learn-common). node:sqlite is built into Node 22.13+. There are no migrations: nothing shipped before this schema.
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
-import path from 'node:path';
-import { learnPaths, pruneRuntime } from './learn-common.mjs';
+import { learnPaths, removeEnvelope, validEnvelope } from './learn-common.mjs';
+import { labelled, secretValues, tokensOf } from './learn-capture.mjs';
 
+const VERSION = 2;
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0,
-  due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
-CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
-  anchor TEXT DEFAULT '', path TEXT, ord INTEGER, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
-CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path));
-CREATE TABLE IF NOT EXISTS counters(session TEXT, code TEXT, n INTEGER DEFAULT 0, PRIMARY KEY(session, code));
-CREATE TABLE IF NOT EXISTS seen_records(session TEXT, uuid TEXT, fp TEXT, PRIMARY KEY(session, uuid));
+  due_at INTEGER, not_before INTEGER DEFAULT 0, blocked TEXT);
+CREATE TABLE IF NOT EXISTS captures(session TEXT PRIMARY KEY, path TEXT, off INTEGER, anchor TEXT);
+CREATE TABLE IF NOT EXISTS occurrences(id INTEGER PRIMARY KEY AUTOINCREMENT, harness TEXT NOT NULL, session TEXT NOT NULL, uuid TEXT NOT NULL,
+  seq INTEGER, ts TEXT, scope TEXT NOT NULL, text TEXT, size INTEGER DEFAULT 0, done_to INTEGER DEFAULT 0, state TEXT DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0, not_before INTEGER DEFAULT 0, at INTEGER, UNIQUE(harness, session, uuid));
+CREATE INDEX IF NOT EXISTS occurrences_open ON occurrences(session, state, id);
+CREATE TABLE IF NOT EXISTS secrets(h TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS items(id INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT, scope TEXT, key TEXT UNIQUE, state TEXT,
+  not_before INTEGER DEFAULT 0, body TEXT, result TEXT, at INTEGER, done_at INTEGER);
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
-CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
-CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
 CREATE TABLE IF NOT EXISTS ledger(day TEXT, session TEXT, n INTEGER DEFAULT 0, cost REAL DEFAULT 0, last_at INTEGER DEFAULT 0, PRIMARY KEY(day, session));
+CREATE TABLE IF NOT EXISTS counters(session TEXT, code TEXT, n INTEGER DEFAULT 0, PRIMARY KEY(session, code));
 CREATE TABLE IF NOT EXISTS failures(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, code TEXT);
-CREATE TABLE IF NOT EXISTS seen(name TEXT PRIMARY KEY, at INTEGER);
 `;
 
-// Databases made by earlier rounds. Everything is decided from PRAGMA table_info (columns and primary key), so it is safe on
-// every open and on a database that is already current. A table whose key or columns differ is rebuilt inside one transaction,
-// copying every row with a plain INSERT: a conflict is an error that rolls the whole rebuild back, never silently dropped rows.
-// Sources adopted from a handoff before generation order existed: take the place of the generation they came from (named in their
-// own fingerprint). When that generation cannot be found the order cannot be known, so the source is closed with a diagnostic
-// instead of being reviewed in a guessed order.
-function backfillOrder(db) {
-  for (const row of db.prepare('SELECT rowid AS id, session, fp FROM sources WHERE path IS NOT NULL AND closed = 0').all()) {
-    const origin = /^h:(.+?)(?::\d+)?$/.exec(row.fp)?.[1];
-    const parent = origin && db.prepare('SELECT rowid AS id FROM sources WHERE session = ? AND fp = ? AND path IS NULL').get(row.session, origin);
-    if (parent) db.prepare('UPDATE sources SET ord = ? WHERE rowid = ?').run(parent.id, row.id);
-    else {
-      db.prepare('UPDATE sources SET closed = 1 WHERE rowid = ?').run(row.id);
-      db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(row.session, Date.now(), 'order_unresolved');
-    }
-  }
-}
-
-const HANDOFFS_KEY = ['session', 'path'];
-const HANDOFFS_COLUMNS = ['session', 'fp', 'path', 'head', 'hn'];
-
-function migrate(db) {
-  const info = (table) => db.prepare(`PRAGMA table_info(${table})`).all();
-  const names = (table) => info(table).map((r) => r.name);
-  const key = (table) => info(table).filter((r) => r.pk > 0).sort((a, b) => a.pk - b.pk).map((r) => r.name);
-  if (!names('sources').includes('path')) db.exec('ALTER TABLE sources ADD COLUMN path TEXT');
-  if (!names('sources').includes('ord')) {
-    db.exec('ALTER TABLE sources ADD COLUMN ord INTEGER');
-    backfillOrder(db);
-  }
-  const current = names('handoffs');
-  if (HANDOFFS_COLUMNS.every((c) => current.includes(c)) && key('handoffs').join() === HANDOFFS_KEY.join()) return;
-  const copied = HANDOFFS_COLUMNS.filter((c) => current.includes(c));
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    db.exec('ALTER TABLE handoffs RENAME TO handoffs_old');
-    db.exec('CREATE TABLE handoffs(session TEXT, fp TEXT, path TEXT, head TEXT, hn INTEGER, PRIMARY KEY(session, path))');
-    db.exec(`INSERT INTO handoffs(${copied.join(', ')}) SELECT ${copied.join(', ')} FROM handoffs_old`);
-    db.exec('DROP TABLE handoffs_old');
-    db.exec('COMMIT');
-  } catch (error) {
-    try { db.exec('ROLLBACK'); } catch {}
-    throw error;
-  }
-}
-
-export async function openStore(root) {
+export async function openStore(root, { busyMs = 15000 } = {}) {
   const { DatabaseSync } = await import('node:sqlite'); // throws on a Node without it: callers treat that as 'store_unavailable'
   const { base, db: file } = learnPaths(root);
   fs.mkdirSync(base, { recursive: true });
   const db = new DatabaseSync(file);
-  db.exec('PRAGMA busy_timeout = 15000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;');
+  db.exec(`PRAGMA busy_timeout = ${Math.floor(busyMs)}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA secure_delete = ON;`);
+  if (db.prepare('PRAGMA user_version').get().user_version < VERSION) {
+    // development databases from before this schema held only disposable queue state; nothing shipped, so nothing is converted
+    tx(db, () => {
+      if (db.prepare('PRAGMA user_version').get().user_version >= VERSION) return; // another process finished the reset first
+      for (const old of ['sources', 'handoffs', 'reviews', 'receipts', 'seen_records', 'seen_text', 'seen', 'sessions', 'ledger', 'counters', 'failures', 'claims']) db.exec(`DROP TABLE IF EXISTS ${old}`);
+      db.exec(SCHEMA);
+      db.exec(`PRAGMA user_version = ${VERSION}`);
+    });
+  }
   db.exec(SCHEMA);
-  migrate(db);
+  db.prepare('INSERT OR IGNORE INTO meta(k, v) VALUES(?, ?)').run('salt', crypto.randomBytes(16).toString('hex'));
   return db;
 }
 
@@ -100,13 +68,12 @@ export function tx(db, fn) {
   }
 }
 
-// -- leases -------------------------------------------------------------------------------------------------
+// -- the worker lease (the only claim: one serial worker) -------------------------------------------------------------------
 
 export function acquire(db, name, owner, ttlMs, now = Date.now()) {
-  const done = db.prepare(`INSERT INTO claims(name, owner, lease_until) VALUES(?, ?, ?)
+  return db.prepare(`INSERT INTO claims(name, owner, lease_until) VALUES(?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET owner = excluded.owner, lease_until = excluded.lease_until
-    WHERE claims.lease_until < ? OR claims.owner = excluded.owner`).run(name, owner, now + ttlMs, now);
-  return done.changes === 1;
+    WHERE claims.lease_until < ? OR claims.owner = excluded.owner`).run(name, owner, now + ttlMs, now).changes === 1;
 }
 export const renew = (db, name, owner, ttlMs, now = Date.now()) =>
   db.prepare('UPDATE claims SET lease_until = ? WHERE name = ? AND owner = ? AND lease_until >= ?').run(now + ttlMs, name, owner, now).changes === 1;
@@ -114,83 +81,111 @@ export const holds = (db, name, owner, now = Date.now()) =>
   Boolean(db.prepare('SELECT 1 FROM claims WHERE name = ? AND owner = ? AND lease_until >= ?').get(name, owner, now));
 export const release = (db, name, owner) => db.prepare('DELETE FROM claims WHERE name = ? AND owner = ?').run(name, owner);
 
-// -- ingest: spool files become rows, once ---------------------------------------------------------------------
+// -- capture: records become occurrences, once --------------------------------------------------------------------------
 
-export function ingest(db, root, now = Date.now()) {
-  const { spool } = learnPaths(root);
-  pruneRuntime(root, now);
-  // a handoff of a source that is closed or gone has nothing left to give
-  for (const h of db.prepare('SELECT h.session, h.fp, h.path FROM handoffs h LEFT JOIN sources s ON s.session = h.session AND s.fp = h.fp WHERE s.closed = 1 OR s.fp IS NULL').all()) {
-    fs.rmSync(h.path, { force: true });
-    db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(h.session, h.fp);
-  }
-  let names = [];
-  try {
-    names = fs.readdirSync(spool).filter((n) => n.endsWith('.json')).sort();
-  } catch {
-    return 0;
-  }
-  let count = 0;
-  for (const name of names) {
-    const file = path.join(spool, name);
-    let event = null;
-    try {
-      event = JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch {}
-    if (!event || typeof event.session_id !== 'string') {
-      fs.mkdirSync(path.join(spool, 'bad'), { recursive: true });
-      fs.renameSync(file, path.join(spool, 'bad', name));
-      continue;
+const hasher = (db) => {
+  const salt = db.prepare("SELECT v FROM meta WHERE k = 'salt'").get().v;
+  return (value) => crypto.createHash('sha256').update(salt + value).digest('hex').slice(0, 32);
+};
+const mentions = (text, hashes, h) => [...tokensOf(text)].some((t) => hashes.has(h(t)));
+
+// batch: { key, session_id, transcript_path, reason, at, config: { idle_seconds, max_pending_turns }, records: [{ uuid, ts, seq, scope,
+// text }], offset?: { path, end, anchor } }. One transaction: either the evidence and the wake time are both recorded, or neither.
+export function ingestBatch(db, batch, now = Date.now()) {
+  const h = hasher(db);
+  let discovered = false;
+  const result = tx(db, () => {
+    const hashes = new Set(db.prepare('SELECT h FROM secrets').all().map((r) => r.h));
+    const fresh = [];
+    const remember = (value) => { const k = h(value); if (!hashes.has(k)) { hashes.add(k); fresh.push(k); } };
+    // Contextual screening across messages: every credential value named anywhere in this batch is known before any message is kept.
+    for (const r of batch.records) if (labelled(r.text)) for (const v of secretValues(r.text)) remember(v);
+    const insert = db.prepare(`INSERT OR IGNORE INTO occurrences(harness, session, uuid, seq, ts, scope, text, size, state, at)
+      VALUES('claude-code', ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    let kept = 0;
+    for (const r of batch.records) {
+      const secret = labelled(r.text) || mentions(r.text, hashes, h);
+      const added = insert.run(batch.key, r.uuid, r.seq, r.ts, r.scope, secret ? null : r.text, secret ? 0 : r.text.length, secret ? 'excluded' : 'pending', now).changes;
+      if (added && !secret) kept += 1;
     }
-    tx(db, () => {
-      if (db.prepare('INSERT OR IGNORE INTO seen(name, at) VALUES(?, ?)').run(name, now).changes === 0) return;
-      applyEvent(db, event, now);
-    });
-    fs.rmSync(file, { force: true }); // a crash before this line only means the file is seen again and ignored
+    if (fresh.length) {
+      for (const k of fresh) db.prepare('INSERT OR IGNORE INTO secrets(h) VALUES(?)').run(k);
+      rescreen(db, hashes, h);
+    }
+    if (batch.offset) db.prepare('INSERT OR REPLACE INTO captures(session, path, off, anchor) VALUES(?, ?, ?, ?)').run(batch.key, batch.offset.path, batch.offset.end, batch.offset.anchor);
+    wake(db, batch, now);
+    discovered = fresh.length > 0;
+    return { kept };
+  });
+  // A credential found late: the rows that held it were blanked (secure_delete zeroes them); rewrite the log so no old copy lingers.
+  if (discovered) try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch {}
+  return result;
+}
+
+// A newly learned credential also removes what earlier, still unreviewed evidence and unfiled candidates said about it.
+function rescreen(db, hashes, h) {
+  for (const row of db.prepare("SELECT id, text FROM occurrences WHERE state = 'pending' AND text IS NOT NULL").all()) {
+    if (mentions(row.text, hashes, h)) db.prepare("UPDATE occurrences SET text = NULL, size = 0, state = 'excluded' WHERE id = ?").run(row.id);
+  }
+  for (const row of db.prepare("SELECT id, body FROM items WHERE state IN ('pending', 'needs_scope')").all()) {
+    const item = JSON.parse(row.body);
+    if (mentions(`${item.statement} ${item.quote}`, hashes, h)) db.prepare("UPDATE items SET state = 'excluded', body = '{}' WHERE id = ?").run(row.id);
+  }
+}
+
+export const candidateIsSecret = (db, text) => {
+  const h = hasher(db);
+  const hashes = new Set(db.prepare('SELECT h FROM secrets').all().map((r) => r.h));
+  return labelled(text) || mentions(text, hashes, h);
+};
+
+// The debounce: an idle stop waits for quiet, a burst of turns or a compaction or the end of a chat is due at once.
+function wake(db, batch, now) {
+  const previous = db.prepare('SELECT * FROM sessions WHERE key = ?').get(batch.key);
+  const cfg = batch.config;
+  const turns = (previous?.turns ?? 0) + (batch.reason === 'idle' ? 1 : 0);
+  const pendingReason = previous?.due_at != null ? previous.reason : null;
+  const urgent = pendingReason && !['idle', 'n_turns'].includes(pendingReason) && batch.reason === 'idle';
+  const reason = urgent ? pendingReason : batch.reason === 'idle' && turns >= cfg.max_pending_turns ? 'n_turns' : batch.reason;
+  const due = reason === 'idle' ? (batch.at ?? now) + cfg.idle_seconds * 1000 : urgent ? previous.due_at : (batch.at ?? now);
+  db.prepare(`INSERT INTO sessions(key, session_id, transcript, reason, turns, due_at) VALUES(?, ?, ?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET transcript = excluded.transcript, reason = excluded.reason, turns = excluded.turns, due_at = excluded.due_at`)
+    .run(batch.key, batch.session_id, batch.transcript_path, reason, turns, due);
+}
+
+// Envelopes left by a hook that could not reach the database. A malformed one, a foreign one and an altered one are skipped
+// and left alone; they never block the valid ones.
+export function ingestEnvelopes(db, root, list, now = Date.now()) {
+  let count = 0;
+  for (const { file, value } of list) {
+    if (!validEnvelope(value)) continue;
+    ingestBatch(db, value, now);
+    removeEnvelope(root, file);
     count += 1;
   }
-  db.prepare('DELETE FROM seen WHERE at < ?').run(now - 7 * 24 * 3600 * 1000);
   return count;
 }
 
-function applyEvent(db, event, now) {
-  const key = event.key;
-  const previous = db.prepare('SELECT * FROM sessions WHERE key = ?').get(key);
-  const cfg = event.config;
-  const turns = (previous?.turns ?? 0) + (event.reason === 'idle' ? 1 : 0);
-  const pendingReason = previous?.due_at != null ? previous.reason : null;
-  const urgent = pendingReason && !['idle', 'n_turns'].includes(pendingReason) && event.reason === 'idle';
-  const reason = urgent ? pendingReason : event.reason === 'idle' && turns >= cfg.max_pending_turns ? 'n_turns' : event.reason;
-  const due = reason === 'idle' ? (event.at ?? now) + cfg.idle_seconds * 1000 : urgent ? previous.due_at : (event.at ?? now);
-  db.prepare(`INSERT INTO sessions(key, session_id, transcript, reason, turns, due_at) VALUES(?, ?, ?, ?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET transcript = excluded.transcript, reason = excluded.reason, turns = excluded.turns, due_at = excluded.due_at`)
-    .run(key, event.session_id, event.transcript_path, reason, turns, due);
-  if (event.handoff) {
-    // The generation this handoff belongs to must exist as a source even if the worker never saw it live.
-    db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(key, event.handoff.fp);
-    // Every handoff of a generation is kept (a later one may not contain what an earlier, still unread one did).
-    db.prepare('INSERT OR IGNORE INTO handoffs(session, fp, path, head, hn) VALUES(?, ?, ?, ?, ?)').run(key, event.handoff.fp, event.handoff.path, event.handoff.head, event.handoff.hn);
-  }
-  if (event.handoff_failed) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, now, 'handoff_failed');
-}
-
-// -- rate ledger ---------------------------------------------------------------------------------------------
+// -- review accounting: reserved BEFORE the reviewer is launched, so a crash can never spend uncounted allowance ---------------
 
 export const dayOf = (now) => new Date(now).toISOString().slice(0, 10);
 
-export function allowance(db, key, config, now, ignoreGap) {
-  const day = dayOf(now);
-  const mine = db.prepare('SELECT n, last_at FROM ledger WHERE day = ? AND session = ?').get(day, key);
-  const total = db.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM ledger WHERE day = ?').get(day).n;
-  if ((mine?.n ?? 0) >= config.max_reviews_per_session_per_day || total >= config.max_reviews_per_day) {
-    return { ok: false, not_before: Date.parse(`${day}T00:00:00Z`) + 24 * 3600 * 1000 };
-  }
-  const last = db.prepare('SELECT MAX(last_at) AS t FROM ledger WHERE session = ?').get(key).t ?? 0;
-  const gapEnds = last + config.min_gap_seconds * 1000;
-  return !ignoreGap && gapEnds > now ? { ok: false, not_before: gapEnds } : { ok: true };
+export function reserveReview(db, key, config, now, ignoreGap, allowed = () => true) {
+  return tx(db, () => {
+    if (!allowed()) return { ok: false, off: true }; // learning was switched off: not even the accounting is written
+    const day = dayOf(now);
+    const mine = db.prepare('SELECT n FROM ledger WHERE day = ? AND session = ?').get(day, key);
+    const total = db.prepare('SELECT COALESCE(SUM(n), 0) AS n FROM ledger WHERE day = ?').get(day).n;
+    if ((mine?.n ?? 0) >= config.max_reviews_per_session_per_day || total >= config.max_reviews_per_day) {
+      return { ok: false, not_before: Date.parse(`${day}T00:00:00Z`) + 24 * 3600 * 1000 };
+    }
+    const last = db.prepare('SELECT MAX(last_at) AS t FROM ledger WHERE session = ?').get(key).t ?? 0;
+    if (!ignoreGap && last + config.min_gap_seconds * 1000 > now) return { ok: false, not_before: last + config.min_gap_seconds * 1000 };
+    db.prepare(`INSERT INTO ledger(day, session, n, cost, last_at) VALUES(?, ?, 1, ?, ?)
+      ON CONFLICT(day, session) DO UPDATE SET n = n + 1, cost = cost + excluded.cost, last_at = excluded.last_at`).run(day, key, config.max_budget_usd, now);
+    return { ok: true, day, reserved: config.max_budget_usd };
+  });
 }
 
-export function recordReview(db, key, cost, now) {
-  db.prepare(`INSERT INTO ledger(day, session, n, cost, last_at) VALUES(?, ?, 1, ?, ?)
-    ON CONFLICT(day, session) DO UPDATE SET n = n + 1, cost = cost + excluded.cost, last_at = excluded.last_at`).run(dayOf(now), key, cost || 0, now);
-}
+export const settleReview = (db, key, reservation, actual) =>
+  db.prepare('UPDATE ledger SET cost = cost - ? + ? WHERE day = ? AND session = ?').run(reservation.reserved, actual, reservation.day, key);

@@ -9,29 +9,36 @@ import { DatabaseSync } from 'node:sqlite';
 export const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(SCRIPTS, '..');
 export const PYTHON = process.platform === 'win32' ? 'python' : 'python3';
-export const NODE = ['--disable-warning=ExperimentalWarning'];
 
-// The fake reviewer: logs what it was given, then answers from FAKE_REVIEW (or FAKE_REVIEW.<scope>).
+// The fake reviewer: logs what it was given (argv, a few environment names, the prompt), then answers from FAKE_REVIEW
+// (or FAKE_REVIEW.<scope>); in `facts` mode it reports every "FACT<n>" sentence it is shown, six at a time.
 const FAKE_CLAUDE = `
 import fs from 'node:fs';
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
-fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), guard: process.env.AIVERSE_LEARN_REVIEW, prompt: input }) + '\\n');
+const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(ANTHROPIC_|CLAUDE_CODE_USE_|AIVERSE_LEARN_REVIEW)/.test(k)));
+fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ argv: process.argv.slice(2), env, prompt: input }) + '\\n');
 const mode = process.env.FAKE_MODE || 'ok';
 if (mode === 'quota') { process.stderr.write('Claude usage limit reached'); process.exit(1); }
+if (mode === 'failonce' && fs.readFileSync(process.env.FAKE_LOG, 'utf8').trim().split('\\n').length === 1) { process.stderr.write('boom'); process.exit(1); }
+if (mode === 'steal') { const { DatabaseSync } = await import('node:sqlite'); const d = new DatabaseSync(process.env.FAKE_DB); d.exec("UPDATE claims SET owner = 'thief'"); d.close(); }
 if (mode === 'fail') { process.stderr.write('boom SECRET-IN-STDERR'); process.exit(1); }
 if (mode === 'slow') await new Promise((r) => setTimeout(r, 1500));
 if (mode === 'switchoff') fs.writeFileSync(process.env.FAKE_CONFIG, JSON.stringify({ mode: 'off' }));
-if (mode === 'steal') {
-  const { DatabaseSync } = await import('node:sqlite');
-  const db = new DatabaseSync(process.env.FAKE_DB);
-  db.exec("UPDATE claims SET owner = 'thief' WHERE name LIKE 'session:%'");
-  db.close();
-}
 const scope = (input.match(/Conversation scope: (\\S+)/) || [])[1] || '';
-const scoped = process.env.FAKE_REVIEW + '.' + scope.replace(':', '_');
-const file = fs.existsSync(scoped) ? scoped : process.env.FAKE_REVIEW;
-process.stdout.write(JSON.stringify({ is_error: false, total_cost_usd: 0.0021, structured_output: JSON.parse(fs.readFileSync(file, 'utf8')) }));
+let answer;
+if (mode === 'facts') {
+  const window = input.split('WHAT THE OPERATOR WROTE')[1] || '';
+  const reported = JSON.parse((input.split('ALREADY REPORTED from this text (DATA, do not report these again):')[1] || '[]').split('\\n')[1] || '[]').map((x) => x.toLowerCase());
+  const facts = [];
+  for (const m of window.matchAll(/\\[(o[\\d+]+)\\] operator: ([^\\n]*)/g)) for (const f of m[2].matchAll(/I always want (FACT\\d+) notes\\./g)) facts.push({ id: m[1], text: f[0] });
+  answer = { candidates: facts.filter((f) => !reported.includes(f.text.toLowerCase())).slice(0, 6).map((f) => ({ kind: 'preference', category: 'communication', statement: f.text, scope_hint: 'general', exception: false, tentative: false, confidence: 0.95, replaces: null, evidence: { message_id: f.id, quote: f.text } })), more: facts.filter((f) => !reported.includes(f.text.toLowerCase())).length > 6 };
+} else {
+  const scoped = process.env.FAKE_REVIEW + '.' + scope.replace(':', '_');
+  const parsed = JSON.parse(fs.readFileSync(fs.existsSync(scoped) ? scoped : process.env.FAKE_REVIEW, 'utf8'));
+  answer = { more: false, ...parsed };
+}
+process.stdout.write(JSON.stringify({ is_error: false, total_cost_usd: 0.0021, structured_output: answer }));
 `;
 
 export function core(configOverrides = {}) {
@@ -45,13 +52,12 @@ export function core(configOverrides = {}) {
   const fake = path.join(root, 'fake-claude.mjs');
   fs.writeFileSync(fake, FAKE_CLAUDE);
   fs.mkdirSync(path.join(root, '.aiverse', 'learn'), { recursive: true });
-  const config = { mode: 'auto', python: PYTHON, claude_command: [fake], idle_seconds: 1, allow_unfenced_auto: true, ...configOverrides };
+  const config = { mode: 'propose', python: PYTHON, claude_command: [fake], idle_seconds: 1, ...configOverrides };
   fs.writeFileSync(path.join(root, '.aiverse', 'learn', 'config.json'), JSON.stringify(config));
-  const env = {
+  Object.assign(process.env, {
     FAKE_LOG: path.join(root, 'fake.log'), FAKE_REVIEW: path.join(root, 'review.json'), FAKE_CONFIG: path.join(root, '.aiverse', 'learn', 'config.json'),
-    FAKE_DB: path.join(root, 'runtime', 'learn', 'learn.db'), FAKE_MODE: 'ok',
-  };
-  Object.assign(process.env, env); // in-process runs and children inherit the same fixture
+    FAKE_MODE: 'ok', FAKE_DB: path.join(root, 'runtime', 'learn', 'learn.db'),
+  });
   return root;
 }
 
@@ -65,27 +71,32 @@ export const workspace = (root, id) => {
   fs.writeFileSync(path.join(root, 'workspaces', id, 'WORKSPACE.yaml'), `schema_version: "2.0"\nid: ${id}\nstatus: active\napproval:\n  external_actions: "allow"\n  destructive_actions: "confirm"\n  high_stakes_decisions: "human-review"\n`);
 };
 
-export const userLine = (id, text, cwd) => JSON.stringify({ type: 'user', uuid: id, ...(cwd === null ? {} : { cwd }), message: { role: 'user', content: text } });
+// Records in the shape real transcripts use (see scripts/fixtures): a human prompt has origin.kind "human".
+export const userLine = (id, text, cwd, extra = {}) => JSON.stringify({
+  type: 'user', uuid: id, ...(cwd === null ? {} : { cwd }), timestamp: '2026-01-02T10:00:00.000Z', userType: 'external', origin: { kind: 'human' },
+  message: { role: 'user', content: text }, ...extra,
+});
 export const assistantLine = (id, text, cwd) => JSON.stringify({ type: 'assistant', uuid: id, ...(cwd === null ? {} : { cwd }), message: { role: 'assistant', content: [{ type: 'text', text }] } });
 export const writeTranscript = (file, lines) => fs.writeFileSync(file, `${lines.join('\n')}\n`);
 export const appendTranscript = (file, lines) => fs.appendFileSync(file, `${lines.join('\n')}\n`);
 
-export const review = (candidates, suffix = '') => fs.writeFileSync(process.env.FAKE_REVIEW + suffix, JSON.stringify({ candidates }));
-export const candidate = (kind, statement, quote, message = 'u1', extra = {}) => ({
-  kind, statement, scope_hint: 'global', exception: false, tentative: false, confidence: 0.92, replaces: null,
-  evidence: { message_id: message, quote }, ...(kind === 'preference' ? { category: 'avoid' } : {}), ...extra,
+export const review = (candidates, suffix = '', extra = {}) => fs.writeFileSync(process.env.FAKE_REVIEW + suffix, JSON.stringify({ candidates, ...extra }));
+export const candidate = (kind, statement, quote, message = 'o1', extra = {}) => ({
+  kind, statement, scope_hint: 'general', exception: false, tentative: false, confidence: 0.92, replaces: null,
+  evidence: { message_id: message, quote }, ...(kind === 'preference' ? { category: 'communication' } : {}), ...extra,
 });
 
 export const calls = () => (fs.existsSync(process.env.FAKE_LOG) ? fs.readFileSync(process.env.FAKE_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+export const shown = (c) => c.prompt.split('WHAT THE OPERATOR WROTE')[1] ?? '';
+export const occurrences = (text) => calls().reduce((n, c) => n + shown(c).split(text).length - 1, 0);
 export const preferences = (root) => (fs.existsSync(path.join(root, 'operator/profile/preferences.md')) ? fs.readFileSync(path.join(root, 'operator/profile/preferences.md'), 'utf8') : '');
 export const inboxFiles = (root, dir = 'operator/inbox') => (fs.existsSync(path.join(root, dir)) ? fs.readdirSync(path.join(root, dir)).filter((n) => !n.startsWith('README')) : []);
 export const inboxText = (root, dir = 'operator/inbox') => inboxFiles(root, dir).map((n) => fs.readFileSync(path.join(root, dir, n), 'utf8')).join('\n---\n');
 
-// Read-only look into the worker's database.
 export function peek(root, sql, ...args) {
   const db = new DatabaseSync(path.join(root, 'runtime', 'learn', 'learn.db'), { readOnly: true });
   try {
-    return db.prepare(sql).all(...args);
+    return db.prepare(sql).all(...args).map((r) => ({ ...r }));
   } finally {
     db.close();
   }
@@ -99,34 +110,34 @@ export function mutate(root, sql, ...args) {
     db.close();
   }
 }
-// Time passes: every lease is over and every wait is up (what minutes of real time would do).
-export const timePasses = (root) => { mutate(root, 'UPDATE claims SET lease_until = 0'); mutate(root, 'UPDATE sessions SET not_before = 0'); };
-export const receipts = (root) => peek(root, 'SELECT body FROM receipts ORDER BY id').map((r) => JSON.parse(r.body));
-export const dumpDb = (root) => JSON.stringify(['sessions', 'sources', 'claims', 'reviews', 'receipts', 'ledger', 'failures', 'seen'].map((t) => peek(root, `SELECT * FROM ${t}`)));
+// Time passes: the lease is over and every wait is up.
+export const timePasses = (root) => { mutate(root, 'UPDATE claims SET lease_until = 0'); mutate(root, 'UPDATE sessions SET not_before = 0'); mutate(root, 'UPDATE items SET not_before = 0'); mutate(root, 'UPDATE occurrences SET not_before = 0'); };
+export const items = (root) => peek(root, 'SELECT * FROM items ORDER BY id').map((r) => ({ ...r, body: JSON.parse(r.body), result: r.result ? JSON.parse(r.result) : null }));
+export const dumpDb = (root) => JSON.stringify(['sessions', 'captures', 'occurrences', 'items', 'secrets', 'ledger', 'counters', 'failures', 'meta'].map((t) => peek(root, `SELECT * FROM ${t}`)));
+export const pendingText = (root) => peek(root, "SELECT text FROM occurrences WHERE state = 'pending'").map((r) => r.text);
+
+// Everything the pipeline could have written under the Core, searched byte for byte (database, its WAL, spool, inboxes, owner
+// files). The chat's own transcript and the test's own log are the harness's, not the pipeline's, and are not searched.
+export function allText(root) {
+  const walk = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }).map((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : fs.readFileSync(path.join(dir, e.name), 'latin1'))).join('') : '');
+  return ['runtime', 'operator', 'workspaces', '.aiverse'].map((d) => walk(path.join(root, d))).join('');
+}
+
+export const session = (root, id = 'session-1', file = path.join(root, `${id}.jsonl`)) => ({ session_id: id, transcript_path: file, cwd: root });
 
 // The real hook code in its own process, without starting a worker (so tests control when the worker runs).
-const HOOK_ONLY = "import('./scripts/learn-hook.mjs').then(async (m) => { let input = ''; for await (const c of process.stdin) input += c; m.handleEvent(process.cwd(), process.argv[1], JSON.parse(input), Date.now(), () => {}); });";
-export const hookEvent = (root, event, payload) => spawnSync(process.execPath, ['-e', HOOK_ONLY, event], { cwd: root, input: JSON.stringify(payload), encoding: 'utf8', env: process.env });
+const HOOK_ONLY = "import('./scripts/learn-hook.mjs').then(async (m) => { let input = ''; for await (const c of process.stdin) input += c; const r = await m.handleEvent(process.cwd(), process.argv[1], JSON.parse(input), Date.now(), () => {}); process.exit(r.ok ? 0 : 1); });";
+export const hookEvent = (root, event, payload) => spawnSync(process.execPath, ['-e', HOOK_ONLY, event], { cwd: root, input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
 export const hookEventAsync = (root, event, payload) => new Promise((resolve) => {
-  const child = spawn(process.execPath, ['-e', HOOK_ONLY, event], { cwd: root, env: process.env, stdio: ['pipe', 'ignore', 'ignore'] });
+  const child = spawn(process.execPath, ['-e', HOOK_ONLY, event], { cwd: root, env: { ...process.env, NODE_NO_WARNINGS: '1' }, stdio: ['pipe', 'ignore', 'ignore'] });
   child.stdin.end(JSON.stringify(payload));
   child.on('exit', (code) => resolve(code));
 });
 
-// Runs the real worker as its own process (waits). `env` can inject a crash point.
+// Runs the real worker as its own process. `env` can inject a crash point.
 export const workerProcess = (root, env = {}, args = ['--drain']) =>
   spawnSync(process.execPath, [path.join(root, 'scripts', 'learn-launch.mjs'), '--root', root, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
 export const workerAsync = (root, env = {}, args = ['--drain']) => new Promise((resolve) => {
   const child = spawn(process.execPath, [path.join(root, 'scripts', 'learn-launch.mjs'), '--root', root, ...args], { env: { ...process.env, ...env }, stdio: 'ignore' });
   child.on('exit', (code, signal) => resolve({ code, signal }));
 });
-
-export const session = (root, id = 'session-1', file = path.join(root, `${id}.jsonl`)) => ({ session_id: id, transcript_path: file, cwd: root });
-export function allText(dir) {
-  let out = '';
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, entry.name);
-    out += entry.isDirectory() ? allText(p) : fs.readFileSync(p, 'latin1');
-  }
-  return out;
-}

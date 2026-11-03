@@ -1,4 +1,4 @@
-// Shared by the hook (which must stay tiny and never touch the database) and the worker.
+// Shared by the hook and the worker: configuration, paths, scope, and the one durable fallback file (the envelope).
 // Mode is read from .aiverse/learn/config.json: off | propose | auto. Absent, unreadable or unknown means off.
 
 import crypto from 'node:crypto';
@@ -19,22 +19,23 @@ export const DEFAULT_CONFIG = Object.freeze({
   window_chars: 24000,
   max_budget_usd: 0.15,
   review_timeout_seconds: 120,
+  max_pending_mb: 256,
   claude_command: ['claude'],
   python: null,
-  allow_unfenced_auto: false,
 });
 
 // Numeric settings are clamped so a typo cannot stop progress (window_chars 0) or remove a cost cap.
 const BOUNDS = {
   idle_seconds: [0, 3600], max_pending_turns: [1, 100], min_gap_seconds: [0, 86400], max_reviews_per_session_per_day: [1, 100],
   max_reviews_per_day: [1, 500], window_chars: [1000, 200000], max_budget_usd: [0.01, 2], review_timeout_seconds: [10, 600],
+  max_pending_mb: [1, 4096],
 };
 
 export function loadConfig(root) {
   const config = { ...DEFAULT_CONFIG };
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(root, CONFIG_REL), 'utf8'));
-    if (!MODES.includes(raw.mode)) return { ...DEFAULT_CONFIG };
+    if (!raw || typeof raw !== 'object' || !MODES.includes(raw.mode)) return { ...DEFAULT_CONFIG };
     for (const [key, fallback] of Object.entries(DEFAULT_CONFIG)) {
       const value = raw[key];
       if (value === undefined || value === null) continue;
@@ -55,83 +56,11 @@ export const isEnabled = (config) => config.mode === 'propose' || config.mode ==
 
 export function learnPaths(root) {
   const base = path.join(root, 'runtime', 'learn');
-  return { base, db: path.join(base, 'learn.db'), spool: path.join(base, 'spool') };
+  return { base, db: path.join(base, 'learn.db'), spool: path.join(base, 'spool'), status: path.join(base, 'status.json') };
 }
 
-export const sessionKey = (sessionId) => crypto.createHash('sha256').update(String(sessionId)).digest('hex').slice(0, 16);
 export const sha = (value, length = 24) => crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
-
-// Scope of one message, from the cwd it was written in. Under workspaces/<id>/ with a manifest is that workspace; elsewhere
-// in the Core is operator. A workspaces/ folder without a manifest, or a message with no cwd, is 'unscoped' (never promoted
-// to operator or to any workspace). A cwd outside the Core is null: not reviewed at all.
-export function resolveScope(root, cwd) {
-  if (!cwd) return 'unscoped';
-  let realRoot;
-  let realCwd;
-  try {
-    realRoot = fs.realpathSync(root);
-    realCwd = fs.realpathSync(cwd);
-  } catch {
-    return null;
-  }
-  const relative = path.relative(realRoot, realCwd);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
-  const [top, id] = relative.split(path.sep);
-  if (top !== 'workspaces') return 'operator';
-  if (id && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(id) && fs.existsSync(path.join(realRoot, 'workspaces', id, 'WORKSPACE.yaml'))) return `workspace:${id}`;
-  return 'unscoped';
-}
-
-// One file per event, written to a private name and renamed into place. No lock, no shared file: concurrent hooks cannot
-// collide or lose each other, and a crash leaves either a whole event or nothing.
-export function spoolEvent(root, event) {
-  const { spool } = learnPaths(root);
-  fs.mkdirSync(spool, { recursive: true });
-  const name = `${String(Date.now()).padStart(15, '0')}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-  const temp = path.join(spool, `${name}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(ownEvent(event)));
-  fs.renameSync(temp, path.join(spool, `${name}.json`));
-  return name;
-}
-
-// Ownership by content, set when the file is created: an event carries a digest of itself as its first key, a handoff starts
-// with a header holding the digest of its body. Housekeeping deletes a file only when that digest still verifies, so a file
-// someone else made with a matching name, or a pipeline file that was modified since, is never removed.
-const digest = (text) => crypto.createHash('sha256').update(text).digest('hex');
-export const ownEvent = (event) => ({ aiverse_learn: digest(JSON.stringify(event)), ...event });
-
-export function eventIsOwned(text) {
-  try {
-    const { aiverse_learn: mark, ...rest } = JSON.parse(text);
-    return typeof mark === 'string' && mark === digest(JSON.stringify(rest));
-  } catch {
-    return false;
-  }
-}
-
-export function handoffIsOwned(text) {
-  const cut = text.indexOf('\n');
-  try {
-    const header = JSON.parse(text.slice(0, cut));
-    return header.aiverse_learn_handoff === 1 && header.digest === digest(text.slice(cut + 1));
-  } catch {
-    return false;
-  }
-}
-
-// Exclusive creation: returns false when the name is already taken (never touches the other file).
-export function createHandoff(file, bodyLines) {
-  const body = `${bodyLines.join('\n')}\n`;
-  const header = JSON.stringify({ aiverse_learn_handoff: 1, orig: -1, digest: digest(body) });
-  try {
-    fs.writeFileSync(file, `${header}\n${body}`, { flag: 'wx' });
-    return true;
-  } catch (error) {
-    if (error.code === 'EEXIST') return false;
-    fs.rmSync(file, { force: true }); // our own partial write
-    throw error;
-  }
-}
+export const sessionKey = (sessionId) => sha(String(sessionId), 16);
 
 // True when this module is the program being run (not imported, not `node -e`).
 export function isMain(metaUrl) {
@@ -142,29 +71,117 @@ export function isMain(metaUrl) {
   }
 }
 
-const DAY = 24 * 3600 * 1000;
-export const HANDOFF_MAX_FILES = 50;
-export const HANDOFF_MAX_BYTES = 64 * 1024 * 1024;
+// A visible health state (a file the member or a status tool can read). Best effort: when the disk is the problem it may not be
+// writable, and the caller reports the failure through its exit code instead.
+export function setStatus(root, code) {
+  try {
+    const { base, status } = learnPaths(root);
+    fs.mkdirSync(base, { recursive: true });
+    fs.writeFileSync(status, JSON.stringify({ code, at: new Date().toISOString() }));
+  } catch {}
+}
 
-// Cheap, database-free housekeeping that the hook runs even when learning is off: abandoned temp files, old or excess handoffs
-// (oldest first, capped by count and total size), old event files and quarantined events. Never creates anything.
-// Only files this pipeline itself creates are ever touched, recognised by their exact generated names; anything else in these
-// folders (a note, a copy, a file from another tool) is never deleted.
-export const EVENT_NAME = /^\d{15}-\d+-[0-9a-f]{8}\.(?:json|tmp)$/;
-export const HANDOFF_NAME = /^[0-9a-f]{16}-\d+-[0-9a-f]{8}\.jsonl(?:\.tmp)?$/;
+// Scope binding of one record, from the cwd it was written in. cwd is an ACCESS boundary, not a statement about meaning:
+//   under workspaces/<id>/ with a manifest -> that workspace;  elsewhere in the Core -> operator;
+//   no cwd, an unmanifested workspaces/ folder or a path that cannot be resolved -> 'unresolved' (never copied anywhere global);
+//   a cwd outside the Core -> null (not captured at all).
+export function resolveScope(root, cwd) {
+  if (!cwd) return 'unresolved';
+  let realRoot;
+  let realCwd;
+  try {
+    realRoot = fs.realpathSync(root);
+    realCwd = fs.realpathSync(cwd);
+  } catch {
+    return 'unresolved';
+  }
+  const relative = path.relative(realRoot, realCwd);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  const [top, id] = relative.split(path.sep);
+  if (top !== 'workspaces') return 'operator';
+  if (id && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(id) && fs.existsSync(path.join(realRoot, 'workspaces', id, 'WORKSPACE.yaml'))) return `workspace:${id}`;
+  return 'unresolved';
+}
 
-export function pruneRuntime(root, now = Date.now()) {
-  const { base, spool } = learnPaths(root);
-  const list = (dir, pattern) => { try { return fs.readdirSync(dir).filter((n) => pattern.test(n)).map((n) => { const f = path.join(dir, n); const st = fs.statSync(f); return st.isFile() ? { f, n, age: now - st.mtimeMs, size: st.size } : null; }).filter(Boolean); } catch { return []; } };
-  const owned = (e, check) => { try { return check(fs.readFileSync(e.f, 'utf8')); } catch { return false; } };
-  const drop = (entries, test, maxAge, check) => entries.filter((e) => test(e.n) && e.age > maxAge && owned(e, check)).forEach((e) => fs.rmSync(e.f, { force: true }));
-  drop(list(spool, EVENT_NAME), (n) => n.endsWith('.json'), 30 * DAY, eventIsOwned);
-  const dir = path.join(base, 'handoff');
-  drop(list(dir, HANDOFF_NAME), (n) => n.endsWith('.jsonl'), 30 * DAY, handoffIsOwned);
-  const kept = list(dir, HANDOFF_NAME).filter((e) => e.n.endsWith('.jsonl')).sort((a, b) => a.age - b.age); // newest first
-  let bytes = 0;
-  kept.forEach((e, i) => {
-    bytes += e.size;
-    if ((i >= HANDOFF_MAX_FILES || bytes > HANDOFF_MAX_BYTES) && owned(e, handoffIsOwned)) fs.rmSync(e.f, { force: true });
-  });
+// -- the envelope: a durable capture the hook leaves when the database is busy or unavailable ----------------------------
+// One file, created under a name that carries the digest of its own content. It is only trusted, ingested and deleted when the
+// name, the digest, the schema and the location all agree; a foreign or altered file is left exactly as it is.
+
+const ENVELOPE_NAME = /^env-(\d{15})-([0-9a-f]{8})-([0-9a-f]{16})\.json(\.tmp)?$/;
+const SCOPE = /^(?:operator|unresolved|workspace:[a-z0-9][a-z0-9._-]{0,127})$/;
+const REASONS = ['idle', 'before_compaction', 'session_end', 'session_start'];
+
+export function validEnvelope(value) {
+  const ok = (v, type) => typeof v === type;
+  if (!value || value.v !== 1 || !/^[0-9a-f]{16}$/.test(value.key) || !ok(value.session_id, 'string') || !ok(value.transcript_path, 'string')) return false;
+  if (!REASONS.includes(value.reason) || !Number.isFinite(value.at) || !value.config || !Number.isFinite(value.config.idle_seconds) || !Number.isFinite(value.config.max_pending_turns)) return false;
+  return Array.isArray(value.records) && value.records.every((r) => r && ok(r.uuid, 'string') && r.uuid && ok(r.text, 'string')
+    && (r.ts === null || ok(r.ts, 'string')) && Number.isFinite(r.seq) && SCOPE.test(r.scope));
+}
+
+// io is the file API (tests inject failures); crash is a test seam that kills the process at a named point.
+export function writeEnvelope(root, batch, { io = fs, crash = () => {} } = {}) {
+  const { spool } = learnPaths(root);
+  io.mkdirSync(spool, { recursive: true });
+  const body = JSON.stringify({ v: 1, ...batch });
+  const digest = sha(body, 16);
+  const name = `env-${String(Date.now()).padStart(15, '0')}-${crypto.randomBytes(4).toString('hex')}-${digest}.json`;
+  const temp = path.join(spool, `${name}.tmp`);
+  let fd = null;
+  try {
+    fd = io.openSync(temp, 'wx');
+    io.writeSync(fd, body);
+    io.fsyncSync(fd);
+    io.closeSync(fd);
+    fd = null;
+    crash('envelope_before_rename');
+    io.renameSync(temp, path.join(spool, name));
+    if (process.platform !== 'win32') {
+      const dir = io.openSync(spool, 'r');
+      try { io.fsyncSync(dir); } finally { io.closeSync(dir); }
+    }
+  } catch (error) {
+    if (fd !== null) try { io.closeSync(fd); } catch {}
+    try { io.rmSync(temp, { force: true }); } catch {}
+    throw error;
+  }
+  return name;
+}
+
+// Every envelope in the spool that is whole and ours. A finished temp file (the process died after its fsync, before the rename)
+// is recovered the same way once it is old enough that no writer can still be filling it.
+export function listEnvelopes(root, now = Date.now()) {
+  const { spool } = learnPaths(root);
+  let names = [];
+  try { names = fs.readdirSync(spool); } catch { return []; }
+  const found = [];
+  for (const name of names.sort()) {
+    const m = ENVELOPE_NAME.exec(name);
+    if (!m) continue;
+    const file = path.join(spool, name);
+    try {
+      const st = fs.lstatSync(file);
+      if (!st.isFile() || st.isSymbolicLink() || (m[4] && now - st.mtimeMs < 60000)) continue;
+      const text = fs.readFileSync(file, 'utf8');
+      if (sha(text, 16) !== m[3]) continue;
+      const value = JSON.parse(text);
+      if (validEnvelope(value)) found.push({ file, name, value });
+    } catch {}
+  }
+  return found;
+}
+
+// The one deletion path of the pipeline: the file must still be a plain file in the spool whose content matches its own name.
+export function removeEnvelope(root, file) {
+  const { spool } = learnPaths(root);
+  try {
+    const m = ENVELOPE_NAME.exec(path.basename(file));
+    const st = fs.lstatSync(file);
+    if (!m || !st.isFile() || st.isSymbolicLink() || fs.realpathSync(path.dirname(file)) !== fs.realpathSync(spool)) return false;
+    if (sha(fs.readFileSync(file, 'utf8'), 16) !== m[3]) return false;
+    fs.rmSync(file);
+    return true;
+  } catch {
+    return false;
+  }
 }

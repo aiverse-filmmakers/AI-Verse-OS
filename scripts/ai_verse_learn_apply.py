@@ -50,7 +50,9 @@ REASONS = {
     "multi_sentence": "it is not supported by one single sentence of yours",
     "question": "what you wrote was a question, not an instruction",
     "retraction": "you seem to have changed your mind in the same message or a later one",
-    "conflicts_stored": "it overlaps with something already stored without being the same",
+    "conflicts_stored": "something already stored is on the same topic and is not the same",
+    "stored_unavailable": "what is already stored could not be read, so novelty cannot be checked",
+    "competing": "another sentence in the same conversation window is about the same thing and says something different",
     "goal_owner_unavailable": "no goal owner is active yet",
     "fenced": "the worker no longer held the right to write",
     "owner_unavailable": "the owner that would save it was not available",
@@ -145,7 +147,7 @@ def load_host(root: Path):
 
 # -- plan: screening, no writes -----------------------------------------------------------------------------
 
-def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: List[str], stored: List[str]) -> Dict[str, Any]:
+def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: List[str], stored: Dict[str, Any], others: List[str]) -> Dict[str, Any]:
     """A rejected result carries a fixed code and the kind, never any candidate content."""
 
     def reject(code: str) -> Dict[str, Any]:
@@ -200,32 +202,44 @@ def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: Lis
         reason = "question"
     elif RETRACT.search(text) or any(RETRACT.search(t) for t in later):
         reason = "retraction"
-    elif conflicts_with_stored(statement, stored):
-        reason = "conflicts_stored"
     elif CONDITION.search(sentence):
         reason = "conditional"
     else:
         reason = near_verbatim(statement, sentence)
+        if reason is None and not stored_ready(stored, c["kind"]):
+            reason = "stored_unavailable"
+        elif reason is None and conflicts_with_stored(c["kind"], c.get("category"), statement, stored):
+            reason = "conflicts_stored"
+        elif reason is None and competing_sentence(sentence, others):
+            reason = "competing"
     return {**item, "disposition": "proposal" if reason else "auto", "reason": reason}
 
 
-def conflicts_with_stored(statement: str, stored: List[str]) -> bool:
-    """Something stored that overlaps this statement without being the same text: an unmarked correction. Never a NEW save."""
-    mine = {w for w in tokens(statement) if w not in STOPWORDS}
-    for old in stored:
-        if norm(old) == norm(statement):
-            continue
-        theirs = {w for w in tokens(old) if w not in STOPWORDS}
-        if mine and theirs and len(mine & theirs) / len(mine | theirs) >= 0.5:
-            return True
-    return False
+GENERIC = STOPWORDS | {"use", "prefer", "like", "need", "keep", "make", "get", "all", "every", "future", "future", "going"}
+
+
+def stored_ready(stored: Dict[str, Any], kind: str) -> bool:
+    """Auto needs the stored state to have been read: preferences for a preference, the Brain goals for a goal."""
+    return bool(stored.get("loaded")) and (kind != "goal" or bool(stored.get("goals_loaded")))
+
+
+def conflicts_with_stored(kind: str, category: Optional[str], statement: str, stored: Dict[str, Any]) -> bool:
+    """Fail closed: anything stored in the same category (preferences) or any stored goal that is not this exact text may be what
+    this statement contradicts, and topic cannot be judged by word overlap. Only an identical text is a safe repeat."""
+    old = list((stored.get("preferences") or {}).get(category) or []) if kind == "preference" else list(stored.get("goals") or [])
+    return any(norm(x) != norm(statement) for x in old)
+
+
+def competing_sentence(sentence: str, others: List[str]) -> bool:
+    """Another operator sentence in the window that shares a content word with the cited one but is not the same sentence."""
+    mine = {w for w in tokens(sentence) if w not in GENERIC and not w.isdigit()}
+    return any(norm(o) != norm(sentence) and mine & {w for w in tokens(o) if w not in GENERIC and not w.isdigit()} for o in others)
 
 
 def plan(request: Dict[str, Any]) -> Dict[str, Any]:
     messages = {m["id"]: m for m in request["messages"]}
     order = [m["id"] for m in request["messages"] if m["role"] == "user"]
-    st = request.get("stored") or {}
-    stored = [x for v in (st.get("preferences") or {}).values() for x in v] + list(st.get("goals") or [])
+    stored = request.get("stored") or {}
     candidates = request.get("candidates")
     if not isinstance(candidates, list):
         raise Refused("malformed")
@@ -233,14 +247,28 @@ def plan(request: Dict[str, Any]) -> Dict[str, Any]:
         mid = c.get("evidence", {}).get("message_id") if isinstance(c, dict) and isinstance(c.get("evidence"), dict) else None
         return [messages[i]["text"] for i in order[order.index(mid) + 1 :]] if mid in order else []
 
-    return {"items": [classify(c, request["scope"], messages, later_than(c), stored) for c in candidates[:6]]}
+    def others_than(c: Any) -> List[str]:
+        mid = c.get("evidence", {}).get("message_id") if isinstance(c, dict) and isinstance(c.get("evidence"), dict) else None
+        cited = messages.get(mid, {}).get("text", "") if mid else ""
+        quote = c.get("evidence", {}).get("quote", "") if isinstance(c, dict) and isinstance(c.get("evidence"), dict) else ""
+        mine = sentence_of(cited, quote) if cited and isinstance(quote, str) else None
+        found = []
+        for m in request["messages"]:
+            if m["role"] != "user":
+                continue
+            for sent in re.split(r"(?<=[.!?])\s+|\n+", m.get("full") or m["text"]):
+                if sent.strip() and not (mine and norm(sent) == norm(mine)):
+                    found.append(sent)
+        return found
+
+    return {"items": [classify(c, request["scope"], messages, later_than(c), stored, others_than(c)) for c in candidates[:6]]}
 
 
 # -- commit: one item ---------------------------------------------------------------------------------------
 
 class Owners:
-    def __init__(self, root: Path, session_key: str, scope: str, host=None) -> None:
-        self.session_key, self.scope = session_key, scope
+    def __init__(self, root: Path, session_key: str, scope: str, host=None, fence=None) -> None:
+        self.session_key, self.scope, self.fence = session_key, scope, fence or (lambda: None)
         self.module, self.host = host or load_host(root)
 
     def action(self, operation: str, parameters: Dict[str, Any], key: str, write: bool = True):
@@ -250,8 +278,11 @@ class Owners:
             "reason": "Automatic learning saves a statement the operator made through its existing owner.",
         }
         request["request_fingerprint"] = self.module._fingerprint(request)
-        if write and self.host.authorize_action(request).get("decision") != "allow":
-            raise Refused("owner_refused")
+        if write:
+            self.fence()  # immediately before the permission check and again immediately before the mutation
+            if self.host.authorize_action(request).get("decision") != "allow":
+                raise Refused("owner_refused")
+            self.fence()
         return self.host.request_action(request)
 
     def profile(self) -> Dict[str, Any]:
@@ -312,12 +343,16 @@ def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
     if mode != "auto":
         return proposal(item, "propose_mode", ref)
     key = effect_key(session_key, item)
-    # Fence right before the owner call: the deadline the worker set (its lease is only trusted that long), the worker still
-    # being our parent (POSIX), and the switch still being on. Otherwise this child writes nothing.
-    if time.time() * 1000 > request.get("deadline", float("inf")) or (os.name == "posix" and request.get("parent_pid") and os.getppid() != request["parent_pid"]) or not mode_still_auto(root):
-        return proposal(item, "fenced", ref)
+    deadline, parent = request.get("deadline", float("inf")), request.get("parent_pid")
+
+    def fence() -> None:
+        # Evaluated at every owner mutation: the worker's lease is only trusted until the deadline, the worker must still be our
+        # parent (POSIX) and the switch must still say auto. Otherwise nothing is written.
+        if time.time() * 1000 > deadline or (os.name == "posix" and parent and os.getppid() != parent) or not mode_still_auto(root):
+            raise Refused("fenced")
+
     try:
-        owners = Owners(root, session_key, scope, host)
+        owners = Owners(root, session_key, scope, host, fence)
         return owners.preference(item, key, ref) if item["kind"] == "preference" else owners.goal(item, key, ref)
     except Refused as error:
         return proposal(item, str(error) if str(error) in REASONS else "owner_unavailable", ref)
@@ -326,15 +361,18 @@ def commit(root: Path, request: Dict[str, Any], host=None) -> Dict[str, Any]:
 
 
 def context(root: Path, scope: str, host=None) -> Dict[str, Any]:
-    out: Dict[str, Any] = {"scope": scope, "preferences": {}, "goals": []}
+    """`loaded` is true only when the stored preferences were actually read; `goals_loaded` only when the Brain goals were."""
+    out: Dict[str, Any] = {"scope": scope, "preferences": {}, "goals": [], "loaded": False, "goals_loaded": False}
     if scope != "operator":
         return out
     try:
         owners = Owners(root, "ctx", scope, host)
         out["preferences"] = {k: v for k, v in owners.profile()["preferences"].items() if k in CATEGORIES and v}
+        out["loaded"] = True
         brain = owners.intents()
         if brain.get("state") == "ready":
             out["goals"] = [i["statement"] for i in brain["intents"] if i.get("subtype") == "goal"]
+            out["goals_loaded"] = True
     except Exception:
         pass
     return out

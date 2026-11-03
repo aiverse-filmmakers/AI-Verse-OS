@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, loadConfig, sessionKey, spoolEvent } from './learn-common.mjs';
+import { isEnabled, isMain, learnPaths, loadConfig, sessionKey, sha, spoolEvent } from './learn-common.mjs';
+import { fingerprint, handoffLines, readLines } from './learn-window.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const MAX_STDIN = 1024 * 1024;
@@ -39,6 +40,24 @@ export function startWorker(root) {
   child.unref();
 }
 
+// Before a compaction can rewrite the transcript: the user messages only, screened for secrets, in a file the worker adopts if
+// the transcript turns out to be replaced. Failing to write it is recorded in the event, never silent.
+function handoff(root, key, transcript, now) {
+  try {
+    const lines = readLines(transcript);
+    const fp = fingerprint(lines);
+    if (!fp) return {};
+    const dir = path.join(learnPaths(root).base, 'handoff');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${key}-${now}-${sha(transcript + now, 8)}.jsonl`);
+    fs.writeFileSync(`${file}.tmp`, `${handoffLines(lines).join('\n')}\n`);
+    fs.renameSync(`${file}.tmp`, file);
+    return { handoff: { fp, path: file } };
+  } catch {
+    return { handoff_failed: true };
+  }
+}
+
 export function handleEvent(root, event, payload, now = Date.now(), start = startWorker) {
   const config = loadConfig(root);
   if (!isEnabled(config) || process.env.AIVERSE_LEARN_REVIEW) return false;
@@ -55,6 +74,7 @@ export function handleEvent(root, event, payload, now = Date.now(), start = star
   spoolEvent(root, {
     v: 1, key, session_id: sessionId, transcript_path: transcript, cwd: typeof cwd === 'string' ? cwd : null, reason, at: now,
     config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns },
+    ...(event === 'precompact' ? handoff(root, key, transcript, now) : {}),
   });
   start(root);
   return true;

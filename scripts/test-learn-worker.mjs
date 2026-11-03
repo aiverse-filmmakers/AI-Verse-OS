@@ -23,7 +23,7 @@ const CHAT = (root) => [
   userLine('u1', 'From now on never use exclamation marks. My goal is to launch my store by March.', root),
   assistantLine('a1', 'ok', root),
   userLine('u2', 'Maybe I should start a podcast someday, not sure.', root),
-  userLine('u3', 'For this one email only, use exclamation marks please.', root),
+  userLine('u3', 'For this one email only, use bold headlines please.', root),
 ];
 function chat(root, { mode = 'auto', id = 'session-1', event = 'end' } = {}) {
   const s = session(root, id);
@@ -36,7 +36,7 @@ const GOOD = () => review([
   candidate('preference', 'Never use exclamation marks.', 'never use exclamation marks'),
   candidate('goal', 'Launch my store by March.', 'launch my store by March'),
   candidate('goal', 'Start a podcast.', 'start a podcast someday', 'u2'),
-  candidate('preference', 'Use exclamation marks.', 'use exclamation marks please', 'u3'),
+  candidate('preference', 'Use bold headlines.', 'use bold headlines please', 'u3'),
 ]);
 
 test('reviewer command has no tools, no hooks, no memory, no bare mode, a budget and a JSON schema', () => {
@@ -74,7 +74,7 @@ test('auto mode: a new explicit preference is saved through the owner; a goal, a
   await drain(root);
   assert.equal(preferences(root).match(/Never use exclamation marks\./g).length, 1);
   const [receipt] = receipts(root);
-  assert.deepEqual(receipt.results.map((r) => [r.state, r.reason ?? null]), [['created', null], ['proposed', 'owner_unavailable'], ['proposed', 'tentative'], ['rejected', 'one_off_exception']]);
+  assert.deepEqual(receipt.results.map((r) => [r.state, r.reason ?? null]), [['created', null], ['proposed', 'stored_unavailable'], ['proposed', 'tentative'], ['rejected', 'one_off_exception']]);
   assert.equal(inboxFiles(root).length, 2);
   assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM reviews')[0].n, 0);
   assert.equal(peek(root, 'SELECT due_at FROM sessions')[0].due_at, null);
@@ -91,7 +91,7 @@ test('the reviewers\' own adversarial examples are held as proposals end to end;
     userLine('nolonger', 'I no longer want short answers.', root),
     userLine('bullets', 'I want a short summary. Do not use bullet points.', root),
     userLine('hunter', 'My password is hunter2. Use hunter2 for signing in.', root),
-    userLine('ok', 'Please keep answers short and plain, thanks.', root),
+    userLine('ok', 'Please keep every paragraph concise, thanks.', root),
   ]);
   setMode(root, 'auto');
   hookEvent(root, 'end', s);
@@ -100,14 +100,14 @@ test('the reviewers\' own adversarial examples are held as proposals end to end;
     candidate('preference', 'I want short answers.', 'I no longer want short answers', 'nolonger', { category: 'communication' }),
     candidate('preference', 'I want bullet points.', 'I want a short summary', 'bullets', { category: 'communication' }),
     candidate('preference', 'Use hunter2 for signing in.', 'Use hunter2 for signing in', 'hunter'),
-    candidate('preference', 'Keep answers short and plain.', 'keep answers short and plain', 'ok', { category: 'communication' }),
+    candidate('preference', 'Keep every paragraph concise.', 'keep every paragraph concise', 'ok', { category: 'communication' }),
   ]);
   await drain(root);
   assert.deepEqual(receipts(root)[0].results.map((r) => [r.state, r.reason ?? null]),
     [['proposed', 'not_verbatim'], ['proposed', 'negation_mismatch'], ['proposed', 'not_verbatim'], ['rejected', 'secret_in_source'], ['created', null]]);
   assert.equal(preferences(root).includes('American English'), false);
   assert.equal(preferences(root).includes('hunter2'), false);
-  assert.match(preferences(root), /Keep answers short and plain\./); // the filter is not blind
+  assert.match(preferences(root), /Keep every paragraph concise\./); // the filter is not blind
   assert.equal(inboxFiles(root).length, 3);
   for (const where of [allText(path.join(root, 'operator')), allText(learnPaths(root).base), dumpDb(root)]) assert.equal(where.includes('hunter2'), false);
 });
@@ -153,6 +153,45 @@ test('PreCompact keeps no copy of the transcript: a password in it appears nowhe
   await drain(root); // the worker reviews the range right away (reason before_compaction), as the hook starts it
   assert.equal(calls().length, 1);
   for (const where of [allText(learnPaths(root).base), dumpDb(root), allText(path.join(root, 'operator'))]) assert.equal(where.includes('hunter2'), false);
+});
+
+test('compaction replaces the transcript BEFORE any drain: unread history is still reviewed once from a screened handoff, and a secret never reaches disk', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [
+    userLine('a1', 'old unread message number one', root),
+    userLine('a2', 'My password is hunter2 so remember it', root),
+    assistantLine('a3', 'assistant text that must not be kept hunter2', root),
+    userLine('a4', 'old unread message number four', root),
+  ]);
+  hookEvent(root, 'precompact', s);
+  writeTranscript(s.transcript_path, [userLine('b0', 'summary of the compacted conversation', root), userLine('b1', 'new message after compaction one', root)]);
+  hookEvent(root, 'end', s);
+  const handoffs = fs.readdirSync(path.join(learnPaths(root).base, 'handoff'));
+  assert.equal(handoffs.length, 1);
+  const kept = fs.readFileSync(path.join(learnPaths(root).base, 'handoff', handoffs[0]), 'utf8');
+  assert.equal(kept.includes('hunter2') || kept.includes('assistant text'), false);
+  assert.equal(allText(learnPaths(root).base).includes('hunter2'), false);
+  await drain(root);
+  markersOnce(['old unread message number one', 'old unread message number four', 'summary of the compacted', 'new message after compaction one']);
+  assert.equal(calls().some((c) => c.prompt.includes('hunter2')), false);
+  assert.equal(allText(learnPaths(root).base).includes('hunter2'), false);
+  assert.ok(peek(root, 'SELECT code FROM failures').some((r) => r.code === 'handoff_used'));
+  assert.equal(fs.readdirSync(path.join(learnPaths(root).base, 'handoff')).length, 0); // consumed
+});
+
+test('a handoff that was not needed (transcript not replaced) does not cause a second review', async () => {
+  const root = core();
+  review([]);
+  setMode(root, 'propose');
+  const s = session(root);
+  writeTranscript(s.transcript_path, [userLine('a1', 'message that stays in place one', root), userLine('a2', 'message that stays in place two', root)]);
+  hookEvent(root, 'precompact', s);
+  await drain(root);
+  markersOnce(['stays in place one', 'stays in place two']);
+  assert.equal(fs.readdirSync(path.join(learnPaths(root).base, 'handoff')).length, 0);
 });
 
 test('compaction: a replaced transcript is a new source; history reviewed before it is not repeated; later messages are reviewed once', async () => {

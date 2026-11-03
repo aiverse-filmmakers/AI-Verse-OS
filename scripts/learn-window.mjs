@@ -13,6 +13,9 @@ const ASSISTANT_MAX = 800;
 const MIN_ELIGIBLE = 12;
 const HARNESS_TEXT = /^\s*<(?:command-|local-command|system-reminder|user-prompt-submit-hook|bash-|task-notification)|^\s*\[Request interrupted/i;
 
+// The same secret screen as the applier's, applied BEFORE anything of a user message is written to the handoff.
+const SECRET = /pass(?:word|wd|phrase|code)|\bpwd\b|\bpin\b|secret|credential|api[ _-]?key|(?:access|refresh|auth|bearer|session)[ _-]?token|\btoken\b|private[ _-]?key|recovery[ _-]?code|\b(?:ssn|iban|cvv|passport)\b|social security|credit[ _-]?card|\bsk-[A-Za-z0-9_-]{12,}|\b[A-Za-z0-9+/_-]{28,}\b|\b(?:\d[ -]?){13,19}\b/i;
+
 export const lineHash = (line) => sha(line, 16);
 
 export function readLines(file) {
@@ -95,6 +98,20 @@ export function readWindow(lines, cursor, budget, scopeOf) {
   };
 }
 
+// What PreCompact hands over so compaction cannot erase unread history: only the user messages, as transcript-shaped lines
+// that remember their original line number. A message with any secret-like text is dropped whole, never stored.
+export function handoffLines(lines) {
+  const out = [];
+  lines.forEach((raw, line) => {
+    let entry = null;
+    try { entry = JSON.parse(raw); } catch {}
+    const message = toMessage(entry, line);
+    if (!message || message.role !== 'user' || SECRET.test(message.text)) return;
+    out.push(JSON.stringify({ type: 'user', uuid: message.id, cwd: message.cwd, orig: line, message: { role: 'user', content: message.text } }));
+  });
+  return out;
+}
+
 // The window of one source from the live transcript. Returns null when it cannot be read or is a different transcript, and
 // { replaced: true } when the lines before the cursor are no longer the lines that were reviewed (the caller starts over
 // at line 0 of what is there now and records that history was replaced).
@@ -105,7 +122,7 @@ export function readSource(source, livePath, budget, scopeOf) {
   } catch {
     return null;
   }
-  if (fingerprint(lines) !== source.fp) return null;
+  if (!source.path && fingerprint(lines) !== source.fp) return null;
   if (source.line > lines.length || (source.anchor_line >= 0 && (source.anchor_line >= lines.length || lineHash(lines[source.anchor_line]) !== source.anchor))) return { replaced: true };
   return readWindow(lines, { line: source.line, part: source.part }, budget, scopeOf);
 }

@@ -64,13 +64,15 @@ def cand(kind="preference", statement="Never use exclamation marks.", quote="nev
 
 
 def upto(c):
-    """The window as the reviewer saw it up to the cited message (later messages are a separate concern, tested on their own)."""
-    ids = [m["id"] for m in MESSAGES]
+    """A window holding only the cited message (neighbouring messages are a separate concern, tested on their own)."""
     mid = c["evidence"]["message_id"] if isinstance(c, dict) else None
-    return MESSAGES[: ids.index(mid) + 1] if mid in ids else MESSAGES
+    return [m for m in MESSAGES if m["id"] == mid] or MESSAGES
 
 
-def plan_one(c, scope="operator", stored=None):
+READ = {"loaded": True, "goals_loaded": True, "preferences": {}, "goals": []}
+
+
+def plan_one(c, scope="operator", stored=READ):
     return learn.plan({"scope": scope, "messages": upto(c), "candidates": [c], "stored": stored})["items"][0]
 
 
@@ -181,10 +183,31 @@ class AutoIsNarrow(unittest.TestCase):
         self.assertEqual(self.disposition(theirs), ("proposal", "third_party"))
 
     def test_an_unmarked_contradiction_of_stored_state_is_not_a_new_save(self):
-        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()], "stored": {"preferences": {"avoid": ["Use exclamation marks sparingly."]}, "goals": []}}
+        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()], "stored": {**READ, "preferences": {"avoid": ["Use exclamation marks sparingly."]}}}
         self.assertEqual(learn.plan(request)["items"][0]["reason"], "conflicts_stored")
-        request["stored"] = {"preferences": {"avoid": ["Never use exclamation marks."]}, "goals": []}
+        request["stored"] = {**READ, "preferences": {"avoid": ["Never use exclamation marks."]}}
         self.assertEqual(learn.plan(request)["items"][0]["disposition"], "auto")  # the identical text is just already present
+
+    def test_novelty_fails_closed_on_the_reviewers_exact_probes(self):
+        short = user("s1", "I want detailed answers.")
+        detail = cand(statement="I want detailed answers.", quote="I want detailed answers", message="s1", category="communication")
+        stored = {**READ, "preferences": {"communication": ["Keep replies short and plain."]}}
+        out = learn.plan({"scope": "operator", "messages": [short], "candidates": [detail], "stored": stored})["items"][0]
+        self.assertEqual((out["disposition"], out["reason"]), ("proposal", "conflicts_stored"))
+        both = user("s2", "I want short answers. I prefer detailed answers.")
+        first = cand(statement="I want short answers.", quote="I want short answers", message="s2", category="communication")
+        out = learn.plan({"scope": "operator", "messages": [both], "candidates": [first], "stored": READ})["items"][0]
+        self.assertEqual((out["disposition"], out["reason"]), ("proposal", "competing"))
+        other_message = [user("s3", "I want short answers."), user("s4", "Later I prefer detailed answers.")]
+        c3 = cand(statement="I want short answers.", quote="I want short answers", message="s3", category="communication")
+        out = learn.plan({"scope": "operator", "messages": other_message, "candidates": [c3], "stored": READ})["items"][0]
+        self.assertEqual(out["reason"], "competing")
+        for unread in (None, {}, {"loaded": False, "preferences": {}, "goals": []}):  # stored state could not be read
+            self.assertEqual(learn.plan({"scope": "operator", "messages": [short], "candidates": [detail], "stored": unread})["items"][0]["reason"], "stored_unavailable")
+        goal = cand("goal", "Launch my store by March.", "launch my store by March")
+        self.assertEqual(learn.plan({"scope": "operator", "messages": upto(goal), "candidates": [goal], "stored": {**READ, "goals_loaded": False}})["items"][0]["reason"], "stored_unavailable")
+        stored_goal = {**READ, "goals": ["Launch my store by June."]}
+        self.assertEqual(learn.plan({"scope": "operator", "messages": upto(goal), "candidates": [goal], "stored": stored_goal})["items"][0]["reason"], "conflicts_stored")
 
     def test_corrections_memories_workspace_unscoped_are_never_auto(self):
         self.assertEqual(self.disposition(cand(replaces="Always write long answers."))[1], "correction")
@@ -273,6 +296,46 @@ class Commit(unittest.TestCase):
         self.assertEqual(off["reason"], "fenced")
         self.assertEqual(host.calls, [])
 
+    def test_fence_is_rechecked_at_the_mutation_after_the_brain_read(self):
+        class Slow(FakeHost):
+            def request_action(self, request):
+                if request["operation"] == "brain.intent.read":
+                    self.on_read()
+                return super().request_action(request)
+
+        goal = cand("goal", "Launch my store by March.", "launch my store by March")
+        # time advances past the deadline during the Brain read
+        host = Slow()
+        base = Path(tempfile.mkdtemp())
+        real = learn.time.time
+        clock = [real()]
+        learn.time.time = lambda: clock[0]
+        try:
+            host.on_read = lambda: clock.__setitem__(0, clock[0] + 60)
+            out = committed(goal, host=host, root=base, deadline=(clock[0] + 30) * 1000)
+        finally:
+            learn.time.time = real
+        self.assertEqual((out["state"], out["reason"]), ("proposed", "fenced"))
+        self.assertNotIn("brain.intent.capture", host.calls)
+        # auto is switched off during the Brain read
+        host = Slow()
+        root = Path(tempfile.mkdtemp())
+        host.on_read = lambda: (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "off"}))
+        out = committed(goal, host=host, root=root)
+        self.assertEqual(out["reason"], "fenced")
+        self.assertNotIn("brain.intent.capture", host.calls)
+        # the same for a preference write
+        host = Slow()
+        root = Path(tempfile.mkdtemp())
+        host.on_read = lambda: None
+        item = plan_one(cand())
+        (root / ".aiverse" / "learn").mkdir(parents=True)
+        (root / ".aiverse" / "learn" / "config.json").write_text(json.dumps({"mode": "auto"}))
+        owners = learn.Owners(root, "k", "operator", (FakeModule, host), fence=lambda: (_ for _ in ()).throw(learn.Refused("fenced")))
+        with self.assertRaises(learn.Refused):
+            owners.preference(item, "key", "ref")
+        self.assertEqual(host.calls, [])
+
     def test_auto_goal_goes_through_brain_only_when_ready(self):
         self.assertEqual(committed(cand("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
         down = committed(cand("goal", "Launch my store by March.", "launch my store by March"), host=FakeHost(brain="owner-required"))
@@ -318,7 +381,7 @@ class RealProfileOwner(unittest.TestCase):
 
     def test_command_line_shape(self):
         import subprocess
-        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()]}
+        request = {"scope": "operator", "messages": upto(cand()), "candidates": [cand()], "stored": READ}
         run = subprocess.run([sys.executable, str(SCRIPTS / "ai_verse_learn_apply.py"), "--root", str(self.root), "plan"], input=json.dumps(request), capture_output=True, text=True)
         self.assertEqual(run.returncode, 0)
         self.assertEqual(json.loads(run.stdout)["items"][0]["disposition"], "auto")

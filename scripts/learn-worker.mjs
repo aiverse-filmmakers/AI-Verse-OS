@@ -159,7 +159,23 @@ const noteFailure = (db, key, code) => db.prepare('INSERT INTO failures(session,
 // A transcript generation that is gone: stop pointing at it. Unreviewed lines of it (cursor beyond 0) cannot be read any more.
 function closeSource(db, key, source) {
   db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(key, source.fp);
-  if (source.line > 0) noteFailure(db, key, 'history_replaced');
+  noteFailure(db, key, 'history_replaced'); // also at cursor 0: nothing is closed without a trace
+}
+
+// The live transcript no longer is this generation, but PreCompact left its screened user messages: continue from those, at
+// the first message not yet reviewed (they remember their original line numbers).
+function adoptHandoff(db, key, source) {
+  const handoff = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, source.fp);
+  if (!handoff || !fs.existsSync(handoff.path)) return false;
+  let start = 0;
+  try {
+    start = readLines(handoff.path).filter((raw) => { try { return JSON.parse(raw).orig < source.line; } catch { return false; } }).length;
+  } catch { return false; }
+  db.prepare('INSERT OR IGNORE INTO sources(session, fp, line, path) VALUES(?, ?, ?, ?)').run(key, `h:${source.fp}`, start, handoff.path);
+  db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(key, source.fp);
+  db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(key, source.fp);
+  noteFailure(db, key, 'handoff_used');
+  return true;
 }
 
 // Same first line but different history before the cursor: start over on what is there now, never strand the source.
@@ -180,13 +196,15 @@ function nextWork(ctx, session) {
   for (let source of db.prepare('SELECT rowid AS id, * FROM sources WHERE session = ? AND closed = 0 ORDER BY id').all(session.key)) {
     const pending = db.prepare('SELECT body FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').get(session.key, source.fp, source.line, source.part);
     if (pending) return { source, live, review: JSON.parse(pending.body) };
-    let window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    let window = readSource(source, source.path || session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
+    if (!source.path && (!window || window.replaced) && adoptHandoff(db, session.key, source)) return nextWork(ctx, session);
     if (window?.replaced) {
       source = restartSource(db, session.key, source);
       window = readSource(source, session.transcript, ctx.config.window_chars, (cwd) => resolveScope(root, cwd));
     }
     if (window && (window.messages.length || window.next.line > source.line || window.next.part > source.part)) return { source, live, window };
     if (window && source.fp === live) continue; // nothing new yet in the live transcript
+    if (source.path) { db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(session.key, source.fp); fs.rmSync(source.path, { force: true }); continue; }
     if (live) closeSource(db, session.key, source); // a different transcript is live now
   }
   return null;
@@ -301,6 +319,7 @@ function finish(ctx, session, source, live, window, receipt) {
     db.prepare('UPDATE sources SET line = ?, part = ?, anchor_line = ?, anchor = ? WHERE session = ? AND fp = ?')
       .run(window.next.line, window.next.part, window.anchor_line, window.anchor, session.key, source.fp);
     db.prepare('DELETE FROM reviews WHERE session = ? AND fp = ? AND line = ? AND part = ?').run(session.key, source.fp, source.line, source.part);
+    if (source.path && window.atEnd) db.prepare('UPDATE sources SET closed = 1 WHERE session = ? AND fp = ?').run(session.key, source.fp);
     const others = db.prepare('SELECT COUNT(*) AS n FROM sources WHERE session = ? AND closed = 0 AND fp != ?').get(session.key, source.fp).n > 0;
     const row = db.prepare('SELECT due_at FROM sessions WHERE key = ?').get(session.key);
     // An event that arrived while this range was being handled moved due_at; keep it.
@@ -308,6 +327,11 @@ function finish(ctx, session, source, live, window, receipt) {
     db.prepare('UPDATE sessions SET attempts = 0, blocked = NULL, not_before = 0, due_at = ? WHERE key = ?').run(due, session.key);
   });
   crash('after_finish');
+  if (source.path && window.atEnd) fs.rmSync(source.path, { force: true });
+  if (!source.path && window.atEnd) { // the live transcript is fully reviewed, so a handoff of it is redundant
+    const spare = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(session.key, source.fp);
+    if (spare) { fs.rmSync(spare.path, { force: true }); db.prepare('DELETE FROM handoffs WHERE session = ? AND fp = ?').run(session.key, source.fp); }
+  }
   return { state: receipt ? 'reviewed' : 'skipped_no_user_message', results: receipt?.results };
 }
 

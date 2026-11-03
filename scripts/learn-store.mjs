@@ -18,7 +18,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions(key TEXT PRIMARY KEY, session_id TEXT, transcript TEXT, reason TEXT, turns INTEGER DEFAULT 0,
   due_at INTEGER, not_before INTEGER DEFAULT 0, attempts INTEGER DEFAULT 0, blocked TEXT);
 CREATE TABLE IF NOT EXISTS sources(session TEXT, fp TEXT, line INTEGER DEFAULT 0, part INTEGER DEFAULT 0, anchor_line INTEGER DEFAULT -1,
-  anchor TEXT DEFAULT '', closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
+  anchor TEXT DEFAULT '', path TEXT, closed INTEGER DEFAULT 0, PRIMARY KEY(session, fp));
+CREATE TABLE IF NOT EXISTS handoffs(session TEXT, fp TEXT, path TEXT, PRIMARY KEY(session, fp));
 CREATE TABLE IF NOT EXISTS claims(name TEXT PRIMARY KEY, owner TEXT, lease_until INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(session TEXT, fp TEXT, line INTEGER, part INTEGER, body TEXT, PRIMARY KEY(session, fp, line, part));
 CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, session TEXT, at INTEGER, body TEXT);
@@ -83,6 +84,7 @@ function prune(spool, now) {
   sweep(spool, (n) => n.endsWith('.tmp'), DAY);
   sweep(spool, (n) => n.endsWith('.json'), 30 * DAY);
   sweep(path.join(spool, 'bad'), () => true, 14 * DAY);
+  sweep(path.join(path.dirname(spool), 'handoff'), () => true, 30 * DAY);
 }
 
 export function ingest(db, root, now = Date.now()) {
@@ -129,6 +131,14 @@ function applyEvent(db, event, now) {
   db.prepare(`INSERT INTO sessions(key, session_id, transcript, reason, turns, due_at) VALUES(?, ?, ?, ?, ?, ?)
     ON CONFLICT(key) DO UPDATE SET transcript = excluded.transcript, reason = excluded.reason, turns = excluded.turns, due_at = excluded.due_at`)
     .run(key, event.session_id, event.transcript_path, reason, turns, due);
+  if (event.handoff) {
+    // The generation this handoff belongs to must exist as a source even if the worker never saw it live.
+    db.prepare('INSERT OR IGNORE INTO sources(session, fp) VALUES(?, ?)').run(key, event.handoff.fp);
+    const old = db.prepare('SELECT path FROM handoffs WHERE session = ? AND fp = ?').get(key, event.handoff.fp)?.path;
+    if (old && old !== event.handoff.path) fs.rmSync(old, { force: true });
+    db.prepare('INSERT OR REPLACE INTO handoffs(session, fp, path) VALUES(?, ?, ?)').run(key, event.handoff.fp, event.handoff.path);
+  }
+  if (event.handoff_failed) db.prepare('INSERT INTO failures(session, at, code) VALUES(?, ?, ?)').run(key, now, 'handoff_failed');
 }
 
 // -- rate ledger ---------------------------------------------------------------------------------------------

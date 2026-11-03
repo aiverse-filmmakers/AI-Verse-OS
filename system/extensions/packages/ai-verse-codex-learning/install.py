@@ -432,6 +432,25 @@ def _strip_ours(hooks, root):
             del hooks[event]
 
 
+def _group_meta(group):
+    return {k: v for k, v in group.items() if k != "hooks"}
+
+
+def _edited_ours(hooks, record, root):
+    """Our bridge handlers (or their surrounding group settings) that no longer match what we wrote."""
+    written = record.get("written_hooks", {})
+    edited = []
+    for event, groups in hooks.items():
+        for group in groups:
+            for handler in group["hooks"]:
+                if not is_ours_claude(handler, root):
+                    continue
+                if not any(handler in g["hooks"] and _group_meta(g) == _group_meta(group)
+                           for g in written.get(event, [])):
+                    edited.append(event)
+    return edited
+
+
 def _claude_write(settings_file, record_file, settings_bytes, record):
     settings_file.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_bytes(settings_file, settings_bytes)
@@ -474,6 +493,11 @@ def claude_install(root, options):
         record["exact_restore_ok"] = False
 
     hooks = settings.setdefault("hooks", {}) if "hooks" in settings else {}
+    if before_record:
+        edited = _edited_ours(hooks, record, root)
+        if edited:
+            raise ValueError("Claude hook settings were edited since install (" + ", ".join(edited)
+                             + "); restore them or run claude-remove first, nothing was changed")
     _strip_ours(hooks, root)
     generated = claude_definition(root, python, build=build)
     for event, groups in generated["hooks"].items():
@@ -544,7 +568,9 @@ def claude_remove(root):
                 handlers = []
                 for handler in group["hooks"]:
                     if is_ours_claude(handler, root):
-                        if handler in written.get(event, []):
+                        if handler in written.get(event, []) and any(
+                                _group_meta(g) == _group_meta(group) and handler in g["hooks"]
+                                for g in record.get("written_hooks", {}).get(event, [])):
                             continue
                         left_in_place.append(f"hook {event} (changed after install)")
                     handlers.append(handler)
@@ -617,6 +643,13 @@ def claude_doctor(root, python=None):
     else:
         result["allow_rules_missing"] = ["unknown (no record)"]
     result["auto_memory_off"] = settings.get("autoMemoryEnabled") is False
+    try:
+        registry = read_json(root / ".aiverse/extensions/registry.json", root)
+        entry = registry.get("extensions", {}).get(ID, {})
+        result["learning_enabled"] = (entry.get("enabled") is True
+                                      and Bridge(root, create_runtime=False).config["enabled"] is True)
+    except (OSError, ValueError):
+        result["learning_enabled"] = False
     events = root / "runtime/codex-learning/events.jsonl"
     if events.exists() and events.stat().st_size <= 4_000_000 and build:
         rows = []
@@ -628,7 +661,10 @@ def claude_doctor(root, python=None):
         claude_rows = [r for r in rows if r.get("harness") == "claude" and r.get("build") == build]
         result["execution_observed"] = any(r.get("event") == "UserPromptSubmit" for r in claude_rows)
         result["review_observed"] = any(r.get("event") == "review" and r.get("state") == "reviewed" for r in claude_rows)
-    if builds and result["build_matches"] is False:
+    if not result["learning_enabled"]:
+        result["state"] = "disabled"
+        result["guidance"].append("Learning is switched off (bridge.py set --enabled true switches it back on).")
+    elif builds and result["build_matches"] is False:
         result["state"] = "refresh-needed"
         result["guidance"].append("The Claude hooks point at an older build: run claude-install again to refresh.")
     elif (result["package_files_verified"] and result["hooks_present"] == 5 and not result["allow_rules_missing"]

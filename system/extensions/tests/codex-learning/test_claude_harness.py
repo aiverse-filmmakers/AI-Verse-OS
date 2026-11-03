@@ -708,6 +708,47 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertTrue(all(build_b_sha in h["command"] for h in self.bridge_hooks(settings)))
         self.assertEqual(doctor()["state"], "installed")
 
+    def test_removal_keeps_and_lists_a_group_whose_matcher_was_edited(self):
+        self.cmd("claude-install")
+        edited = self.load()
+        edited["hooks"]["SessionStart"][0]["matcher"] = "startup"
+        self.settings.write_text(json.dumps(edited))
+        code, out = self.cmd("claude-remove")
+        self.assertTrue(any("SessionStart" in item for item in out["left_in_place"]), out)
+        self.assertEqual(self.load()["hooks"]["SessionStart"][0]["matcher"], "startup")
+
+    def test_refresh_refuses_to_overwrite_an_edited_hook_and_changes_nothing(self):
+        self.cmd("claude-install")
+        edited = self.load()
+        edited["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 77
+        self.settings.write_text(json.dumps(edited))
+        before = (self.settings.read_bytes(), self.record.read_bytes())
+        code, out = self.cmd("claude-install")
+        self.assertEqual(code, 2)
+        self.assertIn("edited", out["error"])
+        self.assertEqual((self.settings.read_bytes(), self.record.read_bytes()), before)
+
+    def test_doctor_does_not_report_ready_when_learning_is_disabled(self):
+        self.cmd("claude-install")
+        build = self.sha(self.extension / "bridge.py")
+        runtime = self.root / "runtime/codex-learning"
+        runtime.mkdir(parents=True)
+        rows = [{"build": build, "event": "UserPromptSubmit", "harness": "claude"},
+                {"build": build, "event": "review", "state": "reviewed", "harness": "claude"}]
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        self.assertEqual(self.cmd("claude-doctor", "--json")[1]["state"], "ready")
+        config = self.extension / "config.json"
+        config.write_text(json.dumps({"schema_version": 1, "enabled": False}))
+        out = self.cmd("claude-doctor", "--json")[1]
+        self.assertEqual(out["state"], "disabled")
+        self.assertFalse(out["learning_enabled"])
+        config.write_text(json.dumps({"schema_version": 1, "enabled": True}))
+        registry = self.root / ".aiverse/extensions/registry.json"
+        value = json.loads(registry.read_text())
+        value["extensions"][self.ID]["enabled"] = False
+        registry.write_text(json.dumps(value))
+        self.assertEqual(self.cmd("claude-doctor", "--json")[1]["state"], "disabled")
+
     def test_settings_json_hook_command_runs_the_installed_bridge_end_to_end(self):
         """Run the generated hook command exactly as Claude Code would."""
         import shlex as _shlex

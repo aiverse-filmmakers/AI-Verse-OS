@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { handleEvent } from './learn-hook.mjs';
 import {
   acquireLock, claimJob, enqueue, finishClaim, learnPaths, listJobs, loadConfig, readJob, readLedger, recordReview, recoverClaims,
-  releaseLock, reviewAllowance, sessionKey, workerRunning, writeCursor,
+  releaseLock, resolveScope, reviewAllowance, sessionKey, workerRunning, writeCursor,
 } from './learn-queue.mjs';
 import { readWindow } from './learn-window.mjs';
 
@@ -95,8 +95,9 @@ test('session end and compaction are due immediately and a later stop does not d
   let job = readJob(root, sessionKey('session-1'));
   assert.equal(job.reason, 'before_compaction');
   assert.equal(job.due_at, NOW);
-  assert.equal(job.spool.from_line, 1);
-  assert.equal(fs.readFileSync(job.spool.path, 'utf8').trim(), JSON.stringify(assistant('a1', 'ok')));
+  assert.equal(job.spools[0].from_line, 1);
+  assert.equal(job.spools[0].lines, 1);
+  assert.equal(fs.readFileSync(job.spools[0].path, 'utf8'), `${JSON.stringify(assistant('a1', 'ok'))}\n`);
   fire(root, 'stop', payload(root, file), NOW + 5000);
   job = readJob(root, sessionKey('session-1'));
   assert.equal(job.reason, 'before_compaction');
@@ -112,7 +113,7 @@ test('scope comes from the working folder and a folder outside the Core is ignor
   assert.equal(readJob(root, sessionKey('session-1')).scope, 'workspace:alpha');
   fs.mkdirSync(path.join(root, 'workspaces', 'unknown'));
   fire(root, 'end', payload(root, file, { session_id: 's2', cwd: path.join(root, 'workspaces', 'unknown') }));
-  assert.equal(readJob(root, sessionKey('s2')).scope, 'operator');
+  assert.equal(readJob(root, sessionKey('s2')), null); // a workspaces/ folder without a manifest is never promoted to operator
   assert.equal(fire(root, 'end', payload(root, file, { session_id: 's3', cwd: os.tmpdir() })), false);
   assert.equal(readJob(root, sessionKey('s3')), null);
 });
@@ -238,4 +239,99 @@ test('the shipped Claude settings switch built-in memory off and register the fo
     assert.match(command, /^node "\$CLAUDE_PROJECT_DIR\/scripts\/learn-hook\.mjs" (start|stop|precompact|end)$/);
   }
   assert.ok(settings.hooks.SessionEnd[0].hooks[0].timeout <= 5);
+});
+
+// -- concurrency and recovery (real competing processes) ----------------------------------------------------
+
+const QUEUE_URL = new URL('./learn-queue.mjs', import.meta.url).href;
+const runNode = (code, args) => spawnSync(process.execPath, ['--input-type=module', '-e', code, ...args], { encoding: 'utf8' });
+
+test('real competing processes: exactly one gets the worker lock, and a loser cannot release it', () => {
+  const root = core({ mode: 'auto' });
+  const code = `import {acquireLock, releaseLock} from '${QUEUE_URL}';
+    const got = acquireLock(process.argv[1]);
+    if (got) { await new Promise(r => setTimeout(r, 700)); releaseLock(process.argv[1]); }
+    else releaseLock(process.argv[1]);
+    process.stdout.write(got ? 'won' : 'lost');`;
+  const children = Array.from({ length: 6 }, () => new Promise((resolve) => {
+    import('node:child_process').then(({ spawn }) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', code, root], { stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.on('close', () => resolve(out));
+    });
+  }));
+  return Promise.all(children).then((results) => {
+    assert.equal(results.filter((r) => r === 'won').length, 1);
+    assert.equal(results.filter((r) => r === 'lost').length, 5);
+    assert.equal(fs.existsSync(learnPaths(root).lock), false);
+  });
+});
+
+test('real competing processes: concurrent hooks never lose an event or a compaction snapshot', () => {
+  const root = core({ mode: 'auto' });
+  const code = `import {enqueue, loadConfig} from '${QUEUE_URL}';
+    const [root, n] = process.argv.slice(1);
+    for (let i = 0; i < 8; i++) enqueue(root, loadConfig(root), { session_id: 's', transcript_path: '/x/s.jsonl', cwd: root, scope: 'operator',
+      reason: i % 4 === 0 ? 'before_compaction' : 'idle', spool: i % 4 === 0 ? { path: '/spool/' + n + '-' + i, from_line: i, lines: 1 } : null });`;
+  return Promise.all(Array.from({ length: 4 }, (_, n) => new Promise((resolve) => {
+    import('node:child_process').then(({ spawn }) => spawn(process.execPath, ['--input-type=module', '-e', code, root, String(n)], { stdio: 'inherit' }).on('close', resolve));
+  }))).then(() => {
+    const job = readJob(root, sessionKey('s'));
+    assert.equal(job.spools.length, 8); // 4 processes x 2 compactions each, none overwritten
+    assert.equal(job.turns, 24); // 4 x 6 idle stops, none lost
+  });
+});
+
+test('a crashed worker leaves a claim that is recovered at once when no worker is alive, spools included', () => {
+  const root = core({ mode: 'auto' });
+  const file = transcript(root, [user('u1', 'From now on never use exclamation marks.')]);
+  const key = sessionKey('session-1');
+  writeCursor(root, key, 0);
+  fire(root, 'precompact', payload(root, file), NOW);
+  claimJob(root, key);
+  fire(root, 'precompact', payload(root, file), NOW + 1000); // a newer queue file with its own snapshot appears meanwhile
+  assert.equal(recoverClaims(root, Date.now()), 0); // fresh claim, not forced
+  assert.equal(recoverClaims(root, Date.now(), { force: true }), 1);
+  assert.equal(readJob(root, key).spools.length, 2);
+  assert.equal(fs.existsSync(path.join(learnPaths(root).claims, `${key}.json`)), false);
+});
+
+test('SessionStart starts the worker for a pending job and recovers an orphaned claim immediately', () => {
+  const root = core({ mode: 'auto' });
+  const file = transcript(root, [user('u1', 'From now on never use exclamation marks.')]);
+  const key = sessionKey('session-1');
+  fire(root, 'end', payload(root, file), NOW);
+  claimJob(root, key); // the worker died right after claiming
+  const started = [];
+  handleEvent(root, 'start', {}, Date.now(), (r) => started.push(r));
+  assert.deepEqual(started, [root]);
+  assert.ok(readJob(root, key));
+});
+
+test('messages carry their own scope: a session that changes workspace is split, and an unknown workspace folder is skipped', () => {
+  const root = core();
+  fs.mkdirSync(path.join(root, 'workspaces', 'unknown'));
+  const scopeOf = (cwd) => resolveScope(root, cwd);
+  const at = (cwd, id, text) => user(id, text, { cwd });
+  const file = transcript(root, [
+    at(root, 'o1', 'Please remember I like short answers in general.'),
+    at(path.join(root, 'workspaces', 'alpha'), 'w1', 'Client Alpha likes blue headlines in every deck.'),
+    at(path.join(root, 'workspaces', 'unknown'), 'x1', 'Private note that has no manifest at all here.'),
+    at(root, 'o2', 'Back at the top level now, my goal is a podcast.'),
+  ]);
+  const first = readWindow(file, 0, 24000, { scopeOf });
+  assert.deepEqual([first.scope, first.messages.map((m) => m.id), first.more], ['operator', ['o1'], true]);
+  const second = readWindow(file, first.nextLine, 24000, { scopeOf });
+  assert.deepEqual([second.scope, second.messages.map((m) => m.id)], ['workspace:alpha', ['w1']]);
+  const third = readWindow(file, second.nextLine, 24000, { scopeOf });
+  assert.deepEqual([third.scope, third.messages.map((m) => m.id)], ['operator', ['o2']]); // x1 skipped, never operator
+});
+
+test('a very long operator message is reviewed up to the cap and the rest is recorded, not silently dropped', () => {
+  const root = core();
+  const file = transcript(root, [user('u1', `${'word '.repeat(5000)}and my goal is to ship by June`)]);
+  const [message] = readWindow(file, 0, 40000).messages;
+  assert.ok(message.unreviewed_chars > 0);
+  assert.ok(message.text.endsWith('[trimmed]'));
 });

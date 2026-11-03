@@ -73,7 +73,8 @@ export function readJson(file) {
   }
 }
 
-// Under workspaces/<id>/ means that workspace, anywhere else in the Core means operator, outside the Core means null.
+// Under workspaces/<id>/ means that workspace, elsewhere in the Core means operator. Outside the Core, or inside a
+// workspaces/ folder that has no manifest, there is no safe scope (null): such text is never promoted to operator.
 export function resolveScope(root, cwd) {
   let realRoot;
   let realCwd;
@@ -88,7 +89,7 @@ export function resolveScope(root, cwd) {
   const [top, id] = relative.split(path.sep);
   if (top === 'workspaces' && id && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(id)
     && fs.existsSync(path.join(realRoot, 'workspaces', id, 'WORKSPACE.yaml'))) return `workspace:${id}`;
-  return 'operator';
+  return top === 'workspaces' && id ? null : 'operator';
 }
 
 export function readJob(root, key) {
@@ -108,34 +109,69 @@ export function listJobs(root) {
 
 export const dueAt = (job) => Math.max(job.due_at ?? 0, job.not_before ?? 0);
 
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// Short critical section around a read-modify-write. mkdir is atomic on every platform; a holder that died is
+// taken over after `staleMs`. Throws when the mutex cannot be had, so a caller never writes unprotected.
+export function withMutex(dir, fn, { timeoutMs = 5000, staleMs = 15000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  for (;;) {
+    try {
+      fs.mkdirSync(dir);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - fs.statSync(dir).mtimeMs > staleMs) fs.rmdirSync(dir);
+      } catch {}
+      if (Date.now() > deadline) throw new Error('learning queue is busy');
+      sleepSync(15);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try {
+      fs.rmdirSync(dir);
+    } catch {}
+  }
+}
+
+const jobMutex = (root, key) => path.join(learnPaths(root).base, 'mutex', key);
+const mergeSpools = (...lists) => [...new Map(lists.flat().filter(Boolean).map((spool) => [spool.path, spool])).values()];
+
 // One job file per session. A stop counts a turn and moves the idle deadline; end and compaction are due immediately.
+// Compaction snapshots (spools) accumulate: a later event never replaces an earlier unprocessed one.
 export function enqueue(root, config, event) {
   const { queue } = learnPaths(root);
   const key = sessionKey(event.session_id);
   const now = event.now ?? Date.now();
-  const previous = readJob(root, key);
-  const turns = (previous?.turns ?? 0) + (event.reason === 'idle' ? 1 : 0);
-  // A pending compaction or session-end review stays due now even when another stop arrives.
-  const urgent = previous && !['idle', 'n_turns'].includes(previous.reason) && event.reason === 'idle';
-  const reason = urgent ? previous.reason : event.reason === 'idle' && turns >= config.max_pending_turns ? 'n_turns' : event.reason;
-  const job = {
-    version: 1,
-    key,
-    session_id: event.session_id,
-    transcript_path: event.transcript_path,
-    cwd: event.cwd,
-    scope: event.scope,
-    reason,
-    turns,
-    attempts: previous?.attempts ?? 0,
-    not_before: previous?.not_before ?? 0,
-    due_at: reason === 'idle' ? now + config.idle_seconds * 1000 : urgent ? previous.due_at : now,
-    spool: event.spool ?? previous?.spool ?? null,
-    created_at: previous?.created_at ?? now,
-    updated_at: now,
-  };
-  writeJsonAtomic(path.join(queue, `${key}.json`), job);
-  return job;
+  return withMutex(jobMutex(root, key), () => {
+    const previous = readJob(root, key);
+    const turns = (previous?.turns ?? 0) + (event.reason === 'idle' ? 1 : 0);
+    // A pending compaction or session-end review stays due now even when another stop arrives.
+    const urgent = previous && !['idle', 'n_turns'].includes(previous.reason) && event.reason === 'idle';
+    const reason = urgent ? previous.reason : event.reason === 'idle' && turns >= config.max_pending_turns ? 'n_turns' : event.reason;
+    const job = {
+      version: 2,
+      key,
+      session_id: event.session_id,
+      transcript_path: event.transcript_path,
+      cwd: event.cwd,
+      scope: event.scope,
+      reason,
+      turns,
+      attempts: previous?.attempts ?? 0,
+      not_before: previous?.not_before ?? 0,
+      due_at: reason === 'idle' ? now + config.idle_seconds * 1000 : urgent ? previous.due_at : now,
+      spools: mergeSpools(previous?.spools ?? [], [event.spool]),
+      created_at: previous?.created_at ?? now,
+      updated_at: now,
+    };
+    writeJsonAtomic(path.join(queue, `${key}.json`), job);
+    return job;
+  });
 }
 
 // Claiming is an atomic rename, so exactly one worker owns a job while new hooks keep writing a fresh queue file.
@@ -143,29 +179,35 @@ export function claimJob(root, key) {
   const paths = learnPaths(root);
   fs.mkdirSync(paths.claims, { recursive: true });
   const claim = path.join(paths.claims, `${key}.json`);
-  try {
-    fs.renameSync(path.join(paths.queue, `${key}.json`), claim);
-  } catch {
-    return null;
-  }
-  fs.utimesSync(claim, new Date(), new Date());
-  return readJson(claim);
+  return withMutex(jobMutex(root, key), () => {
+    try {
+      fs.renameSync(path.join(paths.queue, `${key}.json`), claim);
+    } catch {
+      return null;
+    }
+    fs.utimesSync(claim, new Date(), new Date());
+    return readJson(claim);
+  });
 }
 
+// Hand a claim back (requeue) or finish it (null). Work that arrived during the review stays; spools are merged, never dropped.
 export function finishClaim(root, key, requeue) {
   const paths = learnPaths(root);
   const claim = path.join(paths.claims, `${key}.json`);
   const queued = path.join(paths.queue, `${key}.json`);
-  if (requeue) {
-    const newer = readJson(queued);
-    // A newer queue file already covers the unreviewed range, so only carry the retry state into it.
-    writeJsonAtomic(queued, newer ? { ...newer, attempts: requeue.attempts, not_before: Math.max(newer.not_before ?? 0, requeue.not_before ?? 0) } : requeue);
-  }
-  fs.rmSync(claim, { force: true });
+  withMutex(jobMutex(root, key), () => {
+    if (requeue) {
+      const newer = readJson(queued);
+      writeJsonAtomic(queued, newer
+        ? { ...newer, attempts: requeue.attempts, not_before: Math.max(newer.not_before ?? 0, requeue.not_before ?? 0), spools: mergeSpools(requeue.spools ?? [], newer.spools ?? []) }
+        : requeue);
+    }
+    fs.rmSync(claim, { force: true });
+  });
 }
 
-// A worker that died mid-review leaves a claim behind; hand it back to the queue after it goes stale.
-export function recoverClaims(root, now = Date.now()) {
+// A claim whose worker is gone is orphaned. With no live worker any claim qualifies at once (`force`); otherwise only a stale one.
+export function recoverClaims(root, now = Date.now(), { force = false } = {}) {
   const paths = learnPaths(root);
   let names = [];
   try {
@@ -176,11 +218,24 @@ export function recoverClaims(root, now = Date.now()) {
   let recovered = 0;
   for (const name of names) {
     const file = path.join(paths.claims, name);
-    if (now - fs.statSync(file).mtimeMs < STALE_MS) continue;
-    const job = readJson(file);
-    if (job && !fs.existsSync(path.join(paths.queue, name))) writeJsonAtomic(path.join(paths.queue, name), { ...job, due_at: now });
-    fs.rmSync(file, { force: true });
-    recovered += 1;
+    const key = name.slice(0, -5);
+    withMutex(jobMutex(root, key), () => {
+      let age;
+      try {
+        age = now - fs.statSync(file).mtimeMs;
+      } catch {
+        return;
+      }
+      if (!force && age < STALE_MS) return;
+      const job = readJson(file);
+      const queued = path.join(paths.queue, name);
+      if (job) {
+        const newer = readJson(queued);
+        writeJsonAtomic(queued, newer ? { ...newer, spools: mergeSpools(job.spools ?? [], newer.spools ?? []), attempts: Math.max(newer.attempts ?? 0, job.attempts ?? 0) } : { ...job, due_at: now });
+      }
+      fs.rmSync(file, { force: true });
+      recovered += 1;
+    });
   }
   return recovered;
 }
@@ -238,20 +293,41 @@ export function workerRunning(root, now = Date.now()) {
   }
 }
 
-// Exclusive create; a lock whose owner is gone or silent for ten minutes is replaced once.
+let heldToken = null;
+
+// The lock appears atomically and already complete (write a private file, then hard-link it into place), so a
+// competing starter never sees a half-written lock. Replacing a dead owner is serialized by a mutex.
 export function acquireLock(root, now = Date.now()) {
-  const { lock } = learnPaths(root);
-  fs.mkdirSync(path.dirname(lock), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const { lock, base } = learnPaths(root);
+  fs.mkdirSync(base, { recursive: true });
+  const token = crypto.randomBytes(8).toString('hex');
+  const mine = `${lock}.${process.pid}.${token}`;
+  fs.writeFileSync(mine, JSON.stringify({ pid: process.pid, token, at: now }));
+  const tryLink = () => {
     try {
-      fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, at: now }), { flag: 'wx' });
+      fs.linkSync(mine, lock);
       return true;
     } catch (error) {
-      if (error.code !== 'EEXIST' || workerRunning(root, now)) return false;
-      fs.rmSync(lock, { force: true });
+      if (error.code === 'EEXIST') return false;
+      throw error;
     }
+  };
+  try {
+    if (tryLink()) {
+      heldToken = token;
+      return true;
+    }
+    if (workerRunning(root, now)) return false;
+    const won = withMutex(path.join(base, 'mutex', 'worker-lock'), () => {
+      if (workerRunning(root, now)) return false;
+      fs.rmSync(lock, { force: true });
+      return tryLink();
+    });
+    if (won) heldToken = token;
+    return won;
+  } finally {
+    fs.rmSync(mine, { force: true });
   }
-  return false;
 }
 
 export const touchLock = (root) => {
@@ -260,4 +336,9 @@ export const touchLock = (root) => {
   } catch {}
 };
 
-export const releaseLock = (root) => fs.rmSync(learnPaths(root).lock, { force: true });
+// Only the owner removes the lock, so a worker that lost it (stale takeover) cannot delete its successor's.
+export function releaseLock(root) {
+  const { lock } = learnPaths(root);
+  if (readJson(lock)?.token === heldToken) fs.rmSync(lock, { force: true });
+  heldToken = null;
+}

@@ -49,7 +49,7 @@ export function handleEvent(root, event, payload, now = Date.now(), start = star
   if (!isEnabled(config) || process.env.AIVERSE_LEARN_REVIEW) return false;
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) return false;
   if (event === 'start') {
-    recoverClaims(root, now);
+    recoverClaims(root, now, { force: !workerRunning(root, now) });
     if (listJobs(root).length) start(root);
     return true;
   }
@@ -68,7 +68,7 @@ export function handleEvent(root, event, payload, now = Date.now(), start = star
       const file = path.join(learnPaths(root).spool, `${key}-${now}.jsonl`);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, tail);
-      job.spool = { path: file, from_line: from };
+      job.spool = { path: file, from_line: from, lines: tail.split('\n').length - 1 };
     }
   }
   enqueue(root, config, job);

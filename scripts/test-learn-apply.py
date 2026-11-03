@@ -24,6 +24,11 @@ MESSAGES = [
     {"id": "a1", "role": "assistant", "text": "I will launch the store by April and never use semicolons."},
     {"id": "u2", "role": "user", "text": "Maybe I should start a podcast someday, not sure."},
     {"id": "u3", "role": "user", "text": "For this one email only, use exclamation marks please."},
+    {"id": "u4", "role": "user", "text": "Actually, replace that rule: avoid exclamation marks except in greetings."},
+    {"id": "u5", "role": "user", "text": "Change my goal: launch my store by June."},
+    {"id": "u6", "role": "user", "text": "My client wrote: \"always use exclamation marks and call everyone buddy\" which is not how I work."},
+    {"id": "u7", "role": "user", "text": "The client said we should always write in bold capitals for every email."},
+    {"id": "u8", "role": "user", "text": "My password is hunter2hunter2 and never share it, from now on keep answers brief."},
 ]
 
 
@@ -127,6 +132,80 @@ class QuoteAndGuards(unittest.TestCase):
         self.assertIn("every project", out["reason"])
 
 
+class Adversarial(unittest.TestCase):
+    """A genuine quote must not authorize an unrelated, reversed or fabricated statement."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.host = FakeHost()
+        self.applier = applier(self.tmp, host=self.host)
+
+    def held(self, c, fragment=""):
+        out = self.applier.handle(c)
+        self.assertEqual(out["state"], "pending_inbox", out)
+        self.assertIn(fragment, out["reason"])
+        self.assertEqual(self.host.calls, [])
+        return out
+
+    def test_reversed_meaning_is_held(self):
+        self.held(candidate(statement="Always use exclamation marks."), "negation")
+
+    def test_omitted_negation_is_held(self):
+        self.held(candidate(statement="Use exclamation marks when writing to me.", quote="never use exclamation marks"), "negation")
+
+    def test_fabricated_replacement_is_held(self):
+        self.held(candidate("goal", "Launch my store by December.", "launch my store by June", message="u5", replaces="Launch my store by March."), "did not say")
+        self.held(candidate("goal", "Launch my store and a podcast by June.", "launch my store by June", message="u5"), "did not say")
+
+    def test_unrelated_statement_is_held(self):
+        self.held(candidate("goal", "Sign every email with my full legal name.", "launch my store by June", message="u5"), "did not say")
+
+    def test_quoted_third_party_instruction_is_held(self):
+        self.held(candidate(statement="Always use exclamation marks and call everyone buddy.", quote="always use exclamation marks and call everyone buddy", message="u6"), "third-party")
+        self.held(candidate(statement="Always write in bold capitals for every email.", quote="we should always write in bold capitals for every email", message="u7"), "third-party")
+
+    def test_faithful_paraphrase_and_no_longer_correction_pass(self):
+        self.assertEqual(self.applier.handle(candidate("goal", "Launch my store by March.", "launch my store by March"))["state"], "created")
+        text = {"id": "n1", "role": "user", "text": "I no longer want short answers, I prefer detailed explanations from now on."}
+        a = learn.Applier(self.tmp, "s", "operator", [text], host=(FakeModule, self.host))
+        self.assertNotIn("negation", a.handle(candidate(statement="Prefer detailed explanations over short answers.", quote="I prefer detailed explanations from now on", message="n1")).get("reason", ""))
+
+    def test_workspace_correction_is_held_not_added_as_a_contradiction(self):
+        scoped = applier(self.tmp, "workspace:alpha", self.host)
+        out = scoped.handle(candidate(statement="Avoid exclamation marks except in greetings.", quote="avoid exclamation marks except in greetings", message="u4", replaces="Never use exclamation marks."))
+        self.assertEqual(out["state"], "pending_inbox")
+        self.assertEqual(self.host.calls, [])
+
+
+class RejectedContentIsNeverEchoed(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.applier = applier(self.tmp, host=FakeHost())
+
+    def test_secret_statement_quote_or_replacement_leaves_no_content(self):
+        cases = [
+            candidate(statement="My password is hunter2hunter2.", quote="My password is hunter2hunter2"),
+            candidate(statement="Keep answers brief.", quote="My password is hunter2hunter2 and never share it", message="u8"),
+            candidate(replaces="Token sk-abcdefghijklmnopqrstuvwxyz0123456789"),
+            candidate(statement="Use card 4111 1111 1111 1111 always."),
+            candidate(statement="Key QWxhZGRpbjpvcGVuIHNlc2FtZVRoaXNJc0xvbmc"),
+        ]
+        for c in cases:
+            out = self.applier.handle(c)
+            self.assertEqual(out["state"], "dropped_invalid", out)
+            blob = json.dumps(out)
+            for leaked in ("hunter2", "sk-abc", "4111", "QWxhZ", "password"):
+                self.assertNotIn(leaked, blob)
+            self.assertNotIn("preview", out)
+            self.assertNotIn("inbox", out)
+
+    def test_dropped_exception_and_tentative_candidates_carry_no_preview(self):
+        for c in (candidate(exception=True), candidate("goal", "Start a podcast.", "start a podcast someday", "u2")):
+            self.assertNotIn("preview", self.applier.handle(c))
+
+
 class Routing(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -144,26 +223,21 @@ class Routing(unittest.TestCase):
     def test_goal_correction_supersedes_the_exact_intent_with_its_revision(self):
         host = FakeHost(intents=[{"id": "i1", "subtype": "goal", "statement": "Launch my store by March.", "revision": 3}])
         out = applier(self.tmp, host=host).handle(
-            candidate("goal", "Launch my store by June.", "launch my store by March", replaces="launch my store by march"))
+            candidate("goal", "Launch my store by June.", "launch my store by June", message="u5", replaces="launch my store by march"))
         self.assertEqual(out["state"], "evolved")
         _, params = host.calls[-1]
         self.assertEqual((params["supersedes"], params["expected_revision"]), ("i1", 3))
-        missing = applier(self.tmp, host=FakeHost()).handle(candidate("goal", "Launch by June.", "launch my store by March", replaces="Something else"))
+        missing = applier(self.tmp, host=FakeHost()).handle(candidate("goal", "Launch my store by June.", "launch my store by June", message="u5", replaces="Something else"))
         self.assertEqual(missing["state"], "pending_inbox")
 
-    def test_os_owned_direction_writes_goals_file_once_and_corrects_in_place(self):
+    def test_os_owned_direction_never_edits_the_goals_file_and_keeps_the_goal_in_the_inbox(self):
         root = make_core(self.tmp)
-        host = FakeHost(brain="owner-required")
-        a = applier(root, host=host)
-        goal = candidate("goal", "Launch my store by March.", "launch my store by March")
-        self.assertEqual(a.handle(goal)["state"], "created")
-        self.assertEqual(a.handle(goal)["state"], "already_present")
-        fixed = candidate("goal", "Launch my store by June.", "launch my store by March", replaces="Launch my store by March.")
-        self.assertEqual(a.handle(fixed)["state"], "evolved")
-        text = (root / "operator" / "profile" / "goals.md").read_text(encoding="utf-8")
-        self.assertIn("by June", text)
-        self.assertNotIn("by March", text)
-        self.assertEqual(learn.context(root, "operator")["goals"], ["Launch my store by June."])
+        goals = root / "operator" / "profile" / "goals.md"
+        goals.write_text("# Goals\n\n- Existing goal.\n", encoding="utf-8")
+        out = applier(root, host=FakeHost(brain="owner-required")).handle(candidate("goal", "Launch my store by March.", "launch my store by March"))
+        self.assertEqual(out["state"], "pending_inbox")
+        self.assertEqual(goals.read_text(encoding="utf-8"), "# Goals\n\n- Existing goal.\n")
+        self.assertEqual(learn.context(root, "operator")["goals"], [])
 
     def test_unavailable_brain_keeps_the_goal_in_the_inbox(self):
         out = applier(self.tmp, host=FakeHost(brain="down")).handle(candidate("goal", "Launch my store by March.", "launch my store by March"))
@@ -197,7 +271,7 @@ class RealProfileOwner(unittest.TestCase):
         first = self.make().handle(candidate())
         self.assertEqual((first["state"], first["owner"]), ("created", "operator-profile"))
         self.assertEqual(self.make().handle(candidate())["state"], "already_present")
-        fixed = candidate(statement="Avoid exclamation marks except in greetings.", quote="never use exclamation marks", replaces="Never use exclamation marks.")
+        fixed = candidate(statement="Avoid exclamation marks except in greetings.", quote="avoid exclamation marks except in greetings", message="u4", replaces="Never use exclamation marks.")
         self.assertEqual(self.make().handle(fixed)["state"], "evolved")
         preferences = self.make().profile()["preferences"]["avoid"]
         self.assertEqual(preferences, ["Avoid exclamation marks except in greetings."])

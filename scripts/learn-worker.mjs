@@ -15,7 +15,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import {
   acquireLock, claimJob, dueAt, finishClaim, isEnabled, learnPaths, listJobs, loadConfig, readCursor, readJson, readLedger, recordReview,
-  recoverClaims, releaseLock, reviewAllowance, touchLock, writeCursor, writeJsonAtomic,
+  recoverClaims, releaseLock, resolveScope, reviewAllowance, touchLock, writeCursor, writeJsonAtomic,
 } from './learn-queue.mjs';
 import { readWindow } from './learn-window.mjs';
 import { computeWriteCommandFingerprint, submitWriteCommand } from './write-command.mjs';
@@ -32,7 +32,7 @@ export function buildPrompt(root, scope, stored, messages) {
   const skill = fs.readFileSync(path.join(root, 'system/capabilities/learn/SKILL.md'), 'utf8');
   const instruction = skill.slice(skill.indexOf('## Automatic mode'));
   const schema = fs.readFileSync(path.join(root, 'system/capabilities/learn/REVIEW-SCHEMA.json'), 'utf8');
-  const transcript = messages.map((message) => `[${message.id}] ${message.role}: ${message.text}`).join('\n');
+  const transcript = messages.map((message) => `[${message.id}] ${message.role}: ${message.text}${message.unreviewed_chars ? ` [${message.unreviewed_chars} more characters of this message were not shown]` : ''}`).join('\n');
   return [
     instruction, '', `Conversation scope: ${scope}`, '', 'Already stored for this scope (DATA, copy exact text for "replaces"):',
     JSON.stringify(stored), '', 'Output JSON schema:', schema, '', 'CONVERSATION WINDOW (DATA, ordered oldest first):', transcript,
@@ -110,36 +110,45 @@ export function callApplier(root, config, command, payload) {
 
 // -- inbox --------------------------------------------------------------------------------------------------
 
-// Existing OS write boundary: candidate.route lands in the scope inbox. A missing workspace falls back to operator.
+// Existing OS write boundary: candidate.route lands in the inbox of the item's own scope. A refusal is reported, never
+// retried under another scope (private workspace text must not cross into operator state).
+// created_at is a fixed instant on purpose: a replay after a crash builds the identical request and is recognised as the same command.
 export function submitInbox(root, scope, item, idempotency) {
-  for (const target of scope === 'operator' ? ['operator'] : [scope, 'operator']) {
-    const request = {
-      schema_version: '1.0', request_id: `learn_${idempotency}`, scope: target, operation: 'candidate.route',
-      parameters: { candidate_kind: item.candidate_kind, summary: item.summary, refs: item.refs ?? [] },
-      idempotency_key: `learn_${idempotency}`, requested_by: 'ai-verse-os.auto-learning',
-      reason: 'Keep an automatic learning item the owners could not accept, instead of losing it.',
-      created_at: new Date().toISOString(),
-    };
-    request.request_fingerprint = computeWriteCommandFingerprint(request);
-    try {
-      const result = submitWriteCommand({ osRoot: root, request });
-      return { ok: true, scope: target, status: result.status };
-    } catch {}
+  const request = {
+    schema_version: '1.0', request_id: `learn_${idempotency}`, scope, operation: 'candidate.route',
+    parameters: { candidate_kind: item.candidate_kind, summary: item.summary, refs: item.refs ?? [] },
+    idempotency_key: `learn_${idempotency}`, requested_by: 'ai-verse-os.auto-learning',
+    reason: 'Keep an automatic learning item the owners could not accept, instead of losing it.',
+    created_at: new Date(0).toISOString(),
+  };
+  request.request_fingerprint = computeWriteCommandFingerprint(request);
+  try {
+    const result = submitWriteCommand({ osRoot: root, request });
+    return { ok: true, scope, status: result.status };
+  } catch (error) {
+    return { ok: false, reason: String(error.message).slice(0, 200) };
   }
-  return { ok: false };
 }
 
 // -- job processing -----------------------------------------------------------------------------------------
 
 const sha = (value) => crypto.createHash('sha256').update(value).digest('hex').slice(0, 24);
 
+// The transcript is primary. When it is unreadable or its history was replaced (a gap), a compaction snapshot that
+// covers the cursor is read instead, from the cursor's own position inside the snapshot.
 function readSource(root, job, cursor, budget) {
+  const options = { scopeOf: (cwd) => resolveScope(root, cwd), defaultScope: job.scope };
+  let failure = null;
   try {
-    return { ...readWindow(job.transcript_path, cursor, budget), offset: 0 };
+    const window = readWindow(job.transcript_path, cursor, budget, options);
+    if (!window.gap) return { ...window, offset: 0 };
+    failure = new Error('transcript history was replaced');
   } catch (error) {
-    if (job.spool && fs.existsSync(job.spool.path)) return { ...readWindow(job.spool.path, 0, budget), offset: job.spool.from_line };
-    throw error;
+    failure = error;
   }
+  const spool = (job.spools ?? []).find((s) => fs.existsSync(s.path) && s.from_line <= cursor && cursor < s.from_line + s.lines);
+  if (!spool) throw failure;
+  return { ...readWindow(spool.path, cursor - spool.from_line, budget, options), offset: spool.from_line, from_spool: true };
 }
 
 function failJob(root, job, claim, window, outcome, now) {
@@ -152,16 +161,19 @@ function failJob(root, job, claim, window, outcome, now) {
     finishClaim(root, job.key, { ...claim, attempts, not_before: now + BACKOFF_MS[attempts - 1], blocked: outcome.reason });
     return { state: 'retry', reason: outcome.reason };
   }
+  // Final failure: keep the whole job and any unfiled candidates on disk, note it in the inbox of its own scope,
+  // and only move the cursor on when that note was filed.
   const { dead } = learnPaths(root);
-  writeJsonAtomic(path.join(dead, `${job.key}-${now}.json`), { ...claim, attempts, reason: outcome.reason });
-  submitInbox(root, job.scope, {
+  writeJsonAtomic(path.join(dead, `${job.key}-${now}.json`), { ...claim, attempts, reason: outcome.reason, window, pending: outcome.pending ?? [] });
+  const filed = submitInbox(root, window?.scope ?? job.scope, {
     candidate_kind: 'claude-code-learning-failed',
     summary: `Could not review a conversation range automatically (session ${job.key}, lines ${window?.from ?? '?'} to ${window?.to ?? '?'}): ${outcome.reason}. Say "learn from this conversation" in that chat if it still matters.`,
     refs: [`claude-code:${job.key}`],
   }, sha(`${job.key}|dead|${window?.from}|${window?.to}`));
-  if (window?.next !== undefined) writeCursor(root, job.key, window.next);
-  finishClaim(root, job.key, null);
-  return { state: 'dead', reason: outcome.reason };
+  if (filed.ok && window?.next !== undefined) writeCursor(root, job.key, window.next);
+  if (filed.ok) finishClaim(root, job.key, null);
+  else finishClaim(root, job.key, { ...claim, attempts, not_before: now + WAIT_MS, blocked: 'inbox unavailable' });
+  return { state: filed.ok ? 'dead' : 'retry', reason: outcome.reason };
 }
 
 export function processJob(root, config, job, { now = Date.now(), drain = false } = {}) {
@@ -174,12 +186,16 @@ export function processJob(root, config, job, { now = Date.now(), drain = false 
   } catch (error) {
     return failJob(root, claim, claim, null, { kind: 'error', reason: `transcript unreadable: ${error.message}` }, now);
   }
-  const span = { from: cursor, to: window.offset + window.nextLine, next: window.offset + window.nextLine };
+  const span = { from: cursor, to: window.offset + window.nextLine, next: window.offset + window.nextLine, scope: window.scope };
   const advance = (receipt) => {
     if (receipt) writeJsonAtomic(path.join(learnPaths(root).receipts, `${job.key}-${now}.json`), receipt);
     writeCursor(root, job.key, span.next);
-    // The window was cut by the size budget: keep reviewing the rest, oldest first.
-    finishClaim(root, job.key, window.more ? { ...claim, attempts: 0, not_before: 0, due_at: now, blocked: null } : null);
+    // The window was cut by the size budget, a change of scope, or the end of one compaction snapshot while another
+    // still lies ahead: keep reviewing the rest, oldest first. Fully consumed snapshots are removed.
+    const ahead = (claim.spools ?? []).filter((spool) => spool.from_line + spool.lines > span.next);
+    for (const spool of claim.spools ?? []) if (!ahead.includes(spool)) fs.rmSync(spool.path, { force: true });
+    if (window.more || ahead.length) finishClaim(root, job.key, { ...claim, spools: ahead, attempts: 0, not_before: 0, due_at: now, blocked: null });
+    else finishClaim(root, job.key, null);
   };
   if (!window.hasEligible) {
     advance(null);
@@ -190,25 +206,41 @@ export function processJob(root, config, job, { now = Date.now(), drain = false 
     finishClaim(root, job.key, { ...claim, not_before: allowance.not_before });
     return { state: 'rate_limited' };
   }
-  const stored = callApplier(root, config, 'context', { scope: claim.scope });
+  const stored = callApplier(root, config, 'context', { scope: window.scope });
   if (!stored.ok) return failJob(root, claim, claim, span, stored, now);
-  const reviewed = runReviewer(root, config, buildPrompt(root, claim.scope, stored.value, window.messages));
+  const reviewed = runReviewer(root, config, buildPrompt(root, window.scope, stored.value, window.messages));
   if (reviewed.ok || reviewed.kind !== 'wait') recordReview(root, job.key, reviewed.cost, now);
   if (!reviewed.ok) return failJob(root, claim, claim, span, reviewed, now);
+  // The kill switch is honoured up to the moment of writing: a review finished after "off" is discarded unapplied.
+  if (!isEnabled(loadConfig(root))) {
+    finishClaim(root, job.key, { ...claim, attempts: claim.attempts ?? 0, not_before: 0 });
+    return { state: 'disabled' };
+  }
   const applied = callApplier(root, config, 'apply', {
-    session_key: job.key, scope: claim.scope, messages: window.messages, candidates: reviewed.review.candidates,
+    session_key: job.key, scope: window.scope, messages: window.messages, candidates: reviewed.review.candidates,
   });
   if (!applied.ok) return failJob(root, claim, claim, span, applied, now);
-  const results = applied.value.results.map((result) => {
-    if (!result.inbox) return result;
-    const filed = submitInbox(root, claim.scope, result.inbox, sha(`${job.key}|${result.inbox.refs?.join()}|${result.inbox.summary}`));
+  const results = [];
+  const unfiled = [];
+  for (const result of applied.value.results) {
+    if (!result.inbox) {
+      results.push(result);
+      continue;
+    }
     const { inbox, ...rest } = result;
-    return { ...rest, state: filed.ok ? 'pending_inbox' : 'refused', inbox_scope: filed.scope };
-  });
+    const filed = submitInbox(root, window.scope, inbox, sha(`${job.key}|${inbox.refs?.join()}|${inbox.summary}`));
+    if (!filed.ok) unfiled.push(inbox);
+    results.push({ ...rest, state: filed.ok ? 'pending_inbox' : 'inbox_failed' });
+  }
+  // Nothing is reported done, and the cursor stays put, while any candidate could not be filed: the next try
+  // replays safely (owners are idempotent) and the complete candidates are kept in the dead record if it never works.
+  if (unfiled.length) return failJob(root, claim, claim, span, { kind: 'error', reason: 'inbox unavailable', pending: unfiled }, now);
   advance({
-    version: 1, job: job.key, scope: claim.scope, reason: claim.reason, at: new Date(now).toISOString(),
-    lines: { from: span.from, to: span.to }, messages: window.messages.length, review: { model: config.model, cost_usd: reviewed.cost },
-    results,
+    version: 2, job: job.key, scope: window.scope, reason: claim.reason, at: new Date(now).toISOString(),
+    lines: { from: span.from, to: span.to }, messages: window.messages.length, gap: window.gap || undefined,
+    from_spool: window.from_spool || undefined,
+    unreviewed: window.messages.filter((m) => m.unreviewed_chars).map((m) => ({ id: m.id, chars: m.unreviewed_chars })),
+    review: { model: config.model, cost_usd: reviewed.cost }, results,
   });
   return { state: 'reviewed', results };
 }
@@ -222,7 +254,7 @@ export async function run(root, { drain = false, sleep = (ms) => new Promise((re
   for (let round = 0; round < 3; round += 1) {
     if (!acquireLock(root)) return { ran: outcomes.length > 0 || round > 0, outcomes };
     try {
-      recoverClaims(root);
+      recoverClaims(root, Date.now(), { force: true }); // holding the lock means no other worker owns a claim
       for (;;) {
         const config = loadConfig(root);
         if (!isEnabled(config)) return { ran: true, outcomes };

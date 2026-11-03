@@ -16,9 +16,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import os
 import re
-import subprocess
 import sys
 import unicodedata
 from pathlib import Path
@@ -29,10 +27,18 @@ CLASSIFIER = "ai-verse-learn-auto-v1"
 CATEGORIES = {"communication", "working_style", "quality_expectations", "avoid"}
 MEMORY_TYPES = {"event", "experience", "lesson"}
 SECRET = re.compile(
-    r"password|passwd|api[ _-]?key|secret|credential|access[ _-]?token|private[ _-]?key|\bsk-[A-Za-z0-9_-]{16,}"
-    r"|permission|authori[sz]e|approval",
+    r"pass(?:word|wd|phrase|code)|\bpin\b|secret|credential|api[ _-]?key|(?:access|refresh|auth|bearer|session)[ _-]?token|\btoken\b|private[ _-]?key"
+    r"|recovery[ _-]?code|\b(?:ssn|iban|cvv|passport)\b|social security|credit[ _-]?card|\bsk-[A-Za-z0-9_-]{12,}"
+    r"|\b[A-Za-z0-9+/_-]{28,}\b|\b(?:\d[ -]?){13,19}\b|permission|authori[sz]e|approval",
     re.IGNORECASE,
 )
+NEGATORS = {"never", "not", "no", "dont", "don", "doesn", "didn", "won", "cannot", "cant", "without", "avoid", "stop", "nu", "niciodata", "fara", "nicio"}
+STOPWORDS = set("a an the and or of to in on for with my me i you your is are be it this that as at by from so do does am we our if but also please always from now on can will just".split())
+ATTRIBUTION = re.compile(r"\b(said|says|wrote|writes|replied|asked|told me|according to|email from|message from|quote[sd]?|client wants|boss wants|he wants|she wants|they want)\b", re.IGNORECASE)
+NO_LONGER = re.compile(r"\b(?:no longer|not anymore|nu mai)\b", re.IGNORECASE)
+SUPPORT_NEW, SUPPORT_CORRECTION = 0.8, 0.9
+
+
 # The reviewer may be wrong about tone. A hedged goal is never confirmed, and a one-off is never a rule.
 HEDGE = re.compile(
     r"\b(maybe|perhaps|might|someday|some day|one day|not sure|thinking (?:about|of)|considering|what if|poate|cândva|candva)\b",
@@ -64,6 +70,35 @@ def contains_words(haystack: str, needle: str) -> bool:
 def sentence_of(text: str, quote: str) -> str:
     """The sentence of an operator message that holds the quote, so a nearby 'just this time' counts as context."""
     return next((s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if contains_words(s, quote)), quote)
+
+
+def stems(text: str) -> set:
+    return {w if w.isdigit() else w[:5] for w in words(text) if w.isdigit() or (w not in STOPWORDS and len(w) > 2)}
+
+
+def negated(text: str) -> bool:
+    return any(w in NEGATORS for w in words(NO_LONGER.sub(" ", text)))
+
+
+def inside_quotation(text: str, quote: str) -> bool:
+    spans = re.findall(r"[\"\u201c\u201e\u00ab]([^\"\u201d\u00bb]{3,})[\"\u201d\u00bb]", text)
+    return any(contains_words(span, quote) for span in spans)
+
+
+def unsupported(statement: str, replaces: Optional[str], text: str, sentence: str, quote: str) -> Optional[str]:
+    """Hold a candidate whose statement the operator's own words do not clearly carry. Quote provenance alone is not enough."""
+    before = sentence[: max(sentence.casefold().find(quote.casefold()[:12]), 0)]
+    if inside_quotation(text, quote) or ATTRIBUTION.search(before):
+        return "the evidence looks like quoted or third-party text, not the operator's own instruction"
+    if negated(statement) != negated(sentence):
+        return "the statement reverses or drops a negation found in the evidence"
+    wanted = stems(statement)
+    have = stems(text) | (stems(replaces) if replaces else set())
+    if wanted and len(wanted & have) / len(wanted) < (SUPPORT_CORRECTION if replaces else SUPPORT_NEW):
+        return "the statement contains details the operator did not say"
+    if any(w.isdigit() and w not in stems(text) for w in wanted):
+        return "the statement contains a number the operator did not say"
+    return None
 
 
 def load_host(root: Path):
@@ -118,10 +153,13 @@ class Applier:
             return "statement size"
         if isinstance(c.get("confidence"), bool) or not isinstance(c.get("confidence"), (int, float)) or c["confidence"] < CONFIDENCE_MIN:
             return "confidence below threshold"
-        if SECRET.search(statement):
-            return "secret, credential or permission wording"
         if not isinstance(evidence, dict) or not isinstance(evidence.get("quote"), str):
             return "missing evidence"
+        replaces = c.get("replaces")
+        if replaces is not None and not isinstance(replaces, str):
+            return "malformed candidate"
+        if SECRET.search(" ".join([statement, evidence["quote"], replaces or ""])):
+            return "secret, credential or permission wording"
         message = self.messages.get(evidence.get("message_id"))
         if not message or message.get("role") != "user":
             return "evidence is not an operator message"
@@ -139,26 +177,33 @@ class Applier:
 
     # -- routing ----------------------------------------------------------------------------------------------
     def handle(self, c: Any) -> Dict[str, Any]:
+        # Rejected content is never echoed: an invalid or dropped candidate leaves only its kind and the reason.
+        result: Dict[str, Any] = {"kind": c.get("kind") if isinstance(c, dict) and isinstance(c.get("kind"), str) else None}
         invalid = self.validate(c)
-        preview = (c.get("statement", "") if isinstance(c, dict) else "")[:140]
-        result: Dict[str, Any] = {"kind": c.get("kind") if isinstance(c, dict) else None, "preview": preview}
         if invalid:
             return {**result, "state": "dropped_invalid", "reason": invalid}
         quote = c["evidence"]["quote"]
-        sentence = sentence_of(self.messages[c["evidence"]["message_id"]]["text"], quote)
+        text = self.messages[c["evidence"]["message_id"]]["text"]
+        sentence = sentence_of(text, quote)
         if c.get("exception") is True or ONE_OFF.search(sentence):
             return {**result, "state": "dropped_exception", "reason": "one-off exception never changes a rule"}
         if c["kind"] == "goal" and (c.get("tentative") is True or HEDGE.search(sentence)):
             return {**result, "state": "dropped_tentative", "reason": "tentative idea is not a confirmed goal"}
         if c["kind"] == "preference" and c.get("tentative") is True:
             return {**result, "state": "dropped_tentative", "reason": "tentative preference"}
+        result["preview"] = c["statement"].strip()[:140]
         key = self.effect_key(c)
         ref = f"claude-code:{self.session_key}:{c['evidence']['message_id']}"
+        held = unsupported(c["statement"], c.get("replaces"), text, sentence, quote)
+        if held:
+            return self.inbox(result, c, ref, held)
         # A global rule said inside a workspace is a real scope question: keep it in the inbox, never guess.
         if self.scope != "operator" and c["kind"] != "memory" and c.get("scope_hint") == "global":
             return self.inbox(result, c, ref, "unclear whether this applies to every project or only this workspace")
         try:
             if c["kind"] == "preference":
+                if self.scope != "operator" and c.get("replaces"):
+                    raise Refused("corrections inside a workspace are not applied automatically")
                 return {**result, **(self.preference(c, key, ref) if self.scope == "operator" else self.workspace_memory(c, key, ref, "preference"))}
             if c["kind"] == "goal":
                 return {**result, **self.goal(c, key, ref)}
@@ -222,7 +267,8 @@ class Applier:
         statement, replaces = c["statement"].strip(), c.get("replaces")
         brain = self.intents()
         if brain.get("state") != "ready":
-            return self.os_goal(statement, replaces, key)
+            # No Brain direction owner (a fresh Core): there is no revision-checked owner route for OS-owned goals yet.
+            raise Refused("goals are kept for review until the Brain direction owner is active")
         params = {"subtype": "goal", "statement": statement, "operation_id": key, "evidence_ref": ref, "source": "explicit_user"}
         if replaces:
             prior = next((i for i in brain["intents"] if norm(i.get("statement", "")) == norm(replaces)), None)
@@ -238,55 +284,20 @@ class Applier:
             return {**base, "state": "evolved" if replaces else "created"}
         raise Refused(f"Brain did not confirm the goal ({intent.get('state')})")
 
-    def os_goal(self, statement: str, replaces: Optional[str], key: str) -> Dict[str, Any]:
-        """OS-owned direction (no Brain handover): the same file onboarding writes, only when the OS rule allows it."""
-        if self.scope != "operator":
-            raise Refused("workspace goals need the Brain direction owner")
-        guard = subprocess.run(["node", str(self.root / "scripts/direction-owner.mjs"), "assert-strategic-write", "--root", str(self.root), "--scope", "operator"],
-                               capture_output=True, text=True, encoding="utf-8")
-        if guard.returncode != 0:
-            raise Refused("strategic direction is not writable by the OS owner")
-        profile = self.root / "operator" / "profile"
-        file = profile / "goals.md"
-        if profile.is_symlink() or file.is_symlink():
-            raise Refused("goals file path is unsafe")
-        profile.mkdir(parents=True, exist_ok=True)
-        text = file.read_text(encoding="utf-8") if file.exists() else "# Goals\n\n"
-        base = {"owner": "os-goals", "operation": "operator/profile/goals.md", "ref": f"learn:{key[:12]}"}
-        lines = text.split("\n")
-        if f"<!-- learn:{key} -->" in text or any(norm(line.split("<!--")[0].lstrip("- ")) == norm(statement) for line in lines):
-            return {**base, "state": "already_present"}
-        entry = f"- {statement} <!-- learn:{key} -->"
-        if replaces:
-            hits = [i for i, line in enumerate(lines) if line.lstrip().startswith("-") and norm(line.split("<!--")[0].lstrip("- ")) == norm(replaces)]
-            if len(hits) != 1:
-                raise Refused("the goal to replace was not found exactly once")
-            lines[hits[0]] = entry
-            updated = "\n".join(lines)
-        else:
-            updated = (text if text.endswith("\n") else text + "\n") + entry + "\n"
-        temp = file.with_name(f".goals-{os.getpid()}.tmp")
-        temp.write_text(updated, encoding="utf-8")
-        os.replace(temp, file)
-        return {**base, "state": "evolved" if replaces else "created"}
-
 
 def context(root: Path, scope: str) -> Dict[str, Any]:
-    """What is already stored, so the reviewer can say exactly what a correction replaces."""
+    """What is already stored, so the reviewer can say exactly what a correction replaces.
+    Preferences exist only in the operator profile; workspace preference corrections are not applied automatically."""
     applier = Applier(root, "ctx", scope, [])
     out: Dict[str, Any] = {"scope": scope, "preferences": {}, "goals": []}
     if scope == "operator":
         out["preferences"] = {k: v for k, v in applier.profile()["preferences"].items() if k in CATEGORIES and v}
-        try:
-            brain = applier.intents()
-        except Exception:
-            brain = {"state": "unavailable"}
-        if brain.get("state") == "ready":
-            out["goals"] = [i["statement"] for i in brain["intents"] if i.get("subtype") == "goal"]
-        else:
-            goals = root / "operator" / "profile" / "goals.md"
-            if goals.is_file() and not goals.is_symlink():
-                out["goals"] = [l.split("<!--")[0].lstrip("- ").strip() for l in goals.read_text(encoding="utf-8").splitlines() if l.lstrip().startswith("-")]
+    try:
+        brain = applier.intents()
+    except Exception:
+        return out
+    if brain.get("state") == "ready":
+        out["goals"] = [i["statement"] for i in brain["intents"] if i.get("subtype") == "goal"]
     return out
 
 

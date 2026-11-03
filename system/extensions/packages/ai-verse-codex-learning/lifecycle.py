@@ -50,6 +50,41 @@ def is_ours(handler, root):
             and parts[6] == "hook")
 
 
+CLAUDE_EVENTS = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"]
+
+
+def claude_definition(root, python, build=None):
+    """Hook groups for Claude Code's settings.local.json (hooks key). PostToolUse has no matcher: every tool."""
+    file = root / ".aiverse/extensions" / ID / "bridge.py"
+    build = build or hashlib.sha256(file.read_bytes()).hexdigest()
+    argv = [python, str(file), "--root", str(root), "--build", build, "--harness", "claude", "hook"]
+    command = " ".join(shlex.quote(v) for v in argv)
+    hooks = {}
+    for event in CLAUDE_EVENTS:
+        group = {"hooks": [{"type": "command", "command": command, "timeout": 3 if event == "SessionEnd" else 30}]}
+        if event == "SessionStart":
+            group["matcher"] = "startup|resume|clear|compact"
+        hooks[event] = [group]
+    return {"hooks": hooks}
+
+
+def is_ours_claude(handler, root):
+    if not isinstance(handler, dict) or handler.get("type") != "command" or not isinstance(handler.get("command"), str):
+        return False
+    try:
+        parts = shlex.split(handler["command"])
+    except ValueError:
+        return False
+    return (len(parts) == 9 and re_python(Path(parts[0]).name)
+            and parts[1] == str(root / ".aiverse/extensions" / ID / "bridge.py")
+            and parts[2:4] == ["--root", str(root)] and parts[4] == "--build"
+            and parts[6:] == ["--harness", "claude", "hook"])
+
+
+def claude_build(handler):
+    return shlex.split(handler["command"])[5]
+
+
 def re_python(name):
     import re
     return bool(re.fullmatch(r"python(?:\d+(?:\.\d+)*)?(?:\.exe)?", name, re.I))

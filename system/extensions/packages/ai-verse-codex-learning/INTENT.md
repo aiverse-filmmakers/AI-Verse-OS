@@ -42,3 +42,7 @@ To inspect a handover plan, call `PREFIX intent plan --scope SCOPE` with `{}` on
 ## Acknowledge and review
 
 Translate internal results into everyday English: “Saved your overall goal”, “Already saved”, “Is this an overall goal or a project milestone?”, or “I could not save this goal yet; I kept it pending”. Do not expose internal owner, routing, capture, state-machine or scope terminology to a non-coder. For ambiguity ask one short question before writing anything. A goal change is not evidence that its outcome was achieved. Finish the existing original-turn review; no new user-style message or Stop continuation is required. Task progress and lessons retain existing owners. Brain writes never grant tools, scheduling, other workspace access or permissions.
+
+## Claude Code
+
+Use the same prefix printed in this turn's review command, which already contains `--harness claude`. Replace `review` with `intent capture` (or `intent link`, `intent read`) and keep `--session`, `--turn` and `--token`. Do not type the JSON in the command: save it as a new .json file in the notes folder named in the instructions and end the command with `--input-file` and that path. The bridge deletes the note after reading it, so write a fresh file for every command.

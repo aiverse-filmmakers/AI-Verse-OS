@@ -81,3 +81,34 @@ and use explicit scoped inputs first. Missing/uncertain declarations keep worksp
 candidates restricted and operator candidates as drafts. Explicit `workspace_local`
 intent stays restricted even when the method is portable. Existing proposal/auto
 policy still controls activation. Do not set declarations just to pass a gate.
+
+## Claude Code input
+
+In Claude Code the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused.
+
+## Noticing durable things and correcting them (Claude Code)
+
+A correction replaces the old entry through the owner's correction operation; never add a contradicting second entry.
+
+| What the user said | Where it goes |
+|---|---|
+| Identity fact, communication preference, pet peeve, work habit | route `profile` (add with `preferences`/`identity`) |
+| A changed preference ("I changed my mind") | route `profile` with a `correction` object (replaces the old line) |
+| A goal, or a change to a goal | Brain `intent capture` (a separate command, not a review candidate); a correction names the prior intent |
+| A historical outcome or lesson | route `memory`; a correction uses type `correction` with `supersedes` |
+| Project convention, tool quirk, current status in a workspace | route `current` (workspace scope) |
+
+Profile correction (Claude only; Codex refuses a `correction` object). Read the exact current line first with `query --session SESSION --kind profile` (Claude only, operator scope only; it returns `preferences` and `preferences_source_sha256`). Then submit:
+
+    {"route": "profile",
+     "parameters": {
+       "correction": {"category": "communication",
+                      "previous": "Prefers answers as short bullet points.",
+                      "replacement": "Prefers answers as short paragraphs."},
+       "evidence": {"stable": true, "explicit_or_strong": true, "privacy_ambiguous": false,
+                    "contains_sensitive": false, "contains_secret": false,
+                    "reason": "The user explicitly changed a durable preference."}},
+     "evidence": [{"source_id": "user", "quote": "give me answers as short paragraphs"}]}
+
+`category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: for Claude the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
+

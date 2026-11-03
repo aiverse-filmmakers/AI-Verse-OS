@@ -760,5 +760,197 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertNotIn("input file", intent.stdout.lower())
 
 
+
+EVIDENCE = {"stable": True, "explicit_or_strong": True, "privacy_ambiguous": False,
+            "contains_sensitive": False, "contains_secret": False, "reason": "Explicit durable preference."}
+
+
+class ProfileCorrectionTests(ClaudeFixture):
+    """Real host adapter and real profile owner in the fixture; no mocked owner."""
+
+    def setUp(self):
+        super().setUp()
+        self.n = 0
+
+    def profile_candidate(self, text, quote):
+        return {"route": "profile", "parameters": {"preferences": {"communication": [text]},
+                                                   "evidence": dict(EVIDENCE)},
+                "evidence": [{"source_id": "user", "quote": quote}]}
+
+    def correction_candidate(self, previous, replacement, quote, **extra):
+        return {"route": "profile", "parameters": {"correction": {
+            "category": "communication", "previous": previous, "replacement": replacement,
+            "**": None} if False else {"category": "communication", "previous": previous,
+                                         "replacement": replacement},
+            "evidence": dict(EVIDENCE), **extra},
+            "evidence": [{"source_id": "user", "quote": quote}]}
+
+    def turn_and_review(self, bridge, prompt, candidate, session=None, cwd=None, **extra):
+        self.n += 1
+        session = session or self.session
+        bridge.hook({"session_id": session, "cwd": cwd or str(self.root), "hook_event_name": "UserPromptSubmit",
+                     "permission_mode": "default", "prompt": prompt, **extra})
+        turn = bridge.state(session)["turn"]
+        return bridge.review(session, turn["id"], turn["token"], review_payload([candidate]))
+
+    def preferences(self):
+        return (self.root / "operator/profile/preferences.md").read_text()
+
+    def seed_bullets(self):
+        self.turn_and_review(self.bridge, "I prefer answers as short bullet points, not long paragraphs.",
+                             self.profile_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                                    "prefer answers as short bullet points"))
+        self.assertIn("short bullet points", self.preferences())
+
+    def inprocess_owner(self, mutate_on_correct=None):
+        import bridge as bridge_module
+        real = bridge_module.host_action
+
+        def wrapper(module, host, scope, operation, parameters, effect_id, action_class="write_local_reversible"):
+            request = real(module, host, scope, operation, parameters, effect_id, action_class)
+            if operation == "operator.profile.correct" and mutate_on_correct:
+                mutate_on_correct()
+            return request
+
+        original = Bridge.owner
+
+        def owner(bridge, operation, payload):
+            if operation in {"learn", "defer"}:
+                return bridge_module.run_owner(bridge, operation, payload)
+            return original(bridge, operation, payload)
+        return patch.object(bridge_module, "host_action", wrapper), patch.object(Bridge, "owner", owner)
+
+    def test_instruction_contains_the_category_sentence_for_both_apps(self):
+        sentence = "Notice durable things in what the user says: identity facts, communication preferences and pet peeves"
+        self.assertIn(sentence, self.bridge.instruction({"session_id": "s", "turn": None}))
+        self.assertIn(sentence, Bridge(self.root).instruction({"session_id": "s", "turn": None}))
+
+    def test_correction_replaces_the_earlier_preference_and_keeps_the_quote(self):
+        self.seed_bullets()
+        receipt = self.turn_and_review(
+            self.bridge, "Actually, I changed my mind: give me answers as short paragraphs instead of bullet points.",
+            self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                      "Prefers answers as short paragraphs instead of bullet points.",
+                                      "give me answers as short paragraphs instead of bullet points"))
+        state = receipt["effects"][0]["result"]["result"]["operator_profile"]["state"]
+        self.assertIn(state, {"evolved", "created"})
+        text = self.preferences()
+        self.assertIn("short paragraphs", text)
+        self.assertNotIn("short bullet points, not long paragraphs", text)
+        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        self.assertIn('user said: \\"give me answers as short paragraphs instead of bullet points\\"', history)
+        self.assertIn("claude-code:user", history)
+
+    def test_capture_keeps_the_quote_in_the_provenance_reason(self):
+        self.seed_bullets()
+        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        self.assertIn('user said: \\"prefer answers as short bullet points\\"', history)
+
+    def test_repeating_the_same_correction_creates_no_duplicate(self):
+        self.seed_bullets()
+        candidate = self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                              "Prefers answers as short paragraphs instead of bullet points.",
+                                              "give me answers as short paragraphs instead of bullet points")
+        prompt = "Actually, I changed my mind: give me answers as short paragraphs instead of bullet points."
+        self.turn_and_review(self.bridge, prompt, candidate)
+        once = self.preferences()
+        again = self.turn_and_review(self.bridge, prompt, candidate)
+        self.assertEqual(self.preferences().count("short paragraphs instead of bullet points"),
+                         once.count("short paragraphs instead of bullet points"))
+        self.assertEqual(self.preferences().count("Prefers answers as short"), once.count("Prefers answers as short"))
+
+    def test_a_change_between_read_and_correct_is_retried_once(self):
+        self.seed_bullets()
+        calls = []
+
+        def touch():
+            calls.append(1)
+            if len(calls) == 1:
+                path = self.root / "operator/profile/preferences.md"
+                path.write_text(path.read_text() + "\n<!-- edited by someone else -->\n")
+        first, second = self.inprocess_owner(touch)
+        with first, second:
+            self.turn_and_review(
+                self.bridge, "Actually, I changed my mind: give me answers as short paragraphs instead of bullet points.",
+                self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                          "Prefers answers as short paragraphs instead of bullet points.",
+                                          "give me answers as short paragraphs instead of bullet points"))
+        self.assertEqual(len(calls), 2)
+        self.assertIn("short paragraphs instead of bullet points", self.preferences())
+        self.assertIn("edited by someone else", self.preferences())
+
+    def test_a_correction_that_stays_stale_becomes_a_pending_proposal(self):
+        self.seed_bullets()
+        before = self.preferences()
+
+        def touch():
+            path = self.root / "operator/profile/preferences.md"
+            path.write_text(path.read_text() + "\n<!-- again -->\n")
+        first, second = self.inprocess_owner(touch)
+        with first, second:
+            receipt = self.turn_and_review(
+                self.bridge, "Actually, I changed my mind: give me answers as short paragraphs instead of bullet points.",
+                self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                          "Prefers answers as short paragraphs instead of bullet points.",
+                                          "give me answers as short paragraphs instead of bullet points"))
+        self.assertEqual(receipt["effects"][0]["state"], "owner_unavailable")
+        self.assertIsNotNone(receipt["effects"][0]["pending_owner_receipt"])
+        self.assertNotIn("short paragraphs instead of bullet points", self.preferences())
+        self.assertTrue(list((self.root / "operator/inbox").glob("write-candidate-*.json")))
+        self.assertIn("short bullet points", self.preferences())
+        self.assertTrue(before.split("<!--")[0] in self.preferences())
+
+    def test_secret_in_a_correction_is_refused(self):
+        self.seed_bullets()
+        candidate = self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                              "Use the password is hunter22 for answers.",
+                                              "give me answers as short paragraphs")
+        with self.assertRaises(Refused):
+            self.turn_and_review(self.bridge, "Please give me answers as short paragraphs.", candidate)
+        self.assertNotIn("hunter22", self.preferences())
+
+    def test_a_workspace_scoped_turn_cannot_correct_the_operator_profile(self):
+        self.seed_bullets()
+        candidate = self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                              "Prefers answers as short paragraphs instead of bullet points.",
+                                              "give me answers as short paragraphs instead of bullet points")
+        with self.assertRaises(Refused):
+            self.turn_and_review(self.bridge, "Actually, give me answers as short paragraphs instead of bullet points.",
+                                 candidate, session="claude-workspace-0001", cwd=str(self.root / "workspaces/alpha"))
+        self.assertIn("short bullet points", self.preferences())
+
+    def test_codex_refuses_a_correction_object_exactly_as_before(self):
+        codex = Bridge(self.root)
+        candidate = self.correction_candidate("Use brief evidence-based answers.", "Use paragraphs please.",
+                                              "give me answers as short paragraphs")
+        with self.assertRaisesRegex(Refused, "unbounded profile parameters"):
+            self.turn_and_review(codex, "Please give me answers as short paragraphs.", candidate,
+                                 session="codex-session-0009", turn_id="turn-codex-1")
+
+    def test_bad_correction_shapes_are_refused(self):
+        for bad in ({"category": "identity", "previous": "a b c", "replacement": "d e f"},
+                    {"category": "communication", "previous": "same text", "replacement": "same text"},
+                    {"category": "communication", "previous": "a b c"},
+                    {"category": "communication", "previous": "a b c", "replacement": "d e f", "extra": 1}):
+            candidate = self.correction_candidate("x", "y", "give me answers as short paragraphs")
+            candidate["parameters"]["correction"] = bad
+            with self.assertRaises(Refused):
+                self.turn_and_review(self.bridge, "Please give me answers as short paragraphs.", candidate)
+
+    def test_query_profile_is_claude_only_and_refused_in_a_workspace(self):
+        self.seed_bullets()
+        good = self.cli("query", "--session", self.session, "--kind", "profile", harness="claude")
+        self.assertEqual(good.returncode, 0, good.stdout)
+        data = json.loads(good.stdout)["result"] if "result" in json.loads(good.stdout) else json.loads(good.stdout)
+        self.assertRegex(json.dumps(data), r"preferences_source_sha256")
+        self.assertIn("short bullet points", json.dumps(data))
+        codex = self.cli("query", "--session", self.session, "--kind", "profile")
+        self.assertEqual(codex.returncode, 2)
+        self.bridge.hook({"session_id": "claude-workspace-0002", "cwd": str(self.root / "workspaces/alpha"),
+                          "hook_event_name": "UserPromptSubmit", "permission_mode": "default", "prompt": "Continue."})
+        denied = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile", harness="claude")
+        self.assertEqual(denied.returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

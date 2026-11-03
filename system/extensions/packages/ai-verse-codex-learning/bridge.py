@@ -165,6 +165,42 @@ def profile_parameters(parameters):
     return result
 
 
+PROFILE_CATEGORIES = ("communication", "working_style", "quality_expectations", "avoid")
+
+
+def profile_correction_parameters(parameters):
+    """Claude only: replace one existing preference line through the profile owner's correction operation."""
+    correction = parameters.get("correction")
+    if (set(parameters) != {"correction", "evidence"} or not isinstance(correction, dict)
+            or set(correction) != {"category", "previous", "replacement"}):
+        raise Refused("profile correction needs exactly correction{category, previous, replacement} and evidence")
+    if correction["category"] not in PROFILE_CATEGORIES:
+        raise Refused("profile correction category must be one of " + ", ".join(PROFILE_CATEGORIES))
+    previous = bounded_text(correction["previous"], 1000)
+    replacement = bounded_text(correction["replacement"], 1000)
+    if previous == replacement:
+        raise Refused("a correction must change the preference")
+    if not isinstance(parameters["evidence"], dict):
+        raise Refused("profile correction needs the owner evidence object")
+    return {"correction": {"category": correction["category"], "previous": previous, "replacement": replacement},
+            "evidence": dict(parameters["evidence"])}
+
+
+def with_quote_reason(parameters, evidence_items, turn):
+    """Claude only: keep the authenticated user quote in the owner's provenance reason."""
+    quote = next((item["quote"] for item in evidence_items
+                  if turn["sources"].get(item["source_id"], {}).get("kind") == "user"), None)
+    if quote is None or not isinstance(parameters.get("evidence"), dict):
+        return parameters
+    result = {**parameters, "evidence": dict(parameters["evidence"])}
+    reason = 'user said: "' + " ".join(bounded_text(quote, 1200).split())[:900].rstrip() + '"'
+    note = result["evidence"].get("reason")
+    if isinstance(note, str) and note.strip() and len(reason) + len(note) + 3 <= 1000:
+        reason += " | " + note.strip()
+    result["evidence"]["reason"] = reason
+    return result
+
+
 def tokens(text):
     # JSON wrappers and punctuation are normalized; only contiguous observed words match.
     return re.findall(r"\w+(?:[-/.]\w+)*", text, re.UNICODE)
@@ -645,6 +681,9 @@ class Bridge:
             "Use only this project and bound scope; do not search parent directories or other chat state for your binding. "
             "Correct a wrong historical memory with type correction and the exact supersedes ID, keeping the same scope. Propose a Skill only "
             "when its trigger, inputs, method, validation and failure behavior are concrete and evidenced. "
+            "Notice durable things in what the user says: identity facts, communication preferences and pet peeves, "
+            "work habits, goals and changes to them, corrections, project conventions and tool quirks (workspace scope), "
+            "completed work and lessons (Memory). Ignore one time instructions, things already in the Core, and large pasted material. "
         )
         if turn and turn.get("state") in {"active", "review_requested"}:
             call = (f"{prefix} review --session {shlex.quote(state['session_id'])} "
@@ -1062,14 +1101,20 @@ class Bridge:
                 elif route == "profile":
                     if state["scope"] != "operator" or "user" not in kinds:
                         raise Refused("operator profile needs direct operator-scoped user evidence")
-                    if set(parameters) - {"identity", "preferences", "evidence"}:
+                    if set(parameters) - {"identity", "preferences", "evidence"} - (
+                            {"correction"} if self.harness == "claude" else set()):
                         raise Refused("unbounded profile parameters")
-                    parameters = profile_parameters(parameters)
+                    if "correction" in parameters:
+                        parameters = profile_correction_parameters(parameters)
+                    else:
+                        parameters = profile_parameters(parameters)
                     preferences = parameters.get("preferences", {})
                     if preferences.get("approval_boundaries"):
                         raise Refused("learning cannot expand permission or alter approval policy")
                     if OVERRIDE.search(json.dumps(parameters)):
                         raise Refused("profile learning cannot override runtime rules or permissions")
+                    if self.harness == "claude":
+                        parameters = with_quote_reason(parameters, candidate["evidence"], turn)
                     candidate = {**candidate, "parameters": parameters}
                 elif route == "skills":
                     if set(parameters) != {"candidate", "skill_md", "task_evidence"}:
@@ -1179,9 +1224,9 @@ def normalize_claude_event(bridge, event):
     return event
 
 
-def host_action(module, host, scope, operation, parameters, effect_id):
+def host_action(module, host, scope, operation, parameters, effect_id, action_class="write_local_reversible"):
     request = {
-        "action_class": "write_local_reversible", "scope": scope, "operation": operation,
+        "action_class": action_class, "scope": scope, "operation": operation,
         "parameters": parameters, "idempotency_key": effect_id,
         "in_scope": True, "within_budget": True, "reversible": True,
         "reason": "Codex lifecycle review routes warranted evidence to its existing canonical owner."}
@@ -1242,6 +1287,26 @@ def current_write(root, host, module, payload):
             "source": str(file.relative_to(root)), "sha256": digest(after)}
 
 
+def profile_correct(bridge, module, host, payload, parameters):
+    """Read the profile, then correct one preference; one internal retry if it changed in between."""
+    correction = parameters["correction"]
+    for attempt in range(2):
+        suffix = "" if attempt == 0 else ":retry"
+        read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
+                                               payload["effect_id"] + ":read" + suffix, "read_local"))
+        snapshot = read["result"]["operator_profile"]
+        request = host_action(module, host, payload["scope"], "operator.profile.correct", {
+            "category": correction["category"], "previous": correction["previous"],
+            "replacement": correction["replacement"],
+            "expected_sha256": snapshot["preferences_source_sha256"],
+            "evidence": parameters["evidence"], "provenance": parameters["provenance"]},
+            payload["effect_id"] + suffix)
+        result = host.request_action(request)
+        if result["result"]["operator_profile"].get("state") != "stale":
+            return result
+    raise Refused("profile preferences kept changing; correction deferred")
+
+
 def run_owner(bridge, operation, payload):
     if (operation in {"learn", "defer", "digest"}
             and bridge.cancelled(payload["session_id"], payload["turn_id"])):
@@ -1255,6 +1320,12 @@ def run_owner(bridge, operation, payload):
         return bridge.intent_service().relevant(payload["scope"], payload.get("prompt", ""))
     if operation == "read_context":
         return host.read_context(payload["scope"])
+    if operation == "profile_read":
+        if bridge.harness != "claude":
+            raise Refused("profile query is only available to the Claude adapter")
+        read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
+                                               "profile-read:" + secrets.token_hex(8), "read_local"))
+        return read["result"]["operator_profile"]
     if operation == "retrieve_history_progressive":
         return curated_recall(host.retrieve_history_progressive(payload))
     if operation in {"check_correction", "inspect_history"}:
@@ -1314,6 +1385,10 @@ def run_owner(bridge, operation, payload):
         elif route == "profile":
             parameters["provenance"] = {"trigger_ref": f"{bridge.labels['ref']}:turn:{payload['turn_id']}",
                                         "classifier": ID, "source": bridge.labels["profile_source"]}
+            if "correction" in parameters:
+                if bridge.harness != "claude":
+                    raise Refused("profile corrections are only available to the Claude adapter")
+                return profile_correct(bridge, module, host, payload, parameters)
             operation = "operator.profile.ensure"
         elif route == "skills":
             parameters["candidate"] = {**parameters["candidate"], "evidence_refs": payload["refs"]}
@@ -1368,7 +1443,7 @@ def main():
     binding.add_argument("--quote", required=True)
     query = commands.add_parser("query")
     query.add_argument("--session", required=True)
-    query.add_argument("--kind", choices=["context", "memory", "capabilities", "connections"], required=True)
+    query.add_argument("--kind", choices=["context", "memory", "capabilities", "connections", "profile"], required=True)
     query.add_argument("--query", default="")
     query.add_argument("--depth", choices=["catalog", "summary", "detail", "source"], default="summary")
     query.add_argument("--input-file", help="Claude only: read input from a note file in the Claude input folder; it is deleted after reading")
@@ -1452,6 +1527,12 @@ def main():
                     if not request["query"] and isinstance(request["evidence_ref"], dict):
                         request["query"] = request["evidence_ref"].get("id", "")
                 result = bridge.owner("retrieve_history_progressive", request)
+            elif args.kind == "profile":
+                if bridge.harness != "claude":
+                    raise Refused("profile query is only available to the Claude adapter")
+                if scope != "operator":
+                    raise Refused("profile query is refused for workspace bound sessions")
+                result = bridge.owner("profile_read", {"scope": scope})
             else:
                 result = bridge.owner("list_" + args.kind, {"scope": scope})
         elif args.command == "set":

@@ -12,6 +12,7 @@ node_modules/
 .aiverse/extensions/
 .aiverse/os/
 .aiverse/direction/
+.aiverse/learn/
 
 # Installation-specific capability roots, external registrations and private inputs
 .aiverse/capability-providers*

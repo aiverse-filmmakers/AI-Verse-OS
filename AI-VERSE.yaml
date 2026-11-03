@@ -18,6 +18,12 @@ principles:
 paths:
   runtime_contract: AGENTS.md
   current_context_resolver: scripts/current-context.mjs
+  automatic_learning:
+    config: .aiverse/learn/config.json
+    hook: scripts/learn-hook.mjs
+    worker: scripts/learn-worker.mjs
+    applier: scripts/ai_verse_learn_apply.py
+    claude_settings: .claude/settings.json
   runtime_adapters:
     claude: CLAUDE.md
     codex_skills: .agents/skills/

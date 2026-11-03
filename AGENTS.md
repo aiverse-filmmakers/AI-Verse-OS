@@ -249,6 +249,8 @@ Write durable state only when it has a clear home and future value.
 
 If no canonical location exists, consult `EXPANSIONS.md` before creating a new top-level folder.
 
+Do not use the harness's own memory for durable facts; AI-Verse learns them from the conversation into Core. When `.aiverse/learn/config.json` sets `mode: auto`, Claude Code hooks queue finished conversation ranges and `scripts/learn-worker.mjs` reviews them quietly; the owners above remain the only place anything is written. See the Automatic mode section of `system/capabilities/learn/SKILL.md`.
+
 ## Privacy and safety
 
 - Never store passwords, API keys, private keys, recovery codes, session tokens, or authentication secrets in the repository.

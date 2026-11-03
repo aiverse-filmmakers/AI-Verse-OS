@@ -1,0 +1,9 @@
+{
+  "autoMemoryEnabled": false,
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/learn-hook.mjs\" start", "timeout": 10 }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/learn-hook.mjs\" stop", "timeout": 10 }] }],
+    "PreCompact": [{ "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/learn-hook.mjs\" precompact", "timeout": 10 }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/scripts/learn-hook.mjs\" end", "timeout": 5 }] }]
+  }
+}

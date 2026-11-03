@@ -1,4 +1,4 @@
-// Shared by the hook and the worker: configuration, paths, scope, and the one durable fallback file (the envelope).
+// Shared by the hook and the worker: configuration, paths, scope binding and the visible health state.
 // Mode is read from .aiverse/learn/config.json: off | propose | auto. Absent, unreadable or unknown means off.
 
 import crypto from 'node:crypto';
@@ -56,7 +56,7 @@ export const isEnabled = (config) => config.mode === 'propose' || config.mode ==
 
 export function learnPaths(root) {
   const base = path.join(root, 'runtime', 'learn');
-  return { base, db: path.join(base, 'learn.db'), spool: path.join(base, 'spool'), status: path.join(base, 'status.json') };
+  return { base, db: path.join(base, 'learn.db'), status: path.join(base, 'status.json') };
 }
 
 export const sha = (value, length = 24) => crypto.createHash('sha256').update(value).digest('hex').slice(0, length);
@@ -71,14 +71,39 @@ export function isMain(metaUrl) {
   }
 }
 
-// A visible health state (a file the member or a status tool can read). Best effort: when the disk is the problem it may not be
-// writable, and the caller reports the failure through its exit code instead.
-export function setStatus(root, code) {
+// The visible health state: runtime/learn/status.json holds the set of problems that exist right now ({ code, codes, at }), written
+// atomically so a reader never sees half of it. Conditions are independent: setting one never hides or clears another. Best effort:
+// when the disk itself is the problem the caller reports through its exit code as well.
+export function readStatus(root) {
   try {
+    const value = JSON.parse(fs.readFileSync(learnPaths(root).status, 'utf8'));
+    return Array.isArray(value.codes) ? value.codes.filter((c) => typeof c === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setStatus(root, code, on = true) {
+  try {
+    const current = readStatus(root);
+    const next = on ? [...new Set([...current, code])] : current.filter((c) => c !== code);
+    if (next.join() === current.join()) return;
     const { base, status } = learnPaths(root);
-    fs.mkdirSync(base, { recursive: true });
-    fs.writeFileSync(status, JSON.stringify({ code, at: new Date().toISOString() }));
+    fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+    const temp = `${status}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
+    fs.writeFileSync(temp, JSON.stringify({ code: next[0] ?? 'ok', codes: next, at: new Date().toISOString() }));
+    fs.renameSync(temp, status);
   } catch {}
+}
+
+// Storage the pipeline cannot rely on: a database in a folder a cloud-sync client or a network share manages (SQLite documents that
+// WAL does not work over network filesystems and that live database files must not be synced), or a SQLite older than the fix for
+// the WAL-reset bug (3.51.3, unless the vendor backported it). Only names are inspected; the filesystem type is not.
+const SYNCED = /(?:^|[\\/])(?:Dropbox|OneDrive[^\\/]*|Google ?Drive|iCloud ?Drive|Mobile Documents|CloudStorage|Box|pCloud|MEGA|Nextcloud|ownCloud|Sync)(?:[\\/]|$)|^\\\\|^\/(?:Volumes|mnt|net|run\/media)\//i;
+export const looksSynced = (target) => SYNCED.test(target);
+export function sqliteTooOld(version) {
+  const [a, b, c] = String(version).split('.').map(Number);
+  return a < 3 || (a === 3 && (b < 51 || (b === 51 && c < 3)));
 }
 
 // Scope binding of one record, from the cwd it was written in. cwd is an ACCESS boundary, not a statement about meaning:
@@ -99,88 +124,19 @@ export function resolveScope(root, cwd) {
   if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
   const [top, id] = relative.split(path.sep);
   if (top !== 'workspaces') return 'operator';
-  if (id && /^[a-z0-9][a-z0-9._-]{0,127}$/.test(id) && fs.existsSync(path.join(realRoot, 'workspaces', id, 'WORKSPACE.yaml'))) return `workspace:${id}`;
-  return 'unresolved';
+  return validWorkspace(realRoot, id) ? `workspace:${id}` : 'unresolved';
 }
 
-// -- the envelope: a durable capture the hook leaves when the database is busy or unavailable ----------------------------
-// One file, created under a name that carries the digest of its own content. It is only trusted, ingested and deleted when the
-// name, the digest, the schema and the location all agree; a foreign or altered file is left exactly as it is.
-
-const ENVELOPE_NAME = /^env-(\d{15})-([0-9a-f]{8})-([0-9a-f]{16})\.json(\.tmp)?$/;
-const SCOPE = /^(?:operator|unresolved|workspace:[a-z0-9][a-z0-9._-]{0,127})$/;
-const REASONS = ['idle', 'before_compaction', 'session_end', 'session_start'];
-
-export function validEnvelope(value) {
-  const ok = (v, type) => typeof v === type;
-  if (!value || value.v !== 1 || !/^[0-9a-f]{16}$/.test(value.key) || !ok(value.session_id, 'string') || !ok(value.transcript_path, 'string')) return false;
-  if (!REASONS.includes(value.reason) || !Number.isFinite(value.at) || !value.config || !Number.isFinite(value.config.idle_seconds) || !Number.isFinite(value.config.max_pending_turns)) return false;
-  return Array.isArray(value.records) && value.records.every((r) => r && ok(r.uuid, 'string') && r.uuid && ok(r.text, 'string')
-    && (r.ts === null || ok(r.ts, 'string')) && Number.isFinite(r.seq) && SCOPE.test(r.scope));
-}
-
-// io is the file API (tests inject failures); crash is a test seam that kills the process at a named point.
-export function writeEnvelope(root, batch, { io = fs, crash = () => {} } = {}) {
-  const { spool } = learnPaths(root);
-  io.mkdirSync(spool, { recursive: true });
-  const body = JSON.stringify({ v: 1, ...batch });
-  const digest = sha(body, 16);
-  const name = `env-${String(Date.now()).padStart(15, '0')}-${crypto.randomBytes(4).toString('hex')}-${digest}.json`;
-  const temp = path.join(spool, `${name}.tmp`);
-  let fd = null;
+// A workspace exists for the pipeline only when its folder is a real directory inside the Core and its manifest names that same id.
+export function validWorkspace(root, id) {
+  if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(id)) return false;
   try {
-    fd = io.openSync(temp, 'wx');
-    io.writeSync(fd, body);
-    io.fsyncSync(fd);
-    io.closeSync(fd);
-    fd = null;
-    crash('envelope_before_rename');
-    io.renameSync(temp, path.join(spool, name));
-    if (process.platform !== 'win32') {
-      const dir = io.openSync(spool, 'r');
-      try { io.fsyncSync(dir); } finally { io.closeSync(dir); }
-    }
-  } catch (error) {
-    if (fd !== null) try { io.closeSync(fd); } catch {}
-    try { io.rmSync(temp, { force: true }); } catch {}
-    throw error;
-  }
-  return name;
-}
-
-// Every envelope in the spool that is whole and ours. A finished temp file (the process died after its fsync, before the rename)
-// is recovered the same way once it is old enough that no writer can still be filling it.
-export function listEnvelopes(root, now = Date.now()) {
-  const { spool } = learnPaths(root);
-  let names = [];
-  try { names = fs.readdirSync(spool); } catch { return []; }
-  const found = [];
-  for (const name of names.sort()) {
-    const m = ENVELOPE_NAME.exec(name);
-    if (!m) continue;
-    const file = path.join(spool, name);
-    try {
-      const st = fs.lstatSync(file);
-      if (!st.isFile() || st.isSymbolicLink() || (m[4] && now - st.mtimeMs < 60000)) continue;
-      const text = fs.readFileSync(file, 'utf8');
-      if (sha(text, 16) !== m[3]) continue;
-      const value = JSON.parse(text);
-      if (validEnvelope(value)) found.push({ file, name, value });
-    } catch {}
-  }
-  return found;
-}
-
-// The one deletion path of the pipeline: the file must still be a plain file in the spool whose content matches its own name.
-export function removeEnvelope(root, file) {
-  const { spool } = learnPaths(root);
-  try {
-    const m = ENVELOPE_NAME.exec(path.basename(file));
-    const st = fs.lstatSync(file);
-    if (!m || !st.isFile() || st.isSymbolicLink() || fs.realpathSync(path.dirname(file)) !== fs.realpathSync(spool)) return false;
-    if (sha(fs.readFileSync(file, 'utf8'), 16) !== m[3]) return false;
-    fs.rmSync(file);
-    return true;
+    const realRoot = fs.realpathSync(root);
+    const dir = path.join(realRoot, 'workspaces', id);
+    if (fs.lstatSync(dir).isSymbolicLink() || fs.realpathSync(dir) !== dir) return false;
+    const manifest = path.join(dir, 'WORKSPACE.yaml');
+    if (fs.lstatSync(manifest).isSymbolicLink() || !fs.statSync(manifest).isFile()) return false;
+    return new RegExp(`^id:\\s*["']?${id.replace(/[.]/g, '\\.')}["']?\\s*$`, 'm').test(fs.readFileSync(manifest, 'utf8'));
   } catch {
     return false;
   }

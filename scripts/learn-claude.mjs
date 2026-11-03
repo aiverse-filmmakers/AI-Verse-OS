@@ -4,9 +4,9 @@
 // Windows: spawn cannot run a .cmd shim without a shell (and cmd.exe quoting of JSON arguments is not safe), so we find the
 // file ourselves (PATH x PATHEXT) and look at what it is:
 //   claude.exe              spawn it directly (native installer)
-//   claude.cmd / .ps1 shim  the npm shim names a node script ("%dp0%\node_modules\...\cli.js"); run that script with the
+//   claude.cmd / .bat shim  the npm shim names a node script ("%dp0%\node_modules\...\cli.js"); run that script with the
 //                           current node (process.execPath). Nothing is passed through a shell.
-//   anything else           unresolved: the reviewer is not run (code claude_unresolved) rather than falling back to a shell.
+//   anything else           (a PowerShell .ps1 shim included, which is not supported) unresolved: the reviewer is not run (code claude_unresolved) rather than falling back to a shell.
 // A configured claude_command whose first item is a .js/.mjs/.cjs file is run with node on every platform.
 
 import fs from 'node:fs';

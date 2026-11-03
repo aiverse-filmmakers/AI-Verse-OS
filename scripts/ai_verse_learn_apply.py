@@ -100,10 +100,6 @@ class Refused(Exception):
     pass
 
 
-def nfc(text: str) -> str:
-    return unicodedata.normalize("NFC", text)
-
-
 def tokens(text: str) -> List[str]:
     folded = unicodedata.normalize("NFKC", text).casefold()
     return re.findall(r"\w+", NO_LONGER.sub(" nolonger ", folded))
@@ -113,13 +109,30 @@ def norm(text: str) -> str:
     return " ".join(tokens(text))
 
 
+# Every position this module reports or receives counts UTF-16 code units (a JavaScript string index): one coordinate system from the
+# transcript to the stored evidence. Python itself counts code points, so positions are converted at the two edges.
+def u16(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def from_u16(text: str, units: int) -> int:
+    """The code point index in `text` that sits `units` UTF-16 units from its start."""
+    seen = 0
+    for index, ch in enumerate(text):
+        if seen >= units:
+            return index
+        seen += 2 if ord(ch) > 0xFFFF else 1
+    return len(text)
+
+
 def sentence_spans(text: str) -> List[Tuple[int, int]]:
     return [(m.start(), m.end()) for m in re.finditer(r"[^.!?\n]+[.!?]*", text) if m.group().strip()]
 
 
 def cited_sentence(message: Dict[str, Any], at: int, length: int) -> Optional[str]:
     """The ONE sentence (or line) of the whole message that holds the whole quote; `at` is its place in the part that was shown."""
-    full, begin = nfc(message.get("full") or message["text"]), int(message.get("start") or 0) + at
+    full = message.get("full") or message["text"]
+    begin = from_u16(full, int(message.get("start") or 0)) + at  # `at` is a code point position in the shown part
     return next((full[a:b] for a, b in sentence_spans(full) if a <= begin and begin + length <= b), None)
 
 
@@ -207,9 +220,10 @@ def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: Lis
     message = messages.get(evidence.get("message_id"))
     if not message or message.get("role") != "user":
         return reject("not_operator_message")
-    full, quote = nfc(message.get("full") or message["text"]), nfc(evidence["quote"])
-    # The quote is the operator's own characters, exactly: same case, same punctuation, found in what was shown.
-    at = nfc(message["text"]).find(quote)
+    full, quote = message.get("full") or message["text"], evidence["quote"]
+    # The quote is the operator's own characters, exactly: no case folding, no punctuation or Unicode normalization (a composed quote
+    # does not match decomposed text); found in what was shown.
+    at = message["text"].find(quote)
     if len(quote.strip()) < 4 or at < 0:
         return reject("quote_not_found")
     if SECRET.search(" ".join([full, statement, quote, replaces or ""])):
@@ -221,18 +235,20 @@ def classify(c: Any, scope: str, messages: Dict[str, Dict[str, Any]], later: Lis
         return reject("one_off_exception")
 
     item = {
-        "kind": c["kind"], "statement": statement.strip(), "quote": quote, "message_id": evidence["message_id"], "quote_at": at,
+        "kind": c["kind"], "statement": statement.strip(), "quote": quote, "message_id": evidence["message_id"], "quote_at": u16(message["text"][:at]),
         "category": c.get("category"), "memory_type": c.get("memory_type"), "replaces": replaces, "confidence": float(c["confidence"]),
         "scope_hint": c.get("scope_hint") if c.get("scope_hint") in ("general", "project") else "project",
     }
-    if c["kind"] == "memory":
+    # Scope admission comes first and does not depend on what kind of candidate it is: unknown scope, or a project-specific hint on text
+    # written at the Core's root, parks a memory or a correction exactly as it parks a preference. A hint can only veto global routing.
+    if scope == "unresolved":
+        reason = "unscoped"
+    elif scope == "operator" and item["scope_hint"] != "general":
+        reason = "scope_unresolved"
+    elif c["kind"] == "memory":
         reason = "memory"
     elif replaces:
         reason = "correction"
-    elif scope == "unresolved":
-        reason = "unscoped"
-    elif scope == "operator" and item["scope_hint"] != "general":
-        reason = "scope_unresolved"  # a hint may only veto global routing; it never grants access to any workspace
     elif scope != "operator":
         reason = "workspace"
     elif c.get("tentative") is True or HEDGE.search(sentence or full):
@@ -277,12 +293,12 @@ def plan(request: Dict[str, Any]) -> Dict[str, Any]:
     def others_than(c: Any) -> List[str]:
         ev = c.get("evidence") if isinstance(c, dict) and isinstance(c.get("evidence"), dict) else {}
         cited = messages.get(ev.get("message_id"))
-        quote = nfc(ev["quote"]) if isinstance(ev.get("quote"), str) else ""
-        at = nfc(cited["text"]).find(quote) if cited and quote else -1
+        quote = ev["quote"] if isinstance(ev.get("quote"), str) else ""
+        at = cited["text"].find(quote) if cited and quote else -1
         mine = cited_sentence(cited, at, len(quote)) if at >= 0 else None
         found = []
         for m in request["messages"]:
-            text = nfc(m.get("full") or m["text"])
+            text = m.get("full") or m["text"]
             found += [text[a:b] for a, b in sentence_spans(text) if not (mine and norm(text[a:b]) == norm(mine))]
         return found
 

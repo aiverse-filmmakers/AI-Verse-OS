@@ -27,7 +27,9 @@ IF EXIST "%dp0%\\node.exe" (
 endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*
 `;
 
-const dir = () => fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'aiverse-claude-'));
+const made = [];
+const dir = () => { const d = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'aiverse-claude-')); made.push(d); return d; };
+process.on('exit', () => { for (const d of made) { try { fs.rmSync(d, { recursive: true, force: true }); } catch {} } });
 
 test('the npm shim names its node script; other text names nothing', () => {
   assert.equal(shimTarget(NPM_SHIM), 'node_modules\\@anthropic-ai\\claude-code\\cli.js');

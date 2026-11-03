@@ -196,7 +196,8 @@ function runtimePaths(root) {
   const base = assertSafeDirectory(path.join(runtime, 'write-commands'), runtime, 'write-command runtime', { create: true });
   const queue = assertSafeDirectory(path.join(base, 'queue'), base, 'write-command queue', { create: true });
   const receipts = assertSafeDirectory(path.join(base, 'receipts'), base, 'write-command receipts', { create: true });
-  return { runtime, base, queue, receipts };
+  const tmp = assertSafeDirectory(path.join(base, 'tmp'), base, 'write-command tmp', { create: true });
+  return { runtime, base, queue, receipts, tmp };
 }
 
 function safeReadJson(file, boundary, label) {
@@ -213,13 +214,23 @@ function safeReadJson(file, boundary, label) {
   }
 }
 
-function writeExclusiveJson(file, payload) {
-  const fd = fs.openSync(file, 'wx', 0o600);
+// Create-if-absent with the whole content or nothing: the file is written and fsynced under a private name and then linked into
+// place, so a process killed at any point leaves either no file or a complete one (never a half-written record), and an
+// existing file is never replaced (EEXIST). The private name lives in the runtime's own tmp folder (same filesystem), so a kill
+// never leaves a stray file in a queue, a receipt folder or an owner's inbox.
+function writeExclusiveJson(file, payload, tmpDir) {
+  const tmp = path.join(tmpDir, `.${path.basename(file)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.new`);
+  const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
     fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
+  }
+  try {
+    fs.linkSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
   }
 }
 
@@ -304,7 +315,13 @@ function existingResult(paths, key, request) {
   const existingCommand = safeReadJson(commandPath, paths.queue, 'existing write command');
   const existingReceipt = safeReadJson(receiptPath, paths.receipts, 'existing write command receipt');
   if (!existingCommand && !existingReceipt) return null;
-  if (!existingCommand || !existingReceipt) fail('write-command runtime contains an incomplete idempotency record', 4);
+  if (!existingCommand || !existingReceipt) {
+    // A process died between the two creations. The surviving half must still be bound to exactly this request; then the
+    // missing half is recreated from the same request (see enqueueWriteCommand) instead of leaving the key unusable forever.
+    const bound = existingCommand ? existingCommand.request?.request_fingerprint : existingReceipt.request_fingerprint;
+    if (bound !== request.request_fingerprint) fail('idempotency key is already bound to a different write command', 5);
+    return null;
+  }
   const storedRequest = existingCommand.request && typeof existingCommand.request === 'object'
     ? existingCommand.request
     : null;
@@ -335,7 +352,9 @@ export function enqueueWriteCommand({ osRoot = process.cwd(), request }) {
   const replay = existingResult(paths, key, normalized);
   if (replay) return replay;
 
-  const queuedAt = new Date().toISOString();
+  const priorCommand = safeReadJson(path.join(paths.queue, `${key}.json`), paths.queue, 'existing write command');
+  const priorReceipt = safeReadJson(path.join(paths.receipts, `${key}.json`), paths.receipts, 'existing write command receipt');
+  const queuedAt = priorCommand?.queued_at ?? priorReceipt?.queued_at ?? new Date().toISOString();
   const commandRecord = {
     schema_version: WRITE_COMMAND_SCHEMA_VERSION,
     provider: WRITE_COMMAND_PROVIDER,
@@ -349,28 +368,29 @@ export function enqueueWriteCommand({ osRoot = process.cwd(), request }) {
   const commandPath = path.join(paths.queue, `${key}.json`);
   const receiptPath = path.join(paths.receipts, `${key}.json`);
 
-  try {
-    writeExclusiveJson(commandPath, commandRecord);
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      const raced = existingResult(paths, key, normalized);
-      if (raced) return raced;
+  if (!priorCommand) {
+    try {
+      writeExclusiveJson(commandPath, commandRecord, paths.tmp);
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        const raced = existingResult(paths, key, normalized);
+        if (raced) return raced;
+      } else throw error;
     }
-    throw error;
   }
 
-  try {
-    writeExclusiveJson(receiptPath, receipt);
-  } catch (error) {
-    if (error?.code === 'EEXIST') {
-      const raced = existingResult(paths, key, normalized);
-      if (raced) return raced;
+  if (!priorReceipt) {
+    try {
+      writeExclusiveJson(receiptPath, receipt, paths.tmp);
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        const raced = existingResult(paths, key, normalized);
+        if (raced) return raced;
+      } else throw error; // the command stays: the next attempt completes it from the same request
     }
-    try { fs.rmSync(commandPath, { force: true }); } catch {}
-    throw error;
   }
 
-  return { ...receipt, replayed: false };
+  return { ...receipt, replayed: Boolean(priorCommand || priorReceipt) };
 }
 
 
@@ -433,10 +453,15 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
   const paths = runtimePaths(root);
   const key = commandKey(normalized);
   const replay = completedResult(paths, key, normalized);
-  if (replay) return replay;
-
   const commandPath = path.join(paths.queue, `${key}.json`);
   const receiptPath = path.join(paths.receipts, `${key}.json`);
+  if (replay) {
+    // The receipt is the commit point. A process killed after it and before the command record was updated leaves that record
+    // 'queued'; finish it here so both agree.
+    const stale = safeReadJson(commandPath, paths.queue, 'queued write command');
+    if (stale && stale.status !== 'completed') replaceJson(commandPath, { ...stale, status: 'completed', completed_at: replay.completed_at, canonical_effect_occurred: true });
+    return replay;
+  }
   const commandRecord = safeReadJson(commandPath, paths.queue, 'queued write command');
   const receipt = safeReadJson(receiptPath, paths.receipts, 'queued write command receipt');
   if (!commandRecord || !receipt) fail('write command must be enqueued before dispatch', 7);
@@ -483,7 +508,7 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
     promotion_occurred: false,
   };
 
-  if (!existing) writeExclusiveJson(candidatePath, routed);
+  if (!existing) writeExclusiveJson(candidatePath, routed, paths.tmp);
 
   const completedAt = new Date().toISOString();
   const completed = {
@@ -518,6 +543,32 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
     canonical_effect_occurred: true,
   });
   return { ...completed, replayed: false };
+}
+
+// Withdraws a proposal this pipeline routed: its content is replaced in the inbox candidate and in the stored request, and it is
+// marked withdrawn; nothing else is touched. Only candidates requested by the learning pipeline, for the exact request on file,
+// inside the owner's own inbox, are eligible. Returns { state: 'withdrawn' | 'absent' }.
+export function withdrawCandidate({ osRoot = process.cwd(), scope, idempotency_key: idempotencyKey, requested_by: requestedBy }) {
+  const root = validateRoot(osRoot);
+  if (!SCOPE.test(scope) || typeof idempotencyKey !== 'string') fail('withdraw needs a scope and an idempotency key', 7);
+  const paths = runtimePaths(root);
+  const key = commandKey({ scope, idempotency_key: idempotencyKey });
+  const commandPath = path.join(paths.queue, `${key}.json`);
+  const commandRecord = safeReadJson(commandPath, paths.queue, 'queued write command');
+  if (!commandRecord) return { state: 'absent' };
+  const request = commandRecord.request;
+  if (!request || request.requested_by !== requestedBy || request.operation !== 'candidate.route') fail('only a candidate routed by the requesting owner can be withdrawn', 6);
+  evaluatePermission(root, request, 'write-command.withdraw', 'modify_canonical_state');
+  const redacted = { candidate_kind: request.parameters.candidate_kind, summary: 'Withdrawn: this proposal was removed because it contained a credential.', refs: [] };
+  const inbox = ownerInbox(root, scope);
+  const candidatePath = path.join(inbox, `write-candidate-${key.slice(0, 32)}.json`);
+  const existing = safeReadJson(candidatePath, inbox, 'routed candidate');
+  if (existing) {
+    if (existing.request_fingerprint !== request.request_fingerprint) fail('canonical inbox record is bound to a different request', 5);
+    replaceJson(candidatePath, { ...existing, status: 'withdrawn', candidate: redacted, withdrawn_at: new Date().toISOString() });
+  }
+  replaceJson(commandPath, { ...commandRecord, request: { ...request, parameters: redacted }, withdrawn: true });
+  return { state: existing ? 'withdrawn' : 'absent' };
 }
 
 export function submitWriteCommand({ osRoot = process.cwd(), request }) {

@@ -158,6 +158,13 @@ class AutoIsNarrow(unittest.TestCase):
         self.assertEqual(plan(text, cand("I learned to keep a warm tone.", "warm tone in client emails", kind="memory"))["reason"], "memory")
         self.assertEqual(plan(text, {**c, "tentative": True})["reason"], "tentative")
 
+    def test_scope_admission_does_not_depend_on_the_kind_of_candidate(self):
+        text = "For Project Alpha I always want a warm tone in client emails."
+        for extra in ({}, {"replaces": "I always want formal tone."}, {"kind": "memory", "memory_type": "event"}):
+            c = {**cand(text, text, **{k: v for k, v in extra.items() if k != "kind"}), "scope_hint": "project", **({"kind": "memory", "memory_type": "event"} if extra.get("kind") else {})}
+            self.assertEqual(plan(text, c)["reason"], "scope_unresolved", extra)
+            self.assertEqual(plan(text, c, scope="unresolved")["reason"], "unscoped", extra)
+
     def test_novelty_fails_closed(self):
         text = "I always want detailed answers."
         c = cand(text, text)
@@ -216,6 +223,32 @@ class Evidence(unittest.TestCase):
         self.assertLessEqual(len(out["inbox"]["summary"]), 1500)
         self.assertIn("on 2026-01-02", out["inbox"]["summary"])
         self.assertEqual(len(item["quote"]), 971)
+
+
+class Positions(unittest.TestCase):
+    """One coordinate system: UTF-16 code units, the unit of a JavaScript string index."""
+
+    def test_offsets_count_utf16_units_and_the_quote_is_never_normalized(self):
+        text = "Cafe\u0301 \U0001F600 \u0219i: I always want warm replies."
+        quote = "I always want warm replies."
+        item = plan(text, cand(quote, quote))
+        js_index = len(text.encode("utf-16-le")) // 2 - len(quote)  # the quote ends the text
+        self.assertEqual(item["quote_at"], js_index)
+        self.assertEqual(item["reason"], "not_verbatim")  # the sentence has other words in front: a proposal, but the place is still exact
+        composed = plan(text, cand("I want a cafe.", "Caf\u00e9 \U0001F600"))
+        self.assertEqual(composed["reason"], "quote_not_found")  # composed is not what was written (decomposed)
+        decomposed = plan(text, cand("I always want warm replies.", "Cafe\u0301 \U0001F600"))
+        self.assertEqual(decomposed["quote_at"], 0)
+
+    def test_continuation_offsets_keep_the_same_unit(self):
+        full = "\U0001F600" * 40 + " filler. " + "From now on never use exclamation marks."
+        start = 2 * 40  # UTF-16 units: forty emoji take eighty
+        shown = full[40:]
+        item = learn.plan({"scope": "operator", "messages": [msg("m", shown, start=start, full=full)], "candidates": [cand("Never use exclamation marks.", "never use exclamation marks")], "stored": READ})["items"][0]
+        self.assertEqual(item["disposition"], "auto")
+        encoded = full.encode("utf-16-le")
+        begin = start + item["quote_at"]
+        self.assertEqual(encoded[2 * begin: 2 * (begin + len("never use exclamation marks"))].decode("utf-16-le"), "never use exclamation marks")
 
 
 class Secrets(unittest.TestCase):

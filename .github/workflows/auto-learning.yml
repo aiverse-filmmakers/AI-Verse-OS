@@ -10,6 +10,12 @@ on:
       - 'scripts/ai_verse_learn_apply.py'
       - 'scripts/ai_verse_host_adapter.py'
       - 'scripts/write-command.mjs'
+      - 'scripts/action-permission.mjs'
+      - 'scripts/operator-profile-owner.mjs'
+      - 'scripts/test-write-command.mjs'
+      - 'AI-VERSE.yaml'
+      - '.claude/skills/learn/**'
+      - '.agents/skills/learn/**'
       - 'system/capabilities/learn/**'
       - '.claude/settings.json'
       - '.github/workflows/auto-learning.yml'
@@ -38,6 +44,8 @@ jobs:
         run: node scripts/test-learn-claude.mjs
       - name: Test capture (record contract, streaming, secrets across messages, scope, fault injection)
         run: node scripts/test-learn-capture.mjs
+      - name: Test the inbox write under kills at every durable step, and withdrawal
+        run: node scripts/test-learn-inbox.mjs
       - name: Test the store under competing processes and crashes, and windows
         run: node scripts/test-learn-store.mjs
       - name: Test worker end to end with a fake claude, kill -9 replay, compaction and scopes

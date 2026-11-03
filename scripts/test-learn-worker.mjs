@@ -8,12 +8,12 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { learnPaths, sessionKey } from './learn-common.mjs';
+import { learnPaths, loadConfig, readStatus, sessionKey } from './learn-common.mjs';
 import { openStore } from './learn-store.mjs';
-import { bindScope, buildPrompt, reviewerArgs, reviewerEnv, run } from './learn-worker.mjs';
+import { bindItems, buildPrompt, reviewerArgs, reviewerEnv, run } from './learn-worker.mjs';
 import {
-  REPO, allText, appendTranscript, assistantLine, calls, candidate, core, dumpDb, hookEvent, inboxFiles, inboxText, items, mutate, occurrences, peek, preferences,
-  review, session, setMode, timePasses, userLine, workerAsync, workerProcess, workspace, writeTranscript,
+  REPO, allText, appendTranscript, assistantLine, calls, candidate, capture, core, dumpDb, hookEvent, inboxFiles, inboxText, items, mutate, occurrences, peek, preferences,
+  review, session, setMode, shown, timePasses, userLine, workerAsync, workerProcess, workspace, writeTranscript,
 } from './test-learn-support.mjs';
 
 const drain = (root) => run(root, { drain: true });
@@ -194,29 +194,48 @@ test('replacement and compaction: unread records are reviewed once whatever happ
   });
 });
 
-test('unknown scope is never copied anywhere global: it waits for the real scope, then goes to that workspace only', async () => {
+test('unknown scope is never copied anywhere global, whatever the kind of candidate; a member binds ONE item at a time, to a real workspace, against the revision it was shown at', async () => {
   const root = core();
   workspace(root, 'alpha');
   workspace(root, 'beta');
   fs.mkdirSync(path.join(root, 'workspaces', 'ghost'));
-  const note = (n) => `Project Alpha's private budget note number ${n} says I always want a warm tone in client emails.`;
-  const s = chat(root, [u(root, 'n1', note(1), null), u(root, 'g1', note(2), path.join(root, 'workspaces', 'ghost')), u(root, 'r1', note(3), root)]);
+  const note = (n, w) => `${w} private budget note number ${n}: I always want a warm tone in client emails.`;
+  const s = chat(root, [
+    u(root, 'n1', note(1, 'Alpha'), null),
+    u(root, 'g1', note(2, 'Beta'), path.join(root, 'workspaces', 'ghost')),
+    u(root, 'r1', note(3, 'Alpha'), root),
+    u(root, 'r2', 'In Project Beta we decided the launch is in June, which I will remember.', root),
+    u(root, 'r3', 'Actually for Project Alpha I always want formal tone in client emails.', root),
+  ]);
+  review([candidate('preference', note(1, 'Alpha'), note(1, 'Alpha'), 'o1'), candidate('preference', note(2, 'Beta'), note(2, 'Beta'), 'o2')], '.unresolved');
   review([
-    candidate('preference', note(1), note(1), 'o1'),
-  ], '.unresolved');
-  review([candidate('preference', note(3), note(3), 'o3', { scope_hint: 'project' })], '.operator');
+    candidate('preference', note(3, 'Alpha'), note(3, 'Alpha'), 'o3', { scope_hint: 'project' }),
+    candidate('memory', 'The launch of Project Beta is in June.', 'we decided the launch is in June', 'o4', { scope_hint: 'project', memory_type: 'event' }),
+    candidate('preference', 'I always want formal tone in client emails.', 'for Project Alpha I always want formal tone in client emails.', 'o5', { scope_hint: 'project', replaces: 'I always want a warm tone in client emails.' }),
+  ], '.operator');
   await drain(root);
-  assert.deepEqual(items(root).map((i) => i.state), ['needs_scope', 'needs_scope']); // the ghost folder's note and the root note with a project hint
+  // preference, memory and correction alike are parked: none of them reached any inbox
+  assert.deepEqual(items(root).map((i) => i.state), ['needs_scope', 'needs_scope', 'needs_scope', 'needs_scope', 'needs_scope']);
   assert.equal(inboxFiles(root).length + inboxFiles(root, 'workspaces/alpha/inbox').length + inboxFiles(root, 'workspaces/beta/inbox').length, 0);
   assert.equal(allText(path.join(root, 'operator')).includes('private budget'), false);
-  // the member says which project it was
+  // the member says which project: only the chosen items move, each against the revision it was shown at, with their words kept as evidence
   const db = await openStore(root);
-  bindScope(db, sessionKey(s.session_id), 'workspace:alpha');
+  const all = items(root);
+  const alpha = [all[0], all[2]].map((i) => ({ id: i.id, rev: i.rev }));
+  assert.throws(() => bindItems(db, root, alpha, 'workspace:nowhere', 'it is Alpha'), /scope_binding_refused/);
+  fs.mkdirSync(path.join(root, 'workspaces', 'gamma'));
+  fs.writeFileSync(path.join(root, 'workspaces', 'gamma', 'WORKSPACE.yaml'), 'id: somebody-else\n');
+  assert.throws(() => bindItems(db, root, alpha, 'workspace:gamma', 'it is Alpha'), /scope_binding_refused/); // a manifest must name itself
+  assert.throws(() => bindItems(db, root, alpha, 'workspace:alpha', ''), /scope_binding_refused/); // and the member's words are required
+  assert.deepEqual(bindItems(db, root, [{ id: all[0].id, rev: all[0].rev + 7 }], 'workspace:alpha', 'it is Alpha'), [{ id: all[0].id, bound: false }]); // a stale revision binds nothing
+  assert.deepEqual(bindItems(db, root, alpha, 'workspace:alpha', 'these two were about Alpha').map((r) => r.bound), [true, true]);
+  assert.deepEqual(bindItems(db, root, alpha, 'workspace:beta', 'oops').map((r) => r.bound), [false, false]); // already bound: no rebinding by mistake
   db.close();
+  assert.deepEqual(items(root).map((i) => i.state), ['pending', 'needs_scope', 'pending', 'needs_scope', 'needs_scope']);
   await drain(root);
-  assert.deepEqual(items(root).map((i) => i.state), ['done', 'done']);
   assert.equal(inboxFiles(root, 'workspaces/alpha/inbox').length, 2);
-  assert.equal(inboxFiles(root).length + inboxFiles(root, 'workspaces/beta/inbox').length, 0);
+  assert.equal(inboxFiles(root).length + inboxFiles(root, 'workspaces/beta/inbox').length, 0); // Beta's notes were never moved to Alpha, nor anywhere
+  assert.equal(items(root)[0].body.binding.evidence, 'these two were about Alpha');
   assert.equal(calls().some((c) => c.prompt.includes('Conversation scope: workspace:beta')), false);
 });
 
@@ -376,4 +395,176 @@ test('shipped Claude settings only wire the hooks; learning is dormant until con
   assert.deepEqual(Object.keys(settings.hooks).sort(), ['PreCompact', 'SessionEnd', 'SessionStart', 'Stop']);
   for (const groups of Object.values(settings.hooks)) assert.match(groups[0].hooks[0].command, /scripts\/learn-hook\.mjs/);
   assert.ok(buildPrompt(REPO, 'operator', {}, [{ id: 'o1', text: 'hi' }]).includes('[o1] operator: hi'));
+});
+
+const goodItem = (extra = {}) => candidate('preference', 'I always want warm replies with the code zeta99 on top.', 'I always want warm replies with the code zeta99 on top.', 'o1', extra);
+
+test('a credential found later withdraws proposals already filed: the inbox candidate and the stored request are redacted, nothing is recalled, and the gap is only the past', async () => {
+  const root = core();
+  const sentence = 'I always want warm replies with the code zeta99 on top.';
+  chat(root, [u(root, 'u1', sentence)]);
+  review([goodItem()]);
+  await drain(root);
+  assert.equal(inboxFiles(root).length, 1);
+  assert.match(inboxText(root), /zeta99/);
+  const [filed] = items(root);
+  assert.equal(filed.state, 'done');
+  assert.equal(filed.result.effect.scope, 'operator');
+  assert.match(filed.result.receipt.path, /^operator\/inbox\/write-candidate-/); // the actual receipt of the inbox write is kept
+  assert.ok(filed.result.receipt.command_id.startsWith('os_write_'));
+  // another chat reveals that zeta99 is a password
+  await capture(root, 'other-chat', [{ uuid: 'x1', text: 'My password is zeta99 by the way.' }]);
+  assert.deepEqual(peek(root, 'SELECT state, body FROM items').map((r) => [r.state, r.body]), [['withdraw_pending', '{}']]); // out of reach at once
+  await drain(root);
+  assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+  assert.equal(inboxText(root).includes('zeta99'), false);
+  assert.match(inboxText(root), /Withdrawn: this proposal was removed/);
+  assert.equal(allText(root).includes('zeta99'), false); // inbox, write-command queue, database, log
+  await drain(root);
+  assert.equal(inboxFiles(root).length, 1); // and nothing is filed again
+});
+
+// A capture in another process, finished before the call returns (the worker is synchronous, so a test seam cannot await).
+const revealSync = (root) => {
+  const out = spawnSync(process.execPath, ['--input-type=module', '-e', `import { openStore, ingestBatch } from './scripts/learn-store.mjs'; const db = await openStore(process.cwd()); ingestBatch(db, { key: 'kk', session_id: 'other', transcript_path: '/x', reason: 'session_end', at: Date.now(), config: { idle_seconds: 1, max_pending_turns: 6 }, records: [{ uuid: 'x1', seq: 0, ts: null, scope: 'operator', text: 'My password is zeta99 by the way.' }] }); db.close();`], { cwd: root, encoding: 'utf8', env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+  assert.equal(out.status, 0, out.stderr);
+};
+
+test('an item or a source excluded while the reviewer or the applier is running yields zero stale proposals', async () => {
+  const sentence = 'I always want warm replies with the code zeta99 on top.';
+  // (a) the source is excluded after the reviewer answered and before the answer is stored
+  let root = core();
+  chat(root, [u(root, 'u1', sentence)]);
+  review([goodItem()]);
+  await run(root, { drain: true, hooks: { afterReview: () => revealSync(root) } });
+  assert.equal(items(root).length, 0);
+  assert.equal(inboxFiles(root).length, 0);
+  assert.equal(peek(root, "SELECT state FROM occurrences WHERE uuid = 'u1'")[0].state, 'excluded');
+  // (b) the item is excluded while the applier is working on it, after its body was loaded
+  root = core();
+  chat(root, [u(root, 'u1', sentence)]);
+  review([goodItem()]);
+  await run(root, { drain: true, hooks: { beforeEffect: () => revealSync(root) } });
+  assert.equal(inboxFiles(root).length, 0);
+  assert.deepEqual(items(root).map((i) => i.state), ['excluded']);
+  // (c) the credential is found after the proposal was filed: it is withdrawn (see the test above); here, while it is being filed
+  root = core();
+  chat(root, [u(root, 'u1', sentence)]);
+  review([goodItem()]);
+  await run(root, { drain: true });
+  assert.equal(inboxFiles(root).length, 1);
+  revealSync(root);
+  await drain(root);
+  assert.equal(inboxText(root).includes('zeta99'), false);
+  assert.deepEqual(items(root).map((i) => i.state), ['withdrawn']);
+});
+
+test('a worker killed after claiming the effect and before filing it resumes and files exactly once', () => {
+  const root = core();
+  chat(root, [u(root, 'u1', 'I always want a warm tone in client emails.')]);
+  warm();
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_claim' });
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  assert.deepEqual(items(root).map((i) => i.state), ['filing']);
+  timePasses(root);
+  workerProcess(root);
+  assert.equal(inboxFiles(root).length, 1);
+  assert.deepEqual(items(root).map((i) => i.state), ['done']);
+  assert.equal(calls().length, 1);
+});
+
+test('a candidate repeating a known credential in ANY field is rejected, including a replacement that names it without its label', async () => {
+  const root = core();
+  await capture(root, 'earlier', [{ uuid: 'e1', text: 'My password is zeta99 by the way.' }]);
+  chat(root, [u(root, 'u1', 'I always want a warm tone in client emails.')]);
+  review([candidate('preference', 'I always want a warm tone in client emails.', 'I always want a warm tone in client emails.', 'o2', { replaces: 'I always want zeta99 in subjects.' })]);
+  await drain(root);
+  assert.equal(items(root).length, 0);
+  assert.equal(peek(root, "SELECT n FROM counters WHERE code = 'rejected_secret_in_source'")[0].n, 1);
+  assert.equal(allText(root).includes('zeta99'), false);
+});
+
+test('a continuation can never complete by repeating itself; rejected candidates are remembered and do not hold a page hostage', async () => {
+  const facts = Array.from({ length: 7 }, (_, i) => `I always want FACT${i + 1} notes.`).join(' ');
+  // page two repeats page one with more:true: nothing new, so the window is parked as a stalled continuation, its text kept
+  let root = core();
+  chat(root, [u(root, 'u1', facts)]);
+  process.env.FAKE_MODE = 'repeat';
+  await drain(root);
+  process.env.FAKE_MODE = 'ok';
+  assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'pending');
+  assert.equal(peek(root, 'SELECT code FROM failures')[0].code, 'reviewer_stalled');
+  assert.equal(items(root).length, 6); // what was reported is kept
+  // a first page of rejected candidates, then the real fact on the next page
+  root = core();
+  chat(root, [u(root, 'u1', 'I always want FACT1 notes.')]);
+  process.env.FAKE_MODE = 'rejects';
+  await drain(root);
+  process.env.FAKE_MODE = 'ok';
+  assert.deepEqual(items(root).map((i) => i.body.statement), ['I always want FACT1 notes.']);
+  assert.equal(peek(root, "SELECT COUNT(*) AS n FROM seen_candidates")[0].n, 7); // the six rejected ones and the accepted one
+  assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'done');
+  // seven facts, killed between the pages: the first page's items are already stored and the second page continues
+  root = core();
+  chat(root, [u(root, 'u1', facts)]);
+  process.env.FAKE_MODE = 'facts';
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'in_finish' }); // dies while storing the FIRST page
+  assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  timePasses(root);
+  workerProcess(root);
+  process.env.FAKE_MODE = 'ok';
+  assert.equal(items(root).length, 7);
+  assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'done');
+});
+
+test('positions are UTF-16 code units end to end, the quote stays the operator\'s exact characters, and the real inbox receipt is kept', async () => {
+  const root = core();
+  const decomposed = 'Café \u{1F600} și țara: I always want warm replies.'; // decomposed e + accent, an emoji, Romanian letters
+  chat(root, [u(root, 'u1', decomposed)]);
+  const quote = 'I always want warm replies.';
+  review([candidate('preference', quote, quote, 'o1')]);
+  await drain(root);
+  const [item] = items(root);
+  assert.equal(item.body.quote_abs, decomposed.indexOf(quote)); // JS index: the emoji counts as two units
+  assert.equal(item.body.quote_at, item.body.quote_abs);
+  assert.equal(decomposed.slice(item.body.quote_abs, item.body.quote_abs + quote.length), quote);
+  assert.ok(item.result.receipt.command_id);
+  // a composed quote does not match decomposed text: it is not the operator's characters
+  const other = core();
+  chat(other, [u(other, 'u1', 'Café order: I always want warm replies.')]);
+  review([candidate('preference', 'I always want a café order.', 'Café order: I always want warm replies.', 'o1')]);
+  await drain(other);
+  assert.equal(items(other).length, 0);
+  assert.equal(peek(other, "SELECT n FROM counters WHERE code = 'rejected_quote_not_found'")[0].n, 1);
+});
+
+test('review follows source time, not arrival: records captured late are still reviewed in the order they were written', async () => {
+  const root = core({ window_chars: 1000 });
+  review([]);
+  const body = (w) => `${w} ${'word '.repeat(170)}`.trim();
+  await capture(root, 'chat', [{ uuid: 'new', ts: '2026-01-02T12:00:00.000Z', text: body('NEWERSTATEMENT') }]);
+  await capture(root, 'chat', [{ uuid: 'old', ts: '2026-01-02T09:00:00.000Z', text: body('OLDERSTATEMENT') }]);
+  await drain(root);
+  const order = ['OLDERSTATEMENT', 'NEWERSTATEMENT'].map((w) => calls().findIndex((c) => shown(c).includes(w)));
+  assert.deepEqual([...order].sort((a, b) => a - b), order);
+  assert.ok(order[0] >= 0 && order[1] > order[0]);
+});
+
+test('the worker lease outlives the longest synchronous review, and the storage and runtime conditions are reported separately', async () => {
+  const { leaseMs } = await import('./learn-worker.mjs');
+  const root = core({ review_timeout_seconds: 600 });
+  assert.ok(leaseMs(loadConfig(root)) > 600 * 1000);
+  const { looksSynced, setStatus, sqliteTooOld } = await import('./learn-common.mjs');
+  assert.deepEqual([looksSynced('/Users/a/Dropbox/Core'), looksSynced('/Users/a/Library/CloudStorage/OneDrive-X/Core'), looksSynced('/Users/a/Documents/Core')], [true, true, false]);
+  assert.deepEqual([sqliteTooOld('3.50.4'), sqliteTooOld('3.51.2'), sqliteTooOld('3.51.3'), sqliteTooOld('3.53.0')], [true, true, false, false]);
+  setStatus(root, 'storage_pressure');
+  setStatus(root, 'capture_failed');
+  setStatus(root, 'storage_pressure', false); // clearing one never clears the other
+  assert.deepEqual(readStatus(root), ['capture_failed']);
+  assert.equal(fs.readdirSync(learnPaths(root).base).some((n) => n.endsWith('.tmp')), false);
+});
+
+test('the test suite cannot reach the real reviewer: the stand-in heads the PATH and was never called', () => {
+  const found = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['claude'], { encoding: 'utf8' });
+  assert.match(found.stdout.split('\n')[0], /aiverse-sentinel-/);
 });

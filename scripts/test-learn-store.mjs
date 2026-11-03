@@ -8,10 +8,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { learnPaths, loadConfig } from './learn-common.mjs';
-import { acquire, holds, openStore, release, renew, reserveReview, tx } from './learn-store.mjs';
+import { learnPaths, loadConfig, readStatus } from './learn-common.mjs';
+import { acquire, holds, ingestBatch, openStore, purgeWal, release, renew, reserveReview, tx } from './learn-store.mjs';
 import { buildWindow, chooseCut } from './learn-worker.mjs';
-import { core, hookEventAsync, peek, session, setMode, userLine, writeTranscript } from './test-learn-support.mjs';
+import { allText, capture, core, hookEvent, hookEventAsync, peek, session, setMode, tempDir, userLine, writeTranscript } from './test-learn-support.mjs';
 
 const child = (root, body) => new Promise((resolve) => {
   const script = `import { openStore, acquire, renew, holds, tx } from ${JSON.stringify(pathToFileURL(path.join(root, 'scripts', 'learn-store.mjs')).href)};
@@ -41,20 +41,16 @@ test('config: absent, malformed and unknown modes are off; propose and auto are 
   assert.equal('allow_unfenced_auto' in c, false);
 });
 
-test('forty hooks at once lose no capture: each is in the journal or in an envelope, and every occurrence is there exactly once', async () => {
+test('forty hooks at once lose nothing: each either records its batch or fails closed (exit 1, nothing written), and one more pass finds every occurrence exactly once', async () => {
   const root = core();
   const transcript = path.join(root, 't.jsonl');
   writeTranscript(transcript, [userLine('u1', 'I always want warm replies.', root), userLine('u2', 'My goal is to finish the report.', root)]);
   const codes = await Promise.all(Array.from({ length: 40 }, (_, i) => hookEventAsync(root, i % 2 ? 'stop' : 'end', { session_id: `s${i % 4}`, transcript_path: transcript, cwd: root })));
-  assert.ok(codes.every((c) => c === 0));
-  const { ingestEnvelopes } = await import('./learn-store.mjs');
-  const { listEnvelopes } = await import('./learn-common.mjs');
-  const db = await openStore(root);
-  ingestEnvelopes(db, root, listEnvelopes(root));
-  db.close();
-  assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM occurrences')[0].n, 8); // 4 sessions x 2 records
+  assert.ok(codes.every((c) => c === 0 || c === 1));
+  for (let i = 0; i < 4; i += 1) assert.equal(hookEvent(root, 'end', { session_id: `s${i}`, transcript_path: transcript, cwd: root }).status, 0);
+  assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM occurrences')[0].n, 8); // 4 sessions x 2 records, each once
   assert.equal(peek(root, 'SELECT COUNT(*) AS n FROM sessions')[0].n, 4);
-  assert.equal(listEnvelopes(root).length, 0);
+  assert.deepEqual(fs.readdirSync(learnPaths(root).base).filter((n) => !/^learn\.db/.test(n) && n !== 'status.json'), []); // no other file was ever written
 });
 
 test('six processes race for an expired lease: exactly one wins; the old holder fails every ownership check', async () => {
@@ -84,21 +80,68 @@ test('a process killed inside a transaction leaves no half state and blocks nobo
   db.close();
 });
 
-test('the schema is created once; a development database from before it is reset, not converted', async () => {
+test('the schema is created once and a database that is not ours, another version, or reached through a link is refused untouched', async () => {
   const root = core();
-  fs.mkdirSync(learnPaths(root).base, { recursive: true });
-  const { DatabaseSync } = await import('node:sqlite');
-  const old = new DatabaseSync(learnPaths(root).db);
-  old.exec("CREATE TABLE sources(session TEXT, fp TEXT); CREATE TABLE handoffs(session TEXT); CREATE TABLE sessions(key TEXT PRIMARY KEY, legacy TEXT); INSERT INTO sessions VALUES('k', 'x')");
-  old.close();
   const db = await openStore(root);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name);
-  assert.ok(['occurrences', 'items', 'sessions', 'secrets', 'captures'].every((t) => tables.includes(t)));
-  assert.ok(!tables.includes('sources') && !tables.includes('handoffs'));
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n, 0);
+  assert.ok(['occurrences', 'items', 'sessions', 'secrets', 'captures', 'gaps', 'seen_candidates'].every((t) => tables.includes(t)));
   assert.equal(db.prepare('PRAGMA secure_delete').get().secure_delete, 1);
+  assert.equal(db.prepare('PRAGMA application_id').get().application_id, 0x41495645);
   db.close();
   (await openStore(root)).close(); // opening a current database changes nothing
+  const { DatabaseSync } = await import('node:sqlite');
+  const refused = async (setup, check) => {
+    const r = core();
+    fs.mkdirSync(learnPaths(r).base, { recursive: true });
+    const before = setup(r);
+    await assert.rejects(openStore(r), (error) => error.code === 'store_incompatible' || /ENOENT|EEXIST/.test(error.code ?? ''));
+    check(r, before);
+  };
+  const sqliteAt = (file, sql) => { const d = new DatabaseSync(file); d.exec(sql); d.close(); };
+  await refused((r) => { sqliteAt(learnPaths(r).db, "CREATE TABLE sessions(key TEXT, legacy TEXT); INSERT INTO sessions VALUES('k', 'precious')"); },
+    (r) => assert.equal(peek(r, 'SELECT legacy FROM sessions')[0].legacy, 'precious')); // an unrelated or older database is preserved, never reset
+  await refused((r) => { sqliteAt(learnPaths(r).db, `CREATE TABLE occurrences(x); PRAGMA application_id = ${0x41495645}; PRAGMA user_version = 99`); },
+    (r) => assert.equal(peek(r, 'SELECT name FROM sqlite_master')[0].name, 'occurrences')); // a FUTURE version is refused, not downgraded
+  const linked = core();
+  const target = tempDir('aiverse-elsewhere-');
+  fs.mkdirSync(path.join(linked, 'runtime'), { recursive: true });
+  try {
+    fs.symlinkSync(target, learnPaths(linked).base);
+    await assert.rejects(openStore(linked), (error) => error.code === 'store_incompatible');
+    assert.deepEqual(fs.readdirSync(target), []);
+  } catch (error) { if (error.code !== 'EPERM') throw error; }
+  const dbLinked = core();
+  fs.mkdirSync(learnPaths(dbLinked).base, { recursive: true });
+  const elsewhere = path.join(target, 'x.db');
+  sqliteAt(elsewhere, 'CREATE TABLE t(x)');
+  try {
+    fs.symlinkSync(elsewhere, learnPaths(dbLinked).db);
+    await assert.rejects(openStore(dbLinked), (error) => error.code === 'store_incompatible');
+  } catch (error) { if (error.code !== 'EPERM') throw error; }
+  // the worker reports it and does nothing else
+  const worker = core();
+  fs.mkdirSync(learnPaths(worker).base, { recursive: true });
+  sqliteAt(learnPaths(worker).db, "CREATE TABLE sessions(key TEXT)");
+  const { run } = await import('./learn-worker.mjs');
+  assert.equal((await run(worker, { drain: true })).code, 'store_incompatible');
+  assert.ok(readStatus(worker).includes('store_incompatible'));
+});
+
+test('a purge of the write-ahead log that a reader blocks is noticed, kept pending and finished later; the secret is gone from the log afterwards', async () => {
+  const root = core();
+  await capture(root, 's1', [{ uuid: 'a', text: 'Always use lilac7 to log in.' }, { uuid: 'b', text: 'I always want warm replies.' }]);
+  const reader = new (await import('node:sqlite')).DatabaseSync(learnPaths(root).db);
+  reader.exec('BEGIN'); // a pinned reader
+  reader.prepare('SELECT COUNT(*) FROM occurrences').get();
+  const db = await openStore(root);
+  const found = ingestBatch(db, { key: 'k2', session_id: 's2', transcript_path: '/x', reason: 'session_end', at: Date.now(), config: { idle_seconds: 1, max_pending_turns: 6 }, records: [{ uuid: 'c', seq: 0, ts: null, scope: 'operator', text: 'My password is lilac7.' }] });
+  assert.equal(found.purged, false);
+  assert.equal(db.prepare("SELECT v FROM meta WHERE k = 'purge_pending'").get().v, '1');
+  reader.exec('ROLLBACK');
+  reader.close();
+  assert.equal(purgeWal(db), true);
+  db.close();
+  assert.equal(allText(root).includes('lilac7'), false);
 });
 
 test('windows are measured in absolute offsets: any budget, changed at any time, covers every character exactly once', async () => {

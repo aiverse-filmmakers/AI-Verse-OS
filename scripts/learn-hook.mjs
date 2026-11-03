@@ -1,18 +1,23 @@
 #!/usr/bin/env node
 // Claude Code hook entry for automatic learning: stop | precompact | end | start.
 //
-// At each of these boundaries it reads what was said since the last time (the human records of the transcript, streamed),
-// screens it, and records it in the journal (learn-store) in one transaction, then starts the detached worker. If the database
-// is busy or missing it leaves an envelope instead (a whole, digest-named file, fsynced) that the worker ingests. It reports
-// success only once the evidence is durable; otherwise it says so on stderr and exits 1, so a failed capture is never mistaken
-// for a protected one. It prints nothing otherwise, never blocks the chat, and does nothing at all while learning is off.
+// At each of these boundaries it reads what was said since the last time (the human records of the transcript, in bounded batches),
+// screens it, and records each batch in the journal (learn-store) in one transaction together with the read position, then starts
+// the detached worker. There is no file fallback: if the database cannot be reached or written, NOTHING is written (a raw record
+// must never reach disk before the credential screen can be consulted), the hook says so on stderr, exits 1, and sets the visible
+// `capture_failed` health state. The transcript itself is untouched, so the next boundary reads the same text again.
+//
+// What exit 1 does and does not mean: Claude Code treats it as a non-blocking error notice. It does NOT stop a compaction and it
+// does NOT protect anything. The design therefore captures at every Stop, so PreCompact only has the last turn to recover; if
+// both fail around a compaction, that text is lost to learning. Exit 2 would block the compaction, which could fail the very request
+// that triggered it, so it is deliberately not used. The hook does nothing at all while learning is off.
 
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { isEnabled, isMain, loadConfig, resolveScope, sessionKey, setStatus, writeEnvelope } from './learn-common.mjs';
+import { isEnabled, isMain, loadConfig, resolveScope, sessionKey, setStatus } from './learn-common.mjs';
 import { scanTranscript } from './learn-capture.mjs';
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
@@ -50,9 +55,11 @@ async function openQuietly(root) {
 }
 
 const REASONS = { stop: 'idle', precompact: 'before_compaction', end: 'session_end', start: 'session_start' };
+// At these boundaries the saved read position is not trusted at all: everything is read again (records are unique by uuid).
+const DESTRUCTIVE = new Set(['precompact', 'end', 'start']);
 
-// Returns { ok, via: 'journal' | 'envelope' | 'none' | 'skipped', code? }. `io`/`crash` are test seams for fault injection.
-export async function handleEvent(root, event, payload, now = Date.now(), start = startWorker, { io = fs, crash = () => {}, open = openQuietly } = {}) {
+// Returns { ok, via: 'journal' | 'skipped' | 'none', code? }. `open` is a test seam.
+export async function handleEvent(root, event, payload, now = Date.now(), start = startWorker, { open = openQuietly, scan = scanTranscript } = {}) {
   const config = loadConfig(root);
   if (!isEnabled(config) || process.env.AIVERSE_LEARN_REVIEW) return { ok: true, via: 'skipped' };
   if (!fs.existsSync(path.join(root, 'AI-VERSE.yaml'))) return { ok: true, via: 'skipped' };
@@ -65,39 +72,40 @@ export async function handleEvent(root, event, payload, now = Date.now(), start 
   }
   const key = sessionKey(sessionId);
   let db = null;
-  try { db = await open(root); } catch { db = null; }
   try {
-    let from = { from: 0, anchor: '' };
-    if (db) {
-      const saved = db.prepare('SELECT path, off, anchor FROM captures WHERE session = ?').get(key);
-      if (saved && saved.path === transcript) from = { from: saved.off, anchor: saved.anchor };
-    }
-    let scan;
     try {
-      scan = scanTranscript(transcript, from);
-    } catch {
-      if (event === 'start') { start(root); return { ok: true, via: 'none' }; } // nothing to read yet at the start of a new chat
-      throw new Error('transcript_unreadable');
+      db = await open(root);
+    } catch (error) {
+      setStatus(root, error?.code === 'store_incompatible' ? 'store_incompatible' : 'store_unavailable');
+      throw error;
     }
-    const records = scan.records.map((r) => ({ uuid: r.uuid, ts: r.ts, seq: r.seq, text: r.text, scope: resolveScope(root, r.cwd) })).filter((r) => r.scope !== null);
-    const batch = {
-      key, session_id: sessionId, transcript_path: transcript, reason, at: now,
-      config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns }, records,
-    };
-    let via = null;
-    if (db) {
+    const saved = db.prepare('SELECT path, off, anchor FROM captures WHERE session = ?').get(key);
+    let cursor = !DESTRUCTIVE.has(event) && saved && saved.path === transcript ? { from: saved.off, anchor: saved.anchor } : { from: 0, anchor: '' };
+    const { ingestBatch } = await import('./learn-store.mjs');
+    let incomplete = false;
+    for (let batches = 0; batches < 100000; batches += 1) {
+      let scanned;
       try {
-        const { ingestBatch } = await import('./learn-store.mjs');
-        ingestBatch(db, { ...batch, offset: { path: transcript, end: scan.end, anchor: scan.anchor } }, now);
-        via = 'journal';
-      } catch { via = null; }
+        scanned = scan(transcript, cursor);
+      } catch {
+        if (event === 'start') { start(root); return { ok: true, via: 'none' }; } // nothing to read yet at the start of a new chat
+        throw new Error('transcript_unreadable');
+      }
+      const records = scanned.records.map((r) => ({ ...r, scope: resolveScope(root, r.cwd) })).filter((r) => r.scope !== null);
+      const stored = ingestBatch(db, {
+        key, session_id: sessionId, transcript_path: transcript, reason, at: now,
+        config: { idle_seconds: config.idle_seconds, max_pending_turns: config.max_pending_turns }, records, gaps: scanned.gaps,
+        offset: { path: transcript, end: scanned.end, anchor: scanned.anchor },
+      }, now);
+      if (scanned.gaps.length) incomplete = true;
+      if (!stored.purged) setStatus(root, 'wal_purge_pending'); // an old copy of a late-found credential may still be in the log; the worker retries
+      if (scanned.done) break;
+      cursor = { from: scanned.end, anchor: scanned.anchor };
     }
-    if (!via) {
-      writeEnvelope(root, batch, { io, crash });
-      via = 'envelope';
-    }
+    setStatus(root, 'capture_failed', false);
+    setStatus(root, 'capture_incomplete', incomplete);
     start(root);
-    return { ok: true, via };
+    return { ok: true, via: 'journal' };
   } catch {
     setStatus(root, 'capture_failed');
     return { ok: false, code: 'capture_failed' };
@@ -112,7 +120,7 @@ async function main() {
   const payload = (await readPayload()) ?? {};
   const result = await handleEvent(root, event, payload);
   if (!result.ok) {
-    process.stderr.write('AI-Verse learning could not save this conversation (disk or permission problem); text compacted away now may not be learned. See runtime/learn/status.json.\n');
+    process.stderr.write('AI-Verse learning could not save this conversation (see runtime/learn/status.json); text compacted away now may not be learned.\n');
     return 1;
   }
   return 0;

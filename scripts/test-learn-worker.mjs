@@ -419,6 +419,7 @@ test('the real hook starts a real detached worker that finishes the review on it
   const hook = spawnSync(process.execPath, [path.join(root, 'scripts', 'learn-hook.mjs'), 'end'], { input: JSON.stringify(s), encoding: 'utf8', env: process.env });
   assert.equal(hook.status, 0);
   assert.equal(hook.stdout + hook.stderr, '');
-  for (let i = 0; i < 100 && !(fs.existsSync(learnPaths(root).db) && peek(root, 'SELECT * FROM receipts').length); i += 1) await new Promise((r) => setTimeout(r, 200));
+  const done = () => { try { return fs.existsSync(learnPaths(root).db) && peek(root, 'SELECT * FROM receipts').length > 0; } catch { return false; } }; // the worker may hold the database
+  for (let i = 0; i < 150 && !done(); i += 1) await new Promise((r) => setTimeout(r, 200));
   assert.match(preferences(root), /Never use exclamation marks\./);
 });

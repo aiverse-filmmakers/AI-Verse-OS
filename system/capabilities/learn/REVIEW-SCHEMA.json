@@ -1,7 +1,10 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["candidates"],
+  "required": [
+    "candidates",
+    "more"
+  ],
   "properties": {
     "candidates": {
       "type": "array",
@@ -9,28 +12,91 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["kind", "statement", "scope_hint", "exception", "tentative", "confidence", "evidence"],
+        "required": [
+          "kind",
+          "statement",
+          "scope_hint",
+          "exception",
+          "tentative",
+          "confidence",
+          "evidence"
+        ],
         "properties": {
-          "kind": { "enum": ["preference", "goal", "memory"] },
-          "statement": { "type": "string", "minLength": 3, "maxLength": 500 },
-          "category": { "enum": ["communication", "working_style", "quality_expectations", "avoid"] },
-          "memory_type": { "enum": ["event", "experience", "lesson"] },
-          "scope_hint": { "enum": ["global", "workspace"] },
-          "exception": { "type": "boolean" },
-          "tentative": { "type": "boolean" },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "replaces": { "type": ["string", "null"], "maxLength": 1000 },
+          "kind": {
+            "enum": [
+              "preference",
+              "goal",
+              "memory"
+            ]
+          },
+          "statement": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 500
+          },
+          "category": {
+            "enum": [
+              "communication",
+              "working_style",
+              "quality_expectations",
+              "avoid"
+            ]
+          },
+          "memory_type": {
+            "enum": [
+              "event",
+              "experience",
+              "lesson"
+            ]
+          },
+          "scope_hint": {
+            "enum": [
+              "general",
+              "project"
+            ]
+          },
+          "exception": {
+            "type": "boolean"
+          },
+          "tentative": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "replaces": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 1000
+          },
           "evidence": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["message_id", "quote"],
+            "required": [
+              "message_id",
+              "quote"
+            ],
             "properties": {
-              "message_id": { "type": "string", "maxLength": 200 },
-              "quote": { "type": "string", "minLength": 3, "maxLength": 1000 }
+              "message_id": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "quote": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 1000
+              }
             }
           }
         }
       }
+    },
+    "more": {
+      "type": "boolean"
     }
   }
 }

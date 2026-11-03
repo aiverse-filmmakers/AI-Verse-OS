@@ -6,6 +6,7 @@ on:
     paths:
       - 'scripts/learn-*.mjs'
       - 'scripts/test-learn-*'
+      - 'scripts/fixtures/**'
       - 'scripts/ai_verse_learn_apply.py'
       - 'scripts/ai_verse_host_adapter.py'
       - 'scripts/write-command.mjs'
@@ -35,7 +36,9 @@ jobs:
           python-version: '3.11'
       - name: Resolve and spawn the claude command without a shell (real claude.cmd shim on Windows)
         run: node scripts/test-learn-claude.mjs
-      - name: Test hook entry, store under competing processes and crashes, transcript window
+      - name: Test capture (record contract, streaming, secrets across messages, scope, fault injection)
+        run: node scripts/test-learn-capture.mjs
+      - name: Test the store under competing processes and crashes, and windows
         run: node scripts/test-learn-store.mjs
       - name: Test worker end to end with a fake claude, kill -9 replay, compaction and scopes
         run: node scripts/test-learn-worker.mjs

@@ -24,6 +24,7 @@ paths:
     launcher: scripts/learn-launch.mjs
     worker: scripts/learn-worker.mjs
     store: scripts/learn-store.mjs
+    capture: scripts/learn-capture.mjs
     modes: [off, propose, auto]
     applier: scripts/ai_verse_learn_apply.py
     claude_settings: .claude/settings.json

@@ -27,9 +27,13 @@ const WAIT_MS = 30 * 60 * 1000;
 const MAX_ROUNDS = 5;
 const QUOTA = /usage limit|rate limit|quota|limit reached|overloaded|credit balance|\b429\b|not logged in|please run \/login/i;
 
-// Test seam: a real kill -9 of this very process at a named point.
+// Test seam: a real kill -9 of this very process at a named point ("name" or "name:n" for the n-th time that point is reached).
+const reached = {};
 const crash = (point) => {
-  if (process.env.AIVERSE_LEARN_CRASH === point) process.kill(process.pid, 'SIGKILL');
+  const [name, nth = '1'] = (process.env.AIVERSE_LEARN_CRASH ?? '').split(':');
+  if (name !== point) return;
+  reached[point] = (reached[point] ?? 0) + 1;
+  if (reached[point] === Number(nth)) process.kill(process.pid, 'SIGKILL');
 };
 
 // -- prompt and reviewer ------------------------------------------------------------------------------------

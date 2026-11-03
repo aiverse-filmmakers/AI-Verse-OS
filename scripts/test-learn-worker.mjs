@@ -504,16 +504,19 @@ test('a continuation can never complete by repeating itself; rejected candidates
   assert.deepEqual(items(root).map((i) => i.body.statement), ['I always want FACT1 notes.']);
   assert.equal(peek(root, "SELECT COUNT(*) AS n FROM seen_candidates")[0].n, 7); // the six rejected ones and the accepted one
   assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'done');
-  // seven facts, killed between the pages: the first page's items are already stored and the second page continues
+  // seven facts, killed BETWEEN the pages (after the second page's allowance was reserved): the first page is already stored
   root = core();
   chat(root, [u(root, 'u1', facts)]);
   process.env.FAKE_MODE = 'facts';
-  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'in_finish' }); // dies while storing the FIRST page
+  const crashed = workerProcess(root, { AIVERSE_LEARN_CRASH: 'after_reserve:2' });
   assert.ok(crashed.signal === 'SIGKILL' || crashed.status !== 0);
+  assert.equal(items(root).length, 6);
+  assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'pending'); // not complete: the text is kept
   timePasses(root);
   workerProcess(root);
   process.env.FAKE_MODE = 'ok';
   assert.equal(items(root).length, 7);
+  assert.equal(new Set(items(root).map((i) => i.body.statement)).size, 7);
   assert.equal(peek(root, "SELECT state FROM occurrences")[0].state, 'done');
 });
 

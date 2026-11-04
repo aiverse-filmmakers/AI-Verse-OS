@@ -82,11 +82,11 @@ candidates restricted and operator candidates as drafts. Explicit `workspace_loc
 intent stays restricted even when the method is portable. Existing proposal/auto
 policy still controls activation. Do not set declarations just to pass a gate.
 
-## Claude Code input
+## Note files (Claude Code, optional for Codex)
 
-In Claude Code the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused.
+In Claude Code, which blocks JSON typed into shell commands, the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused. Codex may use the same `--input-file` route; the folder name keeps its old path for compatibility.
 
-## Noticing durable things and correcting them (Claude Code)
+## Noticing durable things and correcting them
 
 A correction replaces the old entry through the owner's correction operation; never add a contradicting second entry.
 
@@ -98,7 +98,7 @@ A correction replaces the old entry through the owner's correction operation; ne
 | A historical outcome or lesson | route `memory`; a correction uses type `correction` with `supersedes` |
 | Project convention, tool quirk, current status in a workspace | route `current` (workspace scope) |
 
-Profile correction (Claude only; Codex refuses a `correction` object). Read the exact current line first with `query --session SESSION --kind profile` (Claude only, operator scope only; it returns `preferences` and `preferences_source_sha256`). Then submit:
+Profile correction (both apps). Read the exact current line first with `query --session SESSION --kind profile` (operator scope only; it returns `preferences` and `preferences_source_sha256`). Then submit:
 
     {"route": "profile",
      "parameters": {
@@ -110,5 +110,5 @@ Profile correction (Claude only; Codex refuses a `correction` object). Read the 
                     "reason": "The user explicitly changed a durable preference."}},
      "evidence": [{"source_id": "user", "quote": "give me answers as short paragraphs"}]}
 
-`category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: for Claude the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
+`category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
 

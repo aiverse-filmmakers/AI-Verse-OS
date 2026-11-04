@@ -408,6 +408,46 @@ class ClaudeEventTests(ClaudeFixture):
                 "hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("operator_key_preferences", text)
 
+    def keys_at(self, prefs, limit=14000, event="prompt"):
+        (self.root / "operator/profile/preferences.md").write_text(prefs)
+        self.set_config(context_max_bytes=limit)
+        with patch.object(Bridge, "owner", self.rich_owner):
+            result = (self.prompt("What goals and priorities matter?") if event == "prompt" else
+                      self.bridge.hook(self.claude_event("SessionStart", source="startup")))
+        text = result["hookSpecificOutput"]["additionalContext"]
+        self.assertLessEqual(len(text.encode()), min(limit, 9000), limit)
+        return text, json.loads(text.split("Owner data (JSON):\n", 1)[1]).get("operator_key_preferences", {})
+
+    def test_k_full_preferences_survive_the_minimum_budgets_with_large_intent(self):
+        prefs = ("# Prefs\n\n### Communication\n\n- " + self.RULE + "\n- Keep answers short.\n\n"
+                 "### Working style\n\n- Style item.\n\n### Avoid\n\n- " + self.AVOID + "\n- Avoid jargon.\n")
+        for limit in (4096, 6000):
+            for event in ("prompt", "start"):
+                text, keys = self.keys_at(prefs, limit, event)
+                self.assertEqual(keys, {"communication": [self.RULE, "Keep answers short."],
+                                        "avoid": [self.AVOID, "Avoid jargon."]}, (limit, event))
+
+    def test_l_many_long_rules_do_not_push_out_later_rules_or_the_avoid_section(self):
+        rules = "\n".join(f"- Rule {i} must be followed: " + "x" * 190 for i in range(12))
+        prefs = f"### Communication\n\n{rules}\n- {self.RULE}\n\n### Avoid\n\n- {self.AVOID}\n"
+        for limit in (9000, 6000):
+            text, keys = self.keys_at(prefs, limit)
+            self.assertIn(self.RULE, keys["communication"], limit)
+            self.assertEqual(keys["avoid"], [self.AVOID], limit)
+
+    def test_m_long_items_are_kept_whole(self):
+        long_rule = "Never do this thing. " + "Detail. " * 110
+        self.assertGreater(len(long_rule), 900)
+        text, keys = self.keys_at(f"### Communication\n\n- {long_rule}\n- {self.RULE}\n", 14000)
+        self.assertEqual(keys["communication"][0], long_rule)
+
+    def test_n_sections_are_labelled_and_nested_headings_stay_inside(self):
+        prefs = ("## Communication\n\n- Be brief.\n\n### Punctuation\n\n- " + self.RULE + "\n\n"
+                 "## Working style\n\n- Not a key rule.\n\n### Avoid\n\n- " + self.AVOID + "\n\n#### Detail\n\n- Avoid emoji.\n")
+        text, keys = self.keys_at(prefs)
+        self.assertEqual(keys, {"communication": ["Be brief.", self.RULE], "avoid": [self.AVOID, "Avoid emoji."]})
+        self.assertNotIn("Not a key rule.", keys["communication"])
+
     def test_h_invalid_events_are_handled_without_a_crash(self):
         for bad in ({"hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},
                     {"session_id": "bad id!", "hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},

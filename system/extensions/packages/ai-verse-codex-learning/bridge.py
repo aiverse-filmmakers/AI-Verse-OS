@@ -241,25 +241,45 @@ def small_window(text, query, maximum=2200):
     return "\n".join(output) + "\n[Bounded excerpt; query the owner for further context.]"
 
 
-KEY_HEADING = re.compile(r"^#{1,6}\s*(communication|avoid|must follow|never)\b", re.I)
+KEY_HEADING = re.compile(r"^(#{1,6})\s*(communication|avoid)\b", re.I)
 HARD_RULE = re.compile(r"\b(never|must|always|do not|don't|avoid)\b", re.I)
 
 
-def key_preferences(text, maximum=2400):
-    """Explicit communication rules and the avoid list, hardest rules first, in file order."""
-    lines, active = [], False
+def key_preferences(text, maximum=None):
+    """Communication rules and the avoid list as separate labelled fields.
+
+    A section runs until the next heading of the same or a higher level, so nested headings stay inside it.
+    Items are kept whole. With a maximum (serialized bytes), whole items are chosen: avoid items first,
+    then hard rules, then the rest, and the result keeps file order."""
+    items, level, label = [], 0, None
     for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            active = bool(KEY_HEADING.match(line.strip()))
-        elif active and line.strip():
-            lines.append(line.strip()[:500])
-    order = sorted(range(len(lines)), key=lambda i: (not HARD_RULE.search(lines[i]), i))
-    chosen, size = [], 0
-    for index in order:
-        if size + len(lines[index].encode()) + 1 <= maximum:
-            chosen.append(index)
-            size += len(lines[index].encode()) + 1
-    return "\n".join(lines[i] for i in sorted(chosen))
+        heading = re.match(r"^(#{1,6})\s", line.strip())
+        if heading:
+            depth = len(heading.group(1))
+            match = KEY_HEADING.match(line.strip())
+            if match:
+                level, label = depth, match.group(2).casefold()
+            elif label and depth <= level:
+                level, label = 0, None
+        elif label and line.strip():
+            items.append((label, re.sub(r"^[-*]\s+", "", line.strip())))
+    if not items:
+        return {}
+    chosen = list(range(len(items)))
+    if maximum is not None:
+        order = sorted(chosen, key=lambda i: (items[i][0] != "avoid", not HARD_RULE.search(items[i][1]), i))
+        chosen = []
+        for index in order:
+            if len(json.dumps(render_key_items(items, chosen + [index]), ensure_ascii=False).encode()) <= maximum:
+                chosen.append(index)
+    return render_key_items(items, chosen)
+
+
+def render_key_items(items, chosen):
+    result = {}
+    for index in sorted(chosen):
+        result.setdefault(items[index][0], []).append(items[index][1])
+    return result
 
 
 def proof(text, maximum):
@@ -862,12 +882,14 @@ class Bridge:
             warning = ["Context budget exceeded; query current/profile/Memory owners on demand."]
             short = self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
             intent = context.get("purpose_intent", {})
-            options = [(header, {"scope": scope, **keys, "purpose_intent": {"status": "omitted", "query_required": True},
-                                 "warnings": warning}), (short, {"scope": scope, **keys, "purpose_intent": intent,
-                                                                  "warnings": warning})]
-            # The operator's own communication rules shrink last: try smaller excerpts before dropping them.
+            full = {"operator_key_preferences": key_preferences(prefs)} if prefs else {}
+            options = [(header, {"scope": scope, **full, "purpose_intent": {"status": "omitted", "query_required": True},
+                                 "warnings": warning}),
+                       (short, {"scope": scope, **full, "purpose_intent": intent, "warnings": warning}),
+                       (short, {"scope": scope, **full, "warnings": warning})]
+            # The operator's own rules shrink last, by whole items, before being dropped.
             options += [(short, {"scope": scope, "operator_key_preferences": key_preferences(prefs, size),
-                                 "warnings": warning}) for size in (1600, 1000, 600, 300)] if prefs else []
+                                 "warnings": warning}) for size in (3000, 2000, 1400, 900, 500, 250)] if prefs else []
             options.append((short, {"scope": scope, "warnings": warning}))
             for header, context in options:
                 encoded = json.dumps(context, ensure_ascii=False)

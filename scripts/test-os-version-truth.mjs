@@ -45,6 +45,8 @@ try {
   // 1. Source S carries the PREVIOUS descriptor (0.3.10 describes base, not S).
   overlay(work);
   writeDescriptor(work, '0.3.10', base);
+  fs.writeFileSync(path.join(work, 'source-change.txt'), 'a real source change outside release/\n');
+  git(work, 'add', '-A');
   git(work, 'commit', '-qam', 'accepted source carrying previous descriptor');
   const source = git(work, 'rev-parse', 'HEAD');
   git(work, 'push', '-q', 'origin', 'HEAD:main');

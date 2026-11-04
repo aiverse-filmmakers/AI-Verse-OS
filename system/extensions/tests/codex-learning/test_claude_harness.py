@@ -447,6 +447,9 @@ class ClaudeEventTests(ClaudeFixture):
         text, keys = self.keys_at(prefs)
         self.assertEqual(keys, {"communication": ["Be brief.", self.RULE], "avoid": [self.AVOID, "Avoid emoji."]})
         self.assertNotIn("Not a key rule.", keys["communication"])
+        text, keys = self.keys_at("## Communication\n\n### Avoid jargon\n\n- Be plain.\n\n## Style\n\n- Other.\n"
+                                  "\n## Avoid\n\n- " + self.AVOID + "\n")
+        self.assertEqual(keys, {"communication": ["Be plain."], "avoid": [self.AVOID]})
 
     def test_h_invalid_events_are_handled_without_a_crash(self):
         for bad in ({"hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},

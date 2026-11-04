@@ -256,6 +256,8 @@ def key_preferences(text, maximum=None):
         heading = re.match(r"^(#{1,6})\s", line.strip())
         if heading:
             depth = len(heading.group(1))
+            if label and depth > level:
+                continue
             match = KEY_HEADING.match(line.strip())
             if match:
                 level, label = depth, match.group(2).casefold()

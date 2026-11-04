@@ -1759,6 +1759,9 @@ def run_owner(bridge, operation, payload):
             # The effective scope is the development project: only the maintainer's copy may read it this way.
             if not bridge.config["maintainer_feedback"]:
                 raise Refused("the upgrade list is switched off")
+        if payload.get("upgrade") and "workspace:ai-verse-os-development" not in allowed:
+            # Reading the list is a normal read of that project: the turn must be allowed to read it.
+            raise Refused("the development project is not a destination of this turn")
         if not wanted <= allowed:
             raise Refused("a destination is not authorized for this turn")
         return reflect_scan(bridge, module, host, payload)

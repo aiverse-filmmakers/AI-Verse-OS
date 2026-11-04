@@ -63,12 +63,13 @@ class MotherListTests(unittest.TestCase):
             note = "\n".join(p.read_text() for p in folder.rglob("mem-*.md"))
             self.assertIn("upgrade-note", note)
             self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", note)
+            # The view is rebuilt from a chat that may read the development project.
+            sc.prompt("Show me the upgrade list please.", cwd=str(folder))
+            turn = sc.turn()
+            self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
             view = (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text()
             self.assertIn("Derived view", view)
             self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", view)
-            sc.prompt("Show me the upgrade list please.")
-            turn = sc.turn()
-            self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
             self.assertEqual(sc.cli("reflect", "list").returncode, 2)
         self.each(body, maintainer_feedback=True)
 
@@ -90,7 +91,18 @@ class MotherListTests(unittest.TestCase):
             self.assertEqual(len(list(folder.rglob("mem-*.md"))), 1)
             self.assertEqual(list((sc.root / "workspaces/alpha").rglob("mem-*.md")), [])
             self.assertEqual(list((sc.root / "operator/memory").rglob("mem-*.md")), [])
+            # The list view is only rebuilt from a chat that may read the development project.
+            self.assertFalse((folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").exists())
+            sc.prompt("Show me the upgrade list please.", cwd=str(folder))
+            turn = sc.turn()
+            self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
             self.assertNotIn("ALPHA PRIVATE", (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text())
+            # And a project chat with the switch on still cannot read the list through the owner door.
+            sc.prompt("Back to Alpha Study.", cwd=alpha)
+            turn = sc.turn()
+            auth = {"session": sc.session, "turn": turn["id"], "token": turn["token"]}
+            refused = sc.cli("owner", "reflect_scan", stdin=json.dumps({"projects": [], "limit": 5, "upgrade": True, "auth": auth}))
+            self.assertEqual(refused.returncode, 2)
             # An ordinary memory aimed at the development project from another chat is still refused.
             sc.prompt("The validated filter retained all twelve correct records.", cwd=alpha)
             ordinary = {"route": "memory", "scope": "workspace:ai-verse-os-development",

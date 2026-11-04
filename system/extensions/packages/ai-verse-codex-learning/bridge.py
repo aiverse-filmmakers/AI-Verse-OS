@@ -141,7 +141,7 @@ def no_secrets(value):
 def profile_parameters(parameters):
     """Adapt unambiguous scalar list fields before calling the strict profile owner."""
     result = dict(parameters)
-    fields = {"identity": {"roles": 32, "domains": 32, "notes": 64},
+    fields = {"identity": {"roles": 32, "domains": 32, "ventures": 32, "notes": 64},
               "preferences": {"communication": 64, "working_style": 64,
                               "quality_expectations": 64, "avoid": 64}}
     for section, list_fields in fields.items():
@@ -156,6 +156,17 @@ def profile_parameters(parameters):
             if key not in value or value[key] is None:
                 continue
             items = [value[key]] if isinstance(value[key], str) else value[key]
+            if key == "ventures" and isinstance(items, list):
+                # A venture may be a plain line or {text, project}; the owner validates the project reference.
+                items = [item if isinstance(item, str) else (
+                    item if isinstance(item, dict) and set(item) <= {"text", "project"}
+                    and isinstance(item.get("text"), str) else None) for item in items]
+                if any(item is None for item in items):
+                    raise Refused("profile identity.ventures entries are a line or {text, project}")
+                value[key] = items
+                if len(items) > maximum:
+                    raise Refused("profile identity.ventures requires a bounded list")
+                continue
             if (not isinstance(items, list) or len(items) > maximum or
                     any(not isinstance(item, str) or not item.strip() or "\0" in item or len(item) > 1000
                         for item in items)):
@@ -166,24 +177,30 @@ def profile_parameters(parameters):
 
 
 PROFILE_CATEGORIES = ("communication", "working_style", "quality_expectations", "avoid")
+IDENTITY_CATEGORIES = ("roles", "domains", "ventures", "notes")
 
 
 def profile_correction_parameters(parameters):
     """Replace one existing profile line through the profile owner's correction operation (both apps)."""
     correction = parameters.get("correction")
     if (set(parameters) != {"correction", "evidence"} or not isinstance(correction, dict)
-            or set(correction) != {"category", "previous", "replacement"}):
-        raise Refused("profile correction needs exactly correction{category, previous, replacement} and evidence")
-    if correction["category"] not in PROFILE_CATEGORIES:
-        raise Refused("profile correction category must be one of " + ", ".join(PROFILE_CATEGORIES))
+            or not {"category", "previous", "replacement"} <= set(correction)
+            or set(correction) - {"category", "previous", "replacement", "section"}):
+        raise Refused("profile correction needs exactly correction{category, previous, replacement[, section]} and evidence")
+    section = correction.get("section", "preferences")
+    if section not in {"preferences", "identity"}:
+        raise Refused("profile correction section must be preferences or identity")
+    allowed = PROFILE_CATEGORIES if section == "preferences" else IDENTITY_CATEGORIES
+    if correction["category"] not in allowed:
+        raise Refused("profile correction category must be one of " + ", ".join(allowed))
     previous = bounded_text(correction["previous"], 1000)
     replacement = bounded_text(correction["replacement"], 1000)
     if previous == replacement:
         raise Refused("a correction must change the preference")
     if not isinstance(parameters["evidence"], dict):
         raise Refused("profile correction needs the owner evidence object")
-    return {"correction": {"category": correction["category"], "previous": previous, "replacement": replacement},
-            "evidence": dict(parameters["evidence"])}
+    return {"correction": {"section": section, "category": correction["category"], "previous": previous,
+                           "replacement": replacement}, "evidence": dict(parameters["evidence"])}
 
 
 def with_quote_reason(parameters, evidence_items, turn):
@@ -369,6 +386,39 @@ HARNESSES = {
                "candidate_kind": "claude-learning-pending", "memory_source": "claude-code:completed-turn",
                "profile_source": "claude-code:user", "digest_owner": "claude-code",
                "digest_version": "claude-hook-v1"}}
+PASTED = re.compile(r"<(pasted_content|system-reminder|untrusted[\w-]*)\b[^>]*>.*?</\1\s*>", re.S | re.I)
+FENCED = re.compile(r"(```|~~~).*?(\1|\Z)", re.S)
+QUOTED_LINE = re.compile(r"(?m)^[ \t]*>.*$")
+
+
+def own_words(prompt):
+    """The operator's own typed words: pasted, quoted and code blocks never bind a destination."""
+    return QUOTED_LINE.sub(" ", FENCED.sub(" ", PASTED.sub(" ", prompt)))
+
+
+def yaml_list(text, key):
+    """Plain top-level list of strings from WORKSPACE.yaml (block or inline form)."""
+    match = re.search(rf"^{key}:[ \t]*(.*)$", text, re.M)
+    if not match:
+        return []
+    inline = match.group(1).strip()
+    if inline.startswith("["):
+        try:
+            value = json.loads(inline)
+        except ValueError:
+            return []
+        return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+    items = []
+    for line in text[match.end():].splitlines()[1:]:
+        entry = re.match(r"^\s+-\s+(.*?)\s*$", line)
+        if not entry:
+            if line.strip():
+                break
+            continue
+        items.append(entry.group(1).strip("\"'"))
+    return items
+
+
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
@@ -639,47 +689,75 @@ class Bridge:
             hits = re.findall(rf"^{key}:\s*(.*?)\s*$", text, re.M)
             if len(hits) == 1:
                 fields[key] = hits[0].strip("\"'")
+        aliases = [a for a in yaml_list(text, "aliases")[:8] if 3 <= len(a) <= 64]
+        if aliases:
+            fields["aliases"] = aliases
         if (not fields.get("schema_version", "").startswith("2.") or fields.get("id") != workspace
                 or fields.get("status") in {"archived", "paused", "quarantined"}):
             raise Refused("workspace identity or lifecycle is unavailable")
         return fields
 
-    def scope(self, cwd, prompt, previous):
+    def destinations(self, cwd, prompt):
+        """Where this turn may save: the folder's own scope, plus exact matches of the operator's own words.
+
+        Nothing carries over from an earlier turn. Pasted, quoted and code blocks never bind. A name that
+        fits more than one project is reported as ambiguous and is not a destination."""
         working = Path(cwd).resolve()
         if not inside(working, self.root):
             raise Refused("event is outside this OS project")
         relative = working.relative_to(self.root).parts
+        words = own_words(prompt)
+        folder = None
         if len(relative) >= 2 and relative[0] == "workspaces":
             self.manifest(relative[1])
-            return "workspace:" + relative[1]
-        if "scope:operator" in prompt:
-            return "operator"
-        explicit = re.findall(r"\bworkspace:([a-z0-9][a-z0-9-]{0,127})\b", prompt)
-        if explicit:
-            if len(set(explicit)) != 1:
-                raise Refused("multiple workspace scopes require clarification")
-            self.manifest(explicit[0])
-            return "workspace:" + explicit[0]
-        selected = []
+            folder = "workspace:" + relative[1]
+        owners = {}
+        if "scope:operator" in words:
+            owners.setdefault("scope:operator", set()).add("operator")
+        for found in re.findall(r"\bworkspace:([a-z0-9][a-z0-9-]{0,127})\b", words):
+            if not (self.root / "workspaces" / found).exists() and not (self.root / "workspaces" / found).is_symlink():
+                owners.setdefault("workspace:" + found, set())  # Named but unknown: the AI should ask.
+                continue
+            self.manifest(found)  # An unsafe or unavailable project refuses the turn, as before.
+            owners.setdefault("workspace:" + found, set()).add("workspace:" + found)
         workspace_root = safe(self.root / "workspaces", self.root)
-        for folder in workspace_root.iterdir():
-            if not folder.is_dir() or folder.name.startswith("_"):
+        for entry in sorted(workspace_root.iterdir()):
+            if not entry.is_dir() or entry.name.startswith("_"):
                 continue
             try:
-                meta = self.manifest(folder.name)
+                meta = self.manifest(entry.name)
             except Refused:
                 continue
-            aliases = [folder.name, meta.get("name", "")]
-            if any(alias and re.search(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", prompt, re.I) for alias in aliases):
-                selected.append(folder.name)
-        if len(selected) > 1:
-            raise Refused("multiple workspace names require clarification")
-        scope = "workspace:" + selected[0] if selected else previous
-        if not isinstance(scope, str) or not SCOPE.fullmatch(scope):
-            raise Refused("invalid bound scope")
-        if scope.startswith("workspace:"):
-            self.manifest(scope[10:])
-        return scope
+            if meta.get("status") != "active":
+                continue
+            for name in {entry.name, meta.get("name", ""), *meta.get("aliases", [])}:
+                if name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", words, re.I):
+                    owners.setdefault(name.casefold(), set()).add("workspace:" + entry.name)
+        matched, ambiguous = [], []
+        for name, scopes in sorted(owners.items()):
+            if not scopes:
+                ambiguous.append({"name": name, "could_mean": []})
+            elif len(scopes) == 1:
+                matched.append(next(iter(scopes)))
+            else:
+                ambiguous.append({"name": name, "could_mean": sorted(scopes)})
+        matched = list(dict.fromkeys(matched))
+        # A name that also resolves cleanly to one of its projects elsewhere in the prompt is settled.
+        ambiguous = [item for item in ambiguous if not set(item["could_mean"]) & set(matched)]
+        if folder:
+            primary, allowed = folder, [folder] + [m for m in matched if m != folder]
+        else:
+            allowed = ["operator"] + [m for m in matched if m != "operator"]
+            real = [m for m in matched if m.startswith("workspace:")]
+            primary = real[0] if len(real) == 1 else "operator"
+        for scope in allowed:
+            if not SCOPE.fullmatch(scope):
+                raise Refused("invalid destination")
+        return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4]}
+
+    def scope(self, cwd, prompt, previous=None):
+        """Primary destination of one prompt. The previous scope is ignored: bindings never stick."""
+        return self.destinations(cwd, prompt)["primary"]
 
     def current_snapshot(self, scope):
         result = self.owner("read_context", {"scope": scope})
@@ -726,6 +804,7 @@ class Bridge:
             "completed work and lessons (Memory). Ignore one time instructions, things already in the Core, and large pasted material. "
         )
         if turn and turn.get("state") in {"active", "review_requested"}:
+            instruction += self.destination_text(turn)
             call = (f"{prefix} review --session {shlex.quote(state['session_id'])} "
                     f"--turn {shlex.quote(turn['id'])} --token {shlex.quote(turn['token'])}")
             if self.harness == "claude":
@@ -766,6 +845,17 @@ class Bridge:
             "If Brain is unavailable, still route direct declarations through intent capture to retain an owner-approved pending inbox item. Report unsaved strategic changes; never claim saved from a proposal or old OS file.\n")
         return instruction
 
+    def destination_text(self, turn):
+        allowed = turn.get("allowed") or [turn.get("scope", "operator")]
+        text = ("\nWhere this turn may save: " + ", ".join(allowed) + ". Give a candidate a \"scope\" from that list to choose "
+                "its destination; with no scope a profile fact goes to the operator profile and anything else to " + turn.get("scope", "operator")
+                + ". A fact about the operator himself, stated by him in a project chat, may use scope \"operator\" with "
+                "\"general_fact\":{\"stated_by_operator_about_self\":true,\"contains_project_figures\":false} (no numbers). ")
+        for item in turn.get("ambiguous", []):
+            text += ("The name \"" + item["name"] + "\" could mean more than one project (" + ", ".join(item["could_mean"])
+                     + "): ask the operator one plain question before saving anything about it. ")
+        return text + "\n"
+
     def short_instruction(self, state):
         """The essentials plus the exact review command, for very small context budgets (both apps)."""
         app = "Claude Code" if self.harness == "claude" else "Codex"
@@ -785,6 +875,7 @@ class Bridge:
                 text += "Submit the review JSON on stdin (quoted heredoc or an existing file) to: " + call
             text += (" . For no learning the JSON is " + empty + ". Read "
                      + str(self.extension / "REVIEW-SCHEMA.md") + " before saving anything. ")
+            text += "Save to: " + ", ".join(turn.get("allowed") or [turn.get("scope", "operator")]) + " (candidate scope). "
             text += self.reflect_short(state)
         return text
 
@@ -914,14 +1005,17 @@ class Bridge:
         self.save(state)
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": header + encoded}}
 
-    def add_source(self, turn, identity, kind, text, success=None):
+    def add_source(self, turn, identity, kind, text, success=None, scopes=None):
         if not isinstance(text, str):
             text = observed_text(text)
         sources = turn["sources"]
         if identity not in sources and len(sources) >= self.config["source_limit"]:
             return
         remaining = max(0, 8192 - sum(len(s["tokens"]) for key, s in sources.items() if key != identity))
+        # Evidence keeps the scopes it may support: the operator's words support every destination that
+        # those words named; tool and assistant text supports only the turn's primary scope.
         sources[identity] = {"kind": kind, "success": success,
+                             "scopes": list(scopes or [turn.get("scope", "operator")]),
                              "secret_like": bool(SECRET.search(text)),
                              **proof(text, min(remaining, self.config["source_max_tokens"]))}
 
@@ -964,7 +1058,8 @@ class Bridge:
                     result = self.context(state, "", kind)
                 else:
                     try:
-                        state["scope"] = self.scope(event["cwd"], prompt, state["scope"])
+                        dest = self.destinations(event["cwd"], prompt)
+                        state["scope"] = dest["primary"]
                     except Refused:
                         if old:
                             old["state"] = "scope_unresolved"
@@ -979,14 +1074,21 @@ class Bridge:
                     else:
                         state["turn"] = {
                             "id": turn_id, "token": secrets.token_hex(16), "scope": state["scope"],
+                            "allowed": dest["allowed"], "ambiguous": dest["ambiguous"],
                             "runtime_turn_ids": [turn_id],
                             "state": "active", "created": time.time(), "prompt_hash": digest(prompt),
                             "permission_mode": event.get("permission_mode", "default"), "sources": {}}
-                        self.add_source(state["turn"], "user", "user", prompt)
+                        self.add_source(state["turn"], "user", "user", prompt, scopes=dest["allowed"])
                     self.save(state)
                     result = self.context(state, prompt, kind)
             elif kind == "SessionStart":
-                state["scope"] = self.scope(event["cwd"], "", state["scope"])
+                held = state.get("turn")
+                if (event.get("source") == "compact" and held and held.get("scope")
+                        and time.time() - held.get("created", 0) <= self.config["state_ttl_seconds"]):
+                    state["scope"] = held["scope"]  # The same turn carries on after compaction.
+                    self.manifest(state["scope"][10:]) if state["scope"].startswith("workspace:") else None
+                else:
+                    state["scope"] = self.scope(event["cwd"], "")
                 self.save(state)
                 result = self.context(state, "", kind)
             else:
@@ -1086,7 +1188,8 @@ class Bridge:
             raise Refused("plan mode does not admit automatic durable writes")
         return turn
 
-    def evidence(self, turn, items):
+    def evidence(self, turn, items, scope=None, general_fact=False):
+        """Check quotes against what was observed. Evidence may only support writes to scopes it came from."""
         if not isinstance(items, list) or not 1 <= len(items) <= 4:
             raise Refused("candidate requires bounded evidence")
         refs, kinds = [], []
@@ -1097,11 +1200,21 @@ class Bridge:
             source = turn["sources"].get(item["source_id"])
             if not source or source.get("secret_like") or not matches(item["quote"], source):
                 raise Refused("evidence quote was not observed in this turn")
+            supported = source.get("scopes") or [turn.get("scope", "operator")]
+            if general_fact:
+                # The explicit path for a general fact the operator stated about himself: only his own words.
+                if source["kind"] != "user":
+                    raise Refused("a general fact needs the operator's own words as evidence")
+            elif scope is not None and scope not in supported:
+                raise Refused("evidence came from another destination and cannot support a write here")
             kinds.append(source["kind"])
             refs.append(f"{self.labels['ref']}:turn:{turn['id']}:source:{digest(item['source_id'])[:16]}:sha256:{source['sha256']}")
         if all(kind == "assistant" for kind in kinds):
             raise Refused("an assistant claim alone is insufficient evidence")
         return refs, kinds
+
+    def note_effect(self, state, turn, candidate, result, kinds):
+        """Hook for the tidy ledger; replaced when tidying is added."""
 
     def review(self, session, turn_id, token, payload):
         if not self.registered():
@@ -1134,11 +1247,27 @@ class Bridge:
                 return {**turn["receipt"], "replayed": True}
             # Validate the whole batch before any effect. Each candidate still passes owner admission.
             checked = []
+            allowed = turn.get("allowed") or [state["scope"]]
             for candidate in candidates:
-                if not isinstance(candidate, dict) or set(candidate) != {"route", "parameters", "evidence"}:
-                    raise Refused("candidate needs exactly route, parameters, evidence; read REVIEW-SCHEMA.md before retrying; do not discard warranted learning to bypass a schema error")
-                refs, kinds = self.evidence(turn, candidate["evidence"])
+                if (not isinstance(candidate, dict) or not {"route", "parameters", "evidence"} <= set(candidate)
+                        or set(candidate) - {"route", "parameters", "evidence", "scope", "general_fact"}):
+                    raise Refused("candidate needs exactly route, parameters, evidence (and optionally scope); read REVIEW-SCHEMA.md before retrying; do not discard warranted learning to bypass a schema error")
                 route, parameters = candidate["route"], candidate["parameters"]
+                scope = candidate.get("scope") or ("operator" if route == "profile" else state["scope"])
+                if not isinstance(scope, str) or not SCOPE.fullmatch(scope):
+                    raise Refused("candidate scope is invalid")
+                general_fact = False
+                if scope not in allowed:
+                    general_fact = (route == "profile" and scope == "operator"
+                                    and candidate.get("general_fact") == {"stated_by_operator_about_self": True,
+                                                                          "contains_project_figures": False})
+                    if not general_fact:
+                        raise Refused("candidate scope is not a destination of this turn; ask the operator which project they mean")
+                elif candidate.get("general_fact") is not None:
+                    raise Refused("general_fact is only for a profile fact from a project chat")
+                refs, kinds = self.evidence(turn, candidate["evidence"], scope, general_fact)
+                candidate = {**candidate, "scope": scope}
+                candidate.pop("general_fact", None)
                 if not isinstance(parameters, dict):
                     raise Refused("invalid owner parameters")
                 if route == "memory":
@@ -1156,9 +1285,9 @@ class Bridge:
                         target = parameters.get("supersedes")
                         if not isinstance(target, str) or not re.fullmatch(r"mem-[A-Za-z0-9-]+", target):
                             raise Refused("correction requires the exact historical Memory ID")
-                        self.owner("check_correction", {"scope": state["scope"], "target": target})
+                        self.owner("check_correction", {"scope": scope, "target": target})
                 elif route == "profile":
-                    if state["scope"] != "operator" or "user" not in kinds:
+                    if scope != "operator" or "user" not in kinds:
                         raise Refused("operator profile needs direct operator-scoped user evidence")
                     if set(parameters) - {"identity", "preferences", "evidence", "correction"}:
                         raise Refused("unbounded profile parameters")
@@ -1171,6 +1300,8 @@ class Bridge:
                         raise Refused("learning cannot expand permission or alter approval policy")
                     if OVERRIDE.search(json.dumps(parameters)):
                         raise Refused("profile learning cannot override runtime rules or permissions")
+                    if general_fact and re.search(r"\d", json.dumps({k: v for k, v in parameters.items() if k != "evidence"})):
+                        raise Refused("a general fact from a project chat must not contain figures or dates")
                     parameters = with_quote_reason(parameters, candidate["evidence"], turn)
                     candidate = {**candidate, "parameters": parameters}
                 elif route == "skills":
@@ -1181,7 +1312,7 @@ class Bridge:
                                     r"(?:validation|verification|verify)", r"(?:failure|fallback|errors?)"):
                         if not re.search(r"(?im)^#{1,3}\s+" + section + r"\b", parameters["skill_md"]):
                             raise Refused("Skill proposal needs trigger, inputs, method, validation and failure sections")
-                    if parameters["candidate"].get("scope") != state["scope"]:
+                    if parameters["candidate"].get("scope") != scope:
                         raise Refused("Skills candidate scope mismatch")
                     if not any(turn["sources"].get(item["source_id"], {}).get("success") is True
                                for item in candidate["evidence"]):
@@ -1196,7 +1327,7 @@ class Bridge:
                             or admission["current"] is not True
                             or any(admission[key] is not False for key in admission if key != "current")):
                         raise Refused("operational update lacks low-risk current-state admission")
-                    allowed_headings = OPERATIONAL - ({"Current facts"} if state["scope"].startswith("workspace:") else set())
+                    allowed_headings = OPERATIONAL - ({"Current facts"} if scope.startswith("workspace:") else set())
                     if parameters["heading"] not in allowed_headings:
                         raise Refused("strategic/current-state heading is not operational")
                     bounded_text(parameters["text"], 1000)
@@ -1209,35 +1340,37 @@ class Bridge:
                         raise Refused("current-state version required")
                 else:
                     raise Refused("unsupported learning route")
-                checked.append((candidate, refs))
+                checked.append((candidate, refs, kinds))
             effects = []
-            for index, (candidate, refs) in enumerate(checked):
+            for index, (candidate, refs, kinds) in enumerate(checked):
                 if self.cancelled(session, turn_id):
                     break
                 try:
                     result = self.owner("learn", {
-                        "scope": state["scope"], "session_id": session, "turn_id": turn_id,
+                        "scope": candidate["scope"], "session_id": session, "turn_id": turn_id,
                         "route": candidate["route"], "parameters": candidate["parameters"],
                         "refs": refs, "effect_id": f"{self.labels['ref']}:{session}:{turn_id}:{index}:{digest(candidate)[:16]}"})
-                    effects.append({"route": candidate["route"], "result": result})
+                    effects.append({"route": candidate["route"], "scope": candidate["scope"], "result": result})
+                    self.note_effect(state, turn, candidate, result, kinds)
                 except (Refused, subprocess.TimeoutExpired) as exc:
                     pending = None
                     try:
                         pending = self.owner("defer", {
-                            "scope": state["scope"], "session_id": session, "turn_id": turn_id,
+                            "scope": candidate["scope"], "session_id": session, "turn_id": turn_id,
                             "candidate": {"route": candidate["route"], "parameters": candidate["parameters"],
                                           "evidence_refs": refs},
                             "effect_id": f"{self.labels['ref']}:{session}:{turn_id}:pending:{index}",
                             "created_at": datetime.fromtimestamp(turn["created"], timezone.utc).isoformat()})
                     except (Refused, subprocess.TimeoutExpired):
                         pass
-                    effects.append({"route": candidate["route"], "state": "owner_unavailable",
+                    effects.append({"route": candidate["route"], "scope": candidate["scope"], "state": "owner_unavailable",
                                     "error": type(exc).__name__, "pending_owner_receipt": pending})
             digest_result = None
             if not turn.get("review_started_at"):
                 turn["review_started_at"] = utc()
                 self.save(state)
-            if (not self.cancelled(session, turn_id) and payload["persist_digest"]
+            mixed = len({c["scope"] for c, _, _ in checked}) > 1
+            if (not self.cancelled(session, turn_id) and payload["persist_digest"] and not mixed
                     and (checked or any(s["kind"] == "tool" for s in turn["sources"].values()))):
                 try:
                     coverage = [f"{self.labels['ref']}:turn:{turn_id}:source:{digest(key)[:16]}:sha256:{value['sha256']}"
@@ -1251,8 +1384,9 @@ class Bridge:
                 except (Refused, subprocess.TimeoutExpired) as exc:
                     digest_result = {"state": "owner_unavailable", "error": type(exc).__name__}
             finished_state = "interrupted" if self.cancelled(session, turn_id) else "reviewed"
-            receipt = {"scope": state["scope"], "turn_id": turn_id, "state": finished_state,
-                       "effects": effects, "intent_effects": list(turn.get("intent_effects", [])), "digest": digest_result, "replayed": False}
+            receipt = {"scope": state["scope"], "scopes": sorted({c["scope"] for c, _, _ in checked}),
+                       "digest_skipped_mixed": bool(mixed and payload["persist_digest"]),
+                       "turn_id": turn_id, "state": finished_state, "effects": effects, "intent_effects": list(turn.get("intent_effects", [])), "digest": digest_result, "replayed": False}
             turn.update({"state": finished_state, "review_fingerprint": fingerprint, "receipt": receipt})
             self.save(state)
             self.diagnostic("review", session, scope=state["scope"], turn=turn_id,
@@ -1352,12 +1486,17 @@ def profile_correct(bridge, module, host, payload, parameters):
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
                                                payload["effect_id"] + ":read" + suffix, "read_local"))
         snapshot = read["result"]["operator_profile"]
-        request = host_action(module, host, payload["scope"], "operator.profile.correct", {
-            "category": correction["category"], "previous": correction["previous"],
-            "replacement": correction["replacement"],
-            "expected_sha256": snapshot["preferences_source_sha256"],
-            "evidence": parameters["evidence"], "provenance": parameters["provenance"]},
-            payload["effect_id"] + suffix)
+        section = correction.get("section", "preferences")
+        owner_request = {
+            "section": section, "category": correction["category"], "previous": correction["previous"],
+            "expected_sha256": snapshot["identity_source_sha256" if section == "identity" else "preferences_source_sha256"],
+            "evidence": parameters["evidence"], "provenance": parameters["provenance"]}
+        if correction.get("retire") is True:
+            owner_request["retire"] = True
+        else:
+            owner_request["replacement"] = correction["replacement"]
+        request = host_action(module, host, payload["scope"], "operator.profile.correct", owner_request,
+                              payload["effect_id"] + suffix)
         result = host.request_action(request)
         if result["result"]["operator_profile"].get("state") != "stale":
             return result
@@ -1499,6 +1638,7 @@ def main():
     query.add_argument("--kind", choices=["context", "memory", "capabilities", "connections", "profile"], required=True)
     query.add_argument("--query", default="")
     query.add_argument("--depth", choices=["catalog", "summary", "detail", "source"], default="summary")
+    query.add_argument("--scope", help="Read from one of this turn's destinations (or the operator scope)")
     query.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
     intent = commands.add_parser("intent")
     intent.add_argument("action", choices=["plan", "handover", "read", "capture", "confirm", "link"])
@@ -1546,7 +1686,7 @@ def main():
                 quote = bounded_text(stdin_text(1200), 1200)
                 no_secrets(quote)
                 selected = [(key, value) for key, value in selected if not value.get("secret_like") and matches(quote, value)]
-            result = {"scope": state["scope"], "turn_id": turn.get("id"),
+            result = {"scope": state["scope"], "allowed": turn.get("allowed", [state["scope"]]), "turn_id": turn.get("id"),
                       "sources": [{"source_id": key, "kind": value["kind"], "success": value["success"],
                                    "sha256": value["sha256"], "truncated": value["truncated"]}
                                   for key, value in selected]}
@@ -1557,16 +1697,25 @@ def main():
                 if not turn or turn["state"] != "active":
                     raise Refused("bind requires an active user turn")
                 bridge.evidence(turn, [{"source_id": "user", "quote": args.quote}])
-                selected = bridge.scope(str(bridge.root), args.quote, "operator")
+                selected = bridge.scope(str(bridge.root), args.quote)
                 if selected != args.scope:
                     raise Refused("binding is not explicit in the user's quoted scope reference")
+                # Applies to this turn only; the next prompt works out its destinations again.
                 state["scope"] = selected
                 turn["scope"] = selected
+                turn["allowed"] = list(dict.fromkeys([*(turn.get("allowed") or []), selected]))
+                turn["sources"]["user"]["scopes"] = list(turn["allowed"])
                 bridge.save(state)
                 result = {"scope": selected, "context": bridge.current_snapshot(selected)}
         elif args.command == "query":
             state = bridge.state(args.session)
             scope = state["scope"]
+            if args.scope:
+                # Read only, and only inside this turn's destinations (the operator profile is always readable).
+                readable = {"operator", *((state.get("turn") or {}).get("allowed") or [scope])}
+                if args.scope not in readable:
+                    raise Refused("scope is not readable from this turn")
+                scope = args.scope
             if args.kind == "context":
                 result = bridge.current_snapshot(scope)
             elif args.kind == "memory":

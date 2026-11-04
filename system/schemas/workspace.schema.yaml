@@ -31,6 +31,14 @@ properties:
     items:
       type: string
     uniqueItems: true
+  aliases:
+    type: array
+    maxItems: 8
+    description: "Short spoken names a member may use for this project. Matched exactly, never guessed."
+    items:
+      type: string
+      minLength: 1
+      maxLength: 64
   purpose:
     type: string
   owners:

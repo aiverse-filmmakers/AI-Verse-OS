@@ -88,6 +88,17 @@ function cleanStringArray(value, label, maxItems = 32) {
   return [...new Set(out)];
 }
 
+// Aliases are short spoken names a member might use for a project. Bounded, plain words only.
+function cleanAliases(value) {
+  const list = cleanStringArray(value, 'workspace.aliases', 8);
+  for (const alias of list) {
+    if (alias.length > 64 || !/^[\p{L}\p{N}][\p{L}\p{N} '&+-]*$/u.test(alias)) {
+      throw new Error('workspace.aliases entries must be short plain names (letters, numbers, spaces, hyphens)');
+    }
+  }
+  return list;
+}
+
 function slugify(value) {
   return value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 128).replace(/-+$/g, '');
 }
@@ -104,7 +115,7 @@ function containsSecretLike(value) {
 
 function normalizeRequest(raw) {
   rejectUnknownKeys(raw, new Set(['workspace', 'evidence', 'authority', 'provenance']), 'request');
-  rejectUnknownKeys(raw.workspace, new Set(['id', 'name', 'type', 'purpose', 'domains', 'canonical_sources']), 'workspace');
+  rejectUnknownKeys(raw.workspace, new Set(['id', 'name', 'type', 'purpose', 'domains', 'canonical_sources', 'aliases']), 'workspace');
   rejectUnknownKeys(raw.evidence, new Set(['substantial_scope', 'boundary_clear', 'reason']), 'evidence');
   rejectUnknownKeys(raw.authority, new Set(['permission_expansion', 'privacy_ambiguous', 'new_connection', 'new_credential']), 'authority');
   rejectUnknownKeys(raw.provenance ?? {}, new Set(['trigger_ref', 'classifier', 'source']), 'provenance');
@@ -116,13 +127,14 @@ function normalizeRequest(raw) {
   const purpose = cleanString(raw.workspace.purpose, 'workspace.purpose', { max: 1000 }) || `Isolate work for ${name}.`;
   const domains = cleanStringArray(raw.workspace.domains, 'workspace.domains');
   const canonicalSources = cleanStringArray(raw.workspace.canonical_sources, 'workspace.canonical_sources');
+  const aliases = cleanAliases(raw.workspace.aliases);
   const reason = cleanString(raw.evidence.reason, 'evidence.reason', { required: true, max: 1000 });
   const triggerRef = cleanString(raw.provenance?.trigger_ref, 'provenance.trigger_ref', { max: 300 });
   const classifier = cleanString(raw.provenance?.classifier, 'provenance.classifier', { max: 200 });
   const source = cleanString(raw.provenance?.source, 'provenance.source', { max: 300 });
 
   const normalized = {
-    workspace: { id, name, type, purpose, domains, canonical_sources: canonicalSources },
+    workspace: { id, name, type, purpose, domains, canonical_sources: canonicalSources, aliases },
     evidence: {
       substantial_scope: raw.evidence.substantial_scope === true,
       boundary_clear: raw.evidence.boundary_clear === true,
@@ -208,6 +220,7 @@ function renderManifest(request, now) {
     `type: ${JSON.stringify(w.type)}`,
     'status: "active"',
     renderList('domains', w.domains).trimEnd(),
+    ...(w.aliases.length ? [renderList('aliases', w.aliases).trimEnd()] : []),
     `purpose: ${JSON.stringify(w.purpose)}`,
     'owners: []',
     'success_criteria: []',
@@ -284,6 +297,7 @@ function eventFingerprint(request, workspaceId) {
     reason: request.evidence.reason,
     domains: request.workspace.domains,
     canonical_sources: request.workspace.canonical_sources,
+    aliases: request.workspace.aliases,
     trigger_ref: request.provenance.trigger_ref,
     classifier: request.provenance.classifier,
     source: request.provenance.source,
@@ -357,7 +371,12 @@ function safelyEvolveManifest(entry, request) {
   let text = fs.readFileSync(entry.manifest, 'utf8');
   const diagnostics = [];
   let changed = false;
-  for (const [key, additions] of [['domains', request.workspace.domains], ['canonical_sources', request.workspace.canonical_sources]]) {
+  if (request.workspace.aliases.length && !/^aliases:/m.test(text)) {
+    // Add the key once at the end; later edits merge into it like any other list.
+    text = `${text.replace(/\s*$/, '\n')}aliases: []\n`;
+    changed = true;
+  }
+  for (const [key, additions] of [['domains', request.workspace.domains], ['canonical_sources', request.workspace.canonical_sources], ['aliases', request.workspace.aliases]]) {
     const merged = mergeTopLevelList(text, key, additions);
     if (!merged.supported && additions.length) diagnostics.push(`${key} uses unsupported YAML shape; left unchanged rather than rewriting user-owned syntax`);
     text = merged.text;

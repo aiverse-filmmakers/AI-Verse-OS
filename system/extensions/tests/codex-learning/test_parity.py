@@ -136,3 +136,61 @@ class ParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VentureTests(unittest.TestCase):
+    def each(self, body):
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                body(Scenario(self, harness))
+
+    def submit(self, sc, prompt, candidate):
+        sc.prompt(prompt)
+        return sc.bridge.review(sc.session, sc.turn()["id"], sc.turn()["token"], sc.payload(candidate))
+
+    def venture(self, sc, entry, quote):
+        return {"route": "profile", "parameters": {"identity": {"ventures": [entry]}, "evidence": dict(EVIDENCE)},
+                "evidence": [{"source_id": "user", "quote": quote}]}
+
+    def test_ventures_can_be_added_and_corrected_with_their_own_hash(self):
+        def body(sc):
+            self.submit(sc, "I run the Alpha community every day.",
+                        self.venture(sc, {"text": "Runs the Alpha community", "project": "alpha"}, "I run the Alpha community"))
+            identity = (sc.root / "operator/profile/identity.md").read_text()
+            self.assertIn("### What I run and work on", identity)
+            self.assertIn("- Runs the Alpha community <!-- project:alpha -->", identity)
+            correction = {"route": "profile", "parameters": {"correction": {
+                "section": "identity", "category": "ventures", "previous": "Runs the Alpha community",
+                "replacement": "Runs and grows the Alpha community"}, "evidence": dict(EVIDENCE)},
+                "evidence": [{"source_id": "user", "quote": "I run and grow the Alpha community"}]}
+            receipt = self.submit(sc, "Correction: I run and grow the Alpha community.", correction)
+            self.assertEqual(receipt["effects"][0]["result"]["result"]["operator_profile"]["state"], "evolved")
+            identity = (sc.root / "operator/profile/identity.md").read_text()
+            self.assertIn("- Runs and grows the Alpha community <!-- project:alpha -->", identity)
+            # The same venture for the same project is not added a second time.
+            self.submit(sc, "I look after the Alpha community too.",
+                        self.venture(sc, {"text": "Looks after the Alpha community", "project": "alpha"}, "look after the Alpha community"))
+            self.assertEqual((sc.root / "operator/profile/identity.md").read_text().count("project:alpha"), 1)
+        self.each(body)
+
+    def test_a_codex_and_a_claude_process_writing_at_once_lose_nothing(self):
+        import subprocess
+        sc = Scenario(self, "codex")
+        base = [sys.executable, str(sc.root / ".aiverse/extensions/ai-verse-codex-learning/bridge.py"), "--root", str(sc.root)]
+        jobs = []
+        for index, harness in enumerate(["codex", "claude"] * 3):
+            payload = {"scope": "operator", "session_id": "s" + str(index), "turn_id": "t" + str(index), "route": "profile",
+                       "parameters": {"identity": {"notes": [f"race fact {index}"]}, "evidence": dict(EVIDENCE),
+                                      "provenance": {"trigger_ref": f"race:{index}", "classifier": "test", "source": harness}},
+                       "refs": [f"{harness}:turn:t{index}:source:abcd:sha256:" + "0" * 64], "effect_id": f"{harness}:s{index}:t{index}:0:feed"}
+            command = base + ["--harness", harness, "owner", "learn"] if harness == "claude" else base + ["owner", "learn"]
+            jobs.append(subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            jobs[-1].stdin.write(json.dumps(payload))
+            jobs[-1].stdin.close()
+        outputs = [job.stdout.read() for job in jobs]
+        for job in jobs:
+            job.wait(timeout=60)
+        self.assertTrue(all(json.loads(out)["ok"] for out in outputs), outputs)
+        identity = (sc.root / "operator/profile/identity.md").read_text()
+        for index in range(6):
+            self.assertIn(f"race fact {index}", identity)

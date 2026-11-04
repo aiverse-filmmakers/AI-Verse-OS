@@ -38,7 +38,7 @@ For route profile, parameters use the existing OS owner shape:
        "contains_sensitive": false, "contains_secret": false,
        "reason": "The user explicitly gave a durable working preference."}}
 
-Identity uses `name` (a string), and `roles`, `domains`, `notes` (arrays of strings). For example: `{"identity":{"notes":["As of the stated date, the operator lives in the stated country."]},"evidence":{...}}`. Preference categories `communication`, `working_style`, `quality_expectations`, `avoid` also require arrays of strings. The bridge converts a single plain string in these list fields to a one-element array without changing its meaning; objects or invalid list items are refused before any batch write. The profile owner retains final admission. Permission/approval changes are excluded from learning. Profile writes require operator scope and direct user evidence. Keep workspace corrections scoped unless the user clearly generalizes them.
+Identity uses `name` (a string), and `roles`, `domains`, `ventures`, `notes` (arrays of strings). `ventures` are one line each about what the operator runs or works on, under "What I run and work on"; a line may be `{"text": "...", "project": "<project id>"}` to point at an existing project (one live line per project). For example: `{"identity":{"notes":["As of the stated date, the operator lives in the stated country."]},"evidence":{...}}`. Preference categories `communication`, `working_style`, `quality_expectations`, `avoid` also require arrays of strings. The bridge converts a single plain string in these list fields to a one-element array without changing its meaning; objects or invalid list items are refused before any batch write. The profile owner retains final admission. Permission/approval changes are excluded from learning. Profile writes require operator scope and direct user evidence. Keep workspace corrections scoped unless the user clearly generalizes them.
 
 For route current, parameters are exactly heading, text, old_text, expected_sha256, admission. Admission must be:
 
@@ -112,3 +112,16 @@ Profile correction (both apps). Read the exact current line first with `query --
 
 `category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
 
+
+
+## Destinations: where a candidate is saved
+
+Each turn has its own list of destinations, shown in the instructions as "Where this turn may save". It comes from the folder the chat runs in plus any project the operator named in his own typed words (exact project id, name or alias). Names inside pasted, quoted or code blocks never count. Nothing carries over to the next turn.
+
+- A candidate may carry a top level `"scope": "workspace:<id>"` (or `"operator"`). Without it a `profile` candidate goes to the operator profile and every other route to the turn's main destination.
+- Two candidates in one review may go to two destinations. A review that spans destinations does not save a session digest.
+- Evidence can only support a write to a destination it came from. The operator's own words support every destination they named. Tool and assistant text supports only the turn's main destination.
+- If a name could mean more than one project, the instructions say so. Ask the operator one plain question before saving anything about it.
+- A fact about the operator himself, stated by him in a project chat, may go to the profile with `"scope":"operator"` and `"general_fact":{"stated_by_operator_about_self":true,"contains_project_figures":false}`. It needs his own words as evidence and must contain no digits.
+- Profile corrections accept `"section":"identity"` with category `roles`, `domains`, `ventures` or `notes`; the bridge checks the identity version instead of the preferences version.
+- `query --scope workspace:<id>` reads context or Memory from one of the turn's destinations (the operator scope is always readable).

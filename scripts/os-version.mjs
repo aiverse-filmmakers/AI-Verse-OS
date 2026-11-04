@@ -38,6 +38,40 @@ function readLocalDescriptor(root) {
   }
 }
 
+function gitText(root, args) {
+  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', shell: false, timeout: 10_000, windowsHide: true });
+  return result.error || result.status !== 0 ? null : result.stdout.trim();
+}
+
+// Offline label for the source checked out at `root`. A descriptor describes the
+// revision it names, and acceptance is recorded in a later commit, so its label is
+// trusted only when HEAD is that revision or differs from it by release/ metadata
+// alone. Anything else (an older descriptor, a shallow clone, no git) is unverified.
+export function resolveLocalVersion(root = DEFAULT_ROOT) {
+  const descriptor = readLocalDescriptor(root);
+  const info = {
+    version: null,
+    status: 'unverified',
+    descriptor_version: descriptor?.version ?? null,
+    descriptor_revision: descriptor?.revision ?? null,
+    source_revision: null,
+  };
+  if (!descriptor?.version || !descriptor.revision) return info;
+  const head = gitText(root, ['rev-parse', 'HEAD']);
+  if (!head || !SHA40.test(head)) return info;
+  info.source_revision = head;
+  let verified = head === descriptor.revision;
+  if (!verified) {
+    const changed = gitText(root, ['diff', '--name-only', `${descriptor.revision}..${head}`]);
+    verified = changed !== null && changed.split('\n').filter(Boolean).every((file) => file.startsWith('release/'));
+  }
+  if (verified) {
+    info.version = descriptor.version;
+    info.status = 'verified';
+  }
+  return info;
+}
+
 function distributionState(run) {
   const status = run('aiverse', ['status', '--json']);
   const os = status?.components?.['ai-verse-os'];
@@ -203,15 +237,22 @@ async function main(argv) {
   const args = [...argv];
   let root = DEFAULT_ROOT;
   let json = false;
+  let local = false;
   for (let index = 0; index < args.length; index += 1) {
     if (args[index] === '--root') {
       if (!args[index + 1]) throw new Error('--root requires a path');
       root = path.resolve(args[++index]);
+    } else if (args[index] === '--local') {
+      local = true;
     } else if (args[index] === '--json') {
       json = true;
     } else {
       throw new Error(`unknown option: ${args[index]}`);
     }
+  }
+  if (local) {
+    process.stdout.write(`${JSON.stringify(resolveLocalVersion(root))}\n`);
+    return;
   }
   const report = await getVersionReport({ root });
   if (json) process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

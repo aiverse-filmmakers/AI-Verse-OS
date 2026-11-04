@@ -33,7 +33,9 @@ jobs:
         run: node scripts/test-capability-resolver.mjs
 
       - name: Test read-only accepted OS/Core version report
-        run: node scripts/test-os-version.mjs
+        run: |
+          node scripts/test-os-version.mjs
+          node scripts/test-os-version-truth.mjs
 
       - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
@@ -75,7 +77,10 @@ jobs:
 
           if (pkg.name !== 'ai-verse-os') throw new Error('package name must be ai-verse-os');
           if (pkg.bin?.['ai-verse-os'] !== 'bin/ai-verse-os.mjs') throw new Error('ai-verse-os bin mapping is missing or wrong');
-          if (!cli.includes(`const CLI_VERSION = '${pkg.version}'`)) throw new Error('CLI_VERSION does not match package.json version');
+          const desc = JSON.parse(fs.readFileSync('release/component-release.json', 'utf8'));
+          if (cli.includes("CLI_VERSION = '")) throw new Error('CLI must read its version from release/component-release.json, not hard-code it');
+          if (!pkg.files.includes('release/component-release.json')) throw new Error('package must ship release/component-release.json');
+          if (!desc.version) throw new Error('release descriptor has no version');
           NODE
           node bin/ai-verse-os.mjs version
           npm pack --dry-run

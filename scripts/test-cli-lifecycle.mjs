@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const cli = path.resolve('bin/ai-verse-os.mjs');
@@ -113,6 +114,23 @@ try {
   const repaired = invoke(['setup', '--dir', root, '--profile', 'detected', '--json'], 0);
   assert.equal(repaired.state, 'ready');
   assert.equal(repaired.setup.profile, 'detected');
+
+  // One version authority: the accepted release descriptor. The CLI, the setup
+  // marker and package.json must not carry a competing OS version.
+  const releaseDescriptor = JSON.parse(fs.readFileSync(new URL('../release/component-release.json', import.meta.url), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const cliSource = fs.readFileSync(new URL('../bin/ai-verse-os.mjs', import.meta.url), 'utf8');
+  // The label is the descriptor's when this checkout is verified against it, else honestly unknown (see test-os-version-truth.mjs).
+  const expected = repaired.version_status === 'verified' ? releaseDescriptor.version : 'unknown';
+  assert.ok(['verified', 'unverified'].includes(repaired.version_status));
+  assert.equal(repaired.version, expected, 'setup output reports the resolved label');
+  assert.equal(JSON.parse(fs.readFileSync(setupFile, 'utf8')).version, expected, 'setup.json carries the resolved label');
+  assert.equal(invoke(['status', '--dir', root, '--json'], 0).version, expected, 'status reports the resolved label');
+  const printed = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/ai-verse-os.mjs', import.meta.url)), '--version'], { encoding: 'utf8' });
+  assert.notEqual(printed.stdout.trim(), '0.2.0', '--version must not print the old hard-coded number');
+  assert.ok(!/CLI_VERSION = '/.test(cliSource), 'CLI must not hard-code a version');
+  assert.equal(pkg.version, '0.0.0', 'package.json version is a placeholder, not the OS version');
+  assert.ok(pkg.files.includes('release/component-release.json'), 'package ships the release descriptor');
 
   process.stdout.write('CLI lifecycle acceptance: PASS\n');
 } finally {

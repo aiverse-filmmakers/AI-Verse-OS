@@ -1,7 +1,7 @@
 {
   "name": "ai-verse-os",
-  "version": "0.2.0",
-  "description": "CLI installer and manager for AI-Verse OS",
+  "version": "0.0.0",
+  "description": "CLI installer and manager for AI-Verse OS. The OS version lives in release/component-release.json, not in this file.",
   "type": "module",
   "bin": {
     "ai-verse-os": "bin/ai-verse-os.mjs"
@@ -11,6 +11,7 @@
   },
   "files": [
     "bin/",
+    "release/component-release.json",
     "LICENSE",
     "README.md"
   ],

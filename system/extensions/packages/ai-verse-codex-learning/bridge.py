@@ -241,6 +241,27 @@ def small_window(text, query, maximum=2200):
     return "\n".join(output) + "\n[Bounded excerpt; query the owner for further context.]"
 
 
+KEY_HEADING = re.compile(r"^#{1,6}\s*(communication|avoid|must follow|never)\b", re.I)
+HARD_RULE = re.compile(r"\b(never|must|always|do not|don't|avoid)\b", re.I)
+
+
+def key_preferences(text, maximum=2400):
+    """Explicit communication rules and the avoid list, hardest rules first, in file order."""
+    lines, active = [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            active = bool(KEY_HEADING.match(line.strip()))
+        elif active and line.strip():
+            lines.append(line.strip()[:500])
+    order = sorted(range(len(lines)), key=lambda i: (not HARD_RULE.search(lines[i]), i))
+    chosen, size = [], 0
+    for index in order:
+        if size + len(lines[index].encode()) + 1 <= maximum:
+            chosen.append(index)
+            size += len(lines[index].encode()) + 1
+    return "\n".join(lines[i] for i in sorted(chosen))
+
+
 def proof(text, maximum):
     salt = secrets.token_hex(16)
     words = tokens(text)
@@ -793,12 +814,17 @@ class Bridge:
         if scope.startswith("workspace:"):
             context["workspace"] = self.manifest(scope[10:])
         profile = {}
+        keys, prefs = {}, ""
         for name in ("identity.md", "preferences.md"):
             file = self.root / "operator/profile" / name
             if file.exists():
                 text = safe(file, self.root, file=True).read_text()
                 if not SECRET.search(text):
                     profile[name] = small_window(text, prompt)
+                    if self.harness == "claude" and name == "preferences.md" and key_preferences(text):
+                        prefs = text
+                        keys = {"operator_key_preferences": key_preferences(text)}
+        context = {**keys, **context}
         context["operator_profile"] = profile
         try:
             context["purpose_intent"] = self.owner("intent_context", {"scope": scope, "prompt": prompt[:4096]})
@@ -828,19 +854,22 @@ class Bridge:
             context["operator_profile"] = {name: small_window(value, prompt, 600) for name, value in profile.items()}
             encoded = json.dumps(context, ensure_ascii=False)
         if len((header + encoded).encode()) > limit:
-            context = {"scope": scope, "purpose_intent": context.get("purpose_intent", {}),
+            context = {"scope": scope, **keys, "purpose_intent": context.get("purpose_intent", {}),
                        "warnings": ["Context budget exceeded; query current/profile/Memory owners on demand."]}
             encoded = json.dumps(context, ensure_ascii=False)
         if self.harness == "claude" and len((header + encoded).encode()) > limit:
             # Final enforcement for Claude: shrink owner data first, then use the short instruction.
             warning = ["Context budget exceeded; query current/profile/Memory owners on demand."]
-            for header, context in (
-                    (header, {"scope": scope, "purpose_intent": {"status": "omitted", "query_required": True},
-                              "warnings": warning}),
-                    (self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n",
-                     {"scope": scope, "purpose_intent": context.get("purpose_intent", {}), "warnings": warning}),
-                    (self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n",
-                     {"scope": scope, "warnings": warning})):
+            short = self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+            intent = context.get("purpose_intent", {})
+            options = [(header, {"scope": scope, **keys, "purpose_intent": {"status": "omitted", "query_required": True},
+                                 "warnings": warning}), (short, {"scope": scope, **keys, "purpose_intent": intent,
+                                                                  "warnings": warning})]
+            # The operator's own communication rules shrink last: try smaller excerpts before dropping them.
+            options += [(short, {"scope": scope, "operator_key_preferences": key_preferences(prefs, size),
+                                 "warnings": warning}) for size in (1600, 1000, 600, 300)] if prefs else []
+            options.append((short, {"scope": scope, "warnings": warning}))
+            for header, context in options:
                 encoded = json.dumps(context, ensure_ascii=False)
                 if len((header + encoded).encode()) <= limit:
                     break

@@ -367,6 +367,47 @@ class ClaudeEventTests(ClaudeFixture):
             return {"scope": "operator", "current_context": "Context text. " * 600, "direction_owner": "brain"}
         raise Refused("unavailable")
 
+    RULE = "Never use dashes when communicating with me or writing content for me."
+    AVOID = "Avoid vague praise and filler openings."
+
+    def large_profile(self):
+        filler = lambda n, k: "\n".join(f"- {k} preference number {i} describes a detailed working habit." for i in range(n))
+        (self.root / "operator/profile/preferences.md").write_text(
+            "# Working Preferences\n\n## Durable writeback\n\n" + filler(10, "Writeback") +
+            "\n\n### Communication\n\n" + filler(8, "Voice") + "\n- " + self.RULE + " Use commas instead.\n" +
+            filler(25, "Tone") + "\n\n### Working style\n\n" + filler(40, "Style") +
+            "\n\n### Quality expectations\n\n" + filler(30, "Quality") +
+            "\n\n### Avoid\n\n- " + self.AVOID + "\n" + filler(10, "Avoid") + "\n")
+        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 60)
+        self.assertGreater(len((self.root / "operator/profile/preferences.md").read_bytes()), 7500)
+
+    def test_i_communication_rules_arrive_first_at_session_start_and_prompt_submit(self):
+        self.large_profile()
+        for limit in (6000, 14000):
+            self.set_config(context_max_bytes=limit)
+            with patch.object(Bridge, "owner", self.rich_owner):
+                start = self.bridge.hook(self.claude_event("SessionStart", source="startup"))
+                prompt = self.prompt("What goals and priorities matter?")
+            for result in (start, prompt):
+                text = result["hookSpecificOutput"]["additionalContext"]
+                self.assertIn(self.RULE, text, limit)
+                self.assertIn(self.AVOID, text, limit)
+                if "operator_profile" in text:
+                    self.assertLess(text.index("operator_key_preferences"), text.index("operator_profile"))
+                self.assertLessEqual(len(text.encode()), min(limit, 9000), limit)
+            turn = self.turn()
+            call = f"--harness claude review --session {self.session} --turn {turn['id']} --token {turn['token']}"
+            self.assertIn(call, prompt["hookSpecificOutput"]["additionalContext"])
+            json.loads(prompt["hookSpecificOutput"]["additionalContext"].split("Owner data (JSON):\n", 1)[1])
+
+    def test_j_codex_context_has_no_key_preference_block(self):
+        self.large_profile()
+        codex = Bridge(self.root)
+        with patch.object(Bridge, "owner", self.rich_owner):
+            text = codex.hook(self.event("UserPromptSubmit", turn_id="turn-1", prompt="Hello there friend"))[
+                "hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("operator_key_preferences", text)
+
     def test_h_invalid_events_are_handled_without_a_crash(self):
         for bad in ({"hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},
                     {"session_id": "bad id!", "hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},

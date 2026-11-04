@@ -391,7 +391,7 @@ HARNESSES = {
 PASTED = re.compile(r"<(pasted_content|system-reminder|untrusted[\w-]*)\b[^>]*>.*?</\1\s*>", re.S | re.I)
 FENCED = re.compile(r"(```|~~~).*?(\1|\Z)", re.S)
 QUOTED_LINE = re.compile(r"(?m)^[ \t]*>.*$")
-INLINE_QUOTE = re.compile(r'"[^"\n]{0,2000}"|\u201c[^\u201d\n]{0,2000}\u201d|\u00ab[^\u00bb\n]{0,2000}\u00bb')
+INLINE_QUOTE = re.compile(r"(?<![\w])'[^'\n]{1,2000}'(?![\w])|" + r'"[^"\n]{0,2000}"|\u201c[^\u201d\n]{0,2000}\u201d|\u00ab[^\u00bb\n]{0,2000}\u00bb')
 
 
 def own_words(prompt):
@@ -440,7 +440,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "57b564dfd6442103b3e680577d6cb1213ee7098f321f1621db6d281a77eb90c8"  # refreshed with the package hashes
+REFLECT_SHA256 = "4f5aaa76b5574f8a1153d24e4ba7ddc16fdca157f63ec69ae8e8a61d5d6c427a"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -1161,6 +1161,10 @@ class Bridge:
             elif kind == "SessionStart":
                 # Startup, resume and compaction never inherit an earlier project: the physical folder decides.
                 state["scope"] = self.scope(event["cwd"], "")
+                held = state.get("turn")
+                if held and held.get("state") in {"active", "review_requested"}:
+                    # The stored turn and its destinations end here; the next prompt builds a fresh one.
+                    held.update({"state": "session_restarted", "allowed": [state["scope"]], "ambiguous": []})
                 self.save(state)
                 result = self.context(state, "", kind, tidy=False)
             else:
@@ -1475,7 +1479,7 @@ class Bridge:
                 turn["review_started_at"] = utc()
                 self.save(state)
             projects_in_turn = [a for a in (turn.get("allowed") or []) if a.startswith("workspace:")]
-            mixed = len({c["scope"] for c, _, _ in checked}) > 1 or len(projects_in_turn) > 1
+            mixed = len({c["scope"] for c, _, _ in checked}) > 1 or len(projects_in_turn) > 1 or bool(turn.get("ambiguous"))
             if (not self.cancelled(session, turn_id) and payload["persist_digest"] and not mixed
                     and (checked or any(s["kind"] == "tool" for s in turn["sources"].values()))):
                 try:
@@ -1590,7 +1594,7 @@ def verify_capability(bridge, auth):
         raise Refused("this operation needs a turn capability")
     state = bridge.state(auth["session"])
     turn = bridge.bound_turn(state, auth["turn"], auth["token"])
-    if turn["state"] not in {"active", "review_requested", "reviewed"}:
+    if turn["state"] not in {"active", "review_requested"}:
         raise Refused("the turn is not live")
     return {"operator", *(turn.get("allowed") or [state["scope"]])}
 
@@ -1605,6 +1609,8 @@ def current_remove(root, host, payload):
         return {"state": "absent", "changed": False}
     marker = f"<!-- codex-effect:{digest(effect)} -->"
     expected = payload["parameters"].get("line_sha256")
+    if not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected):
+        raise Refused("removal needs the hash of the line that was written")
     lock_path = file.parent / ".codex-operational-write.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "r+") as lock, file_lock(lock):
@@ -1613,7 +1619,7 @@ def current_remove(root, host, payload):
         found = [line for line in lines if marker in line]
         if not found:
             return {"state": "absent", "changed": False}
-        if expected is not None and any(digest(line.rstrip("\r\n")) != expected for line in found):
+        if any(digest(line.rstrip("\r\n")) != expected for line in found):
             return {"state": "edited", "changed": False}  # the operator changed that line since: leave it
         kept = [line for line in lines if marker not in line]
         fd2, temp = tempfile.mkstemp(prefix=".codex-current-", dir=file.parent)
@@ -1749,6 +1755,10 @@ def run_owner(bridge, operation, payload):
     if operation == "reflect_scan":
         allowed = verify_capability(bridge, payload.get("auth"))
         wanted = {"workspace:" + p for p in payload.get("projects", [])}
+        if payload.get("upgrade") or payload.get("check_text") is not None:
+            # The effective scope is the development project: only the maintainer's copy may read it this way.
+            if not bridge.config["maintainer_feedback"]:
+                raise Refused("the upgrade list is switched off")
         if not wanted <= allowed:
             raise Refused("a destination is not authorized for this turn")
         return reflect_scan(bridge, module, host, payload)
@@ -2012,6 +2022,9 @@ def main():
                 if session_scope != "operator" or scope != "operator":
                     raise Refused("profile query is refused for workspace bound sessions")
                 result = bridge.owner("profile_read", {"scope": scope})
+                readable = bridge.readable_projects(state)
+                result["identity"]["ventures"] = [v for v in result["identity"].get("ventures", [])
+                                                  if not v.get("project") or v["project"] in readable]
             else:
                 result = bridge.owner("list_" + args.kind, {"scope": scope})
         elif args.command == "set":

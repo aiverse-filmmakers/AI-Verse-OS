@@ -446,14 +446,17 @@ function withProfileLock(profileRoot, work) {
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      // A lock is only taken over when its holder process is gone, never merely because it is old.
-      let holder = null;
-      try { holder = Number(fs.readFileSync(lock, 'utf8').split(':')[0]); } catch { /* released meanwhile */ }
-      let alive = true;
-      if (holder) { try { process.kill(holder, 0); } catch (e) { alive = e.code === 'EPERM'; } }
-      let veryOld = false;
-      try { veryOld = Date.now() - fs.statSync(lock).mtimeMs > 600000; } catch { /* gone */ }
-      if (!alive || veryOld) {
+      // A lock is only taken over when its holder process is gone. Age alone never decides.
+      let text = '';
+      try { text = fs.readFileSync(lock, 'utf8'); } catch { /* released meanwhile */ }
+      const holder = Number(text.split(':')[0]);
+      let stale = false;
+      if (holder > 0) { try { process.kill(holder, 0); } catch (e) { stale = e.code !== 'EPERM'; } }
+      else {
+        // An empty or garbled file only counts as abandoned after half a minute (a writer died between create and write).
+        try { stale = Date.now() - fs.statSync(lock).mtimeMs > 30000; } catch { /* gone */ }
+      }
+      if (stale) {
         const aside = `${lock}.stale-${crypto.randomBytes(6).toString('hex')}`;
         try { fs.renameSync(lock, aside); fs.unlinkSync(aside); } catch { /* another process took it */ }
         continue;

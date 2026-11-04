@@ -265,7 +265,7 @@ function baseRequest() {
   const evidence = { stable: true, explicit_or_strong: true, reason: 'Lock.' };
   const lock = path.join(root, 'operator', 'profile', '.profile-owner.lock');
   fs.writeFileSync(lock, `${process.pid}:someoneelse\n`);
-  const old = new Date(Date.now() - 120000);
+  const old = new Date(Date.now() - 7200000);
   fs.utimesSync(lock, old, old);
   const busy = spawnSync(process.execPath, [script, 'ensure', '--root', root], {
     input: JSON.stringify({ identity: { notes: ['blocked note'] }, evidence, provenance: { trigger_ref: 'lock-1' } }),

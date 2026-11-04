@@ -380,12 +380,18 @@ class Tidy:
             operation = "current_remove" if op["payload"]["route"] == "current_remove" else "learn"
             results[op["name"]] = self.owner(operation, op["payload"])
 
+    @staticmethod
+    def permitted(action, readable):
+        """Fail closed: an action with no recorded authorization is never resumed or undone."""
+        authorized = action.get("authorized")
+        return bool(authorized) and set(authorized) <= readable
+
     def recover(self, data, session, turn_id, readable):
         """An action cut off part way is finished again from its recorded operations (all are idempotent).
         Only actions this turn is authorized to read are resumed; others wait for a turn that may."""
         for aid, action in data["actions"].items():
             if action["status"] in {"applying", "undoing"}:
-                if not set(action.get("authorized", [])) <= readable:
+                if not self.permitted(action, readable):
                     continue
                 try:
                     ops = action["ops"] if action["status"] == "applying" else action["comp"]
@@ -534,7 +540,7 @@ class Tidy:
             if not entry:
                 raise self.m.Refused("that tidy item was not found")
             action = data["actions"][entry["action"]]
-            if not set(action.get("authorized", [])) <= self.readable(turn):
+            if not self.permitted(action, self.readable(turn)):
                 raise self.m.Refused("this turn may not undo a change that touches another project")
             if action["status"] == "undone":
                 return {"pass": "undo", "state": "already-undone"}

@@ -66,6 +66,7 @@ class MotherListTests(unittest.TestCase):
             view = (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text()
             self.assertIn("Derived view", view)
             self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", view)
+            sc.prompt("Show me the upgrade list please.")
             turn = sc.turn()
             self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
             self.assertEqual(sc.cli("reflect", "list").returncode, 2)

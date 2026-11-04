@@ -229,5 +229,93 @@ class RaceTests(TidyBase):
         self.assertEqual(shown, 1, shown)
 
 
+class FinalRoundTests(TidyBase):
+    def test_owner_operations_refuse_a_reviewed_turn_and_an_unauthorized_upgrade_scan(self):
+        def body(sc):
+            sc.prompt("Alpha Study update please.")
+            turn = sc.turn()
+            auth = {"session": sc.session, "turn": turn["id"], "token": turn["token"]}
+            upgrade_scan = {"projects": [], "limit": 5, "upgrade": True, "auth": auth}
+            self.assertEqual(owner_call(sc, "reflect_scan", upgrade_scan).returncode, 2)      # maintainer switch is off
+            sc.bridge.review(sc.session, turn["id"], turn["token"], sc.payload())
+            self.assertEqual(owner_call(sc, "reflect_scan", {"projects": ["alpha"], "limit": 5, "auth": auth}).returncode, 2)
+        self.each(body)
+
+    def test_profile_query_hides_venture_lines_the_turn_may_not_read(self):
+        def body(sc):
+            for project, name in (("alpha", "Alpha Study"), ("beta", "Beta Study")):
+                sc.bridge.owner("learn", {"scope": "operator", "session_id": "s", "turn_id": "t", "route": "profile", "refs": ["x:1"],
+                    "parameters": {"identity": {"ventures": [{"text": f"Works on {name}", "project": project}]},
+                                   "evidence": {"stable": True, "explicit_or_strong": True, "privacy_ambiguous": False,
+                                                "contains_sensitive": False, "contains_secret": False, "reason": "seed"}},
+                    "effect_id": "seed-" + project})
+            sc.prompt("Show me what you know about me.")
+            turn = sc.turn()
+            out = sc.cli("query", "--session", sc.session, "--kind", "profile", "--turn", turn["id"], "--token", turn["token"])
+            self.assertEqual(out.returncode, 0, out.stdout)
+            self.assertNotIn("Works on Alpha Study", out.stdout)
+            self.assertNotIn("Works on Beta Study", out.stdout)
+        self.each(body)
+
+    def test_a_restart_ends_the_stored_turn(self):
+        def body(sc):
+            sc.prompt("Alpha Study and Beta Study today.")
+            turn = sc.turn()
+            sc.bridge.hook({"session_id": sc.session, "cwd": str(sc.root), "hook_event_name": "SessionStart", "source": "resume"})
+            self.assertEqual(sc.turn()["state"], "session_restarted")
+            self.assertEqual(sc.turn()["allowed"], ["operator"])
+            self.assertEqual(sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha",
+                                    "--turn", turn["id"], "--token", turn["token"]).returncode, 2)
+        self.each(body)
+
+    def test_single_quotes_are_excluded_but_apostrophes_still_work(self):
+        def body(sc):
+            sc.prompt("He said 'see Beta Study' and left.")
+            self.assertEqual(sc.turn()["allowed"], ["operator"])
+            sc.prompt("Bogdan's note: don't forget Beta Study today.")
+            self.assertEqual(sc.turn()["allowed"], ["operator", "workspace:beta"])
+        self.each(body)
+
+    def test_no_digest_while_a_name_is_unresolved(self):
+        def body(sc):
+            sc.prompt("Please look at workspace:missing and tell me the filter retained all twelve correct records.")
+            self.assertTrue(sc.turn()["ambiguous"])
+            payload = sc.payload()
+            payload["persist_digest"] = True
+            sc.bridge.hook({"session_id": sc.session, "turn_id": sc.turn()["id"], "cwd": str(sc.root), "hook_event_name": "PostToolUse",
+                            "permission_mode": "default", "tool_use_id": "t1", "tool_response": {"output": "done"}})
+            receipt = sc.bridge.review(sc.session, sc.turn()["id"], sc.turn()["token"], payload)
+            self.assertIsNone(receipt["digest"])
+        self.each(body)
+
+    def test_an_action_without_recorded_authorization_is_never_resumed_or_undone(self):
+        def body(sc):
+            note = TidyAuthorizationTests.run_beta_pass(self, sc)
+            tidy = sc.bridge.tidy()
+            data = tidy.load()
+            for action in data["actions"].values():
+                action.pop("authorized", None)
+            victim = next(a for a in data["actions"].values() if a["kind"] == "venture")
+            victim["status"] = "applying"
+            tidy.store(data)
+            sc.prompt("Beta Study again.")
+            turn = sc.turn()
+            with self.assertRaises(Refused):
+                tidy.undo(sc.session, turn["id"], turn["token"], note, 1)
+            tidy.plan(sc.session, turn["id"], turn["token"])
+            self.assertEqual(tidy.load()["actions"][victim["id"]]["status"], "applying")
+        self.each(body)
+
+    def test_removal_without_the_line_hash_is_refused(self):
+        def body(sc):
+            sc.prompt("Beta Study update please.")
+            turn = sc.turn()
+            auth = {"session": sc.session, "turn": turn["id"], "token": turn["token"]}
+            result = owner_call(sc, "current_remove", {"scope": "workspace:beta", "parameters": {"effect_id": "x"}, "auth": auth})
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("hash", result.stdout)
+        self.each(body)
+
+
 if __name__ == "__main__":
     unittest.main()

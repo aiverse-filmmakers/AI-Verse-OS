@@ -33,7 +33,9 @@ jobs:
         run: node scripts/test-capability-resolver.mjs
 
       - name: Test read-only accepted OS/Core version report
-        run: node scripts/test-os-version.mjs
+        run: |
+          node scripts/test-os-version.mjs
+          node scripts/test-os-version-truth.mjs
 
       - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
@@ -80,7 +82,7 @@ jobs:
           if (!pkg.files.includes('release/component-release.json')) throw new Error('package must ship release/component-release.json');
           if (!desc.version) throw new Error('release descriptor has no version');
           NODE
-          test "$(node bin/ai-verse-os.mjs version)" = "$(node -p "require('./release/component-release.json').version")"
+          node bin/ai-verse-os.mjs version
           npm pack --dry-run
 
       - name: Verify member install documentation

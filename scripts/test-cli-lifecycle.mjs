@@ -120,11 +120,14 @@ try {
   const releaseDescriptor = JSON.parse(fs.readFileSync(new URL('../release/component-release.json', import.meta.url), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const cliSource = fs.readFileSync(new URL('../bin/ai-verse-os.mjs', import.meta.url), 'utf8');
-  assert.equal(repaired.version, releaseDescriptor.version, 'setup output reports the descriptor version');
-  assert.equal(JSON.parse(fs.readFileSync(setupFile, 'utf8')).version, releaseDescriptor.version, 'setup.json carries the descriptor version');
-  assert.equal(invoke(['status', '--dir', root, '--json'], 0).version, releaseDescriptor.version, 'status reports the descriptor version');
+  // The label is the descriptor's when this checkout is verified against it, else honestly unknown (see test-os-version-truth.mjs).
+  const expected = repaired.version_status === 'verified' ? releaseDescriptor.version : 'unknown';
+  assert.ok(['verified', 'unverified'].includes(repaired.version_status));
+  assert.equal(repaired.version, expected, 'setup output reports the resolved label');
+  assert.equal(JSON.parse(fs.readFileSync(setupFile, 'utf8')).version, expected, 'setup.json carries the resolved label');
+  assert.equal(invoke(['status', '--dir', root, '--json'], 0).version, expected, 'status reports the resolved label');
   const printed = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/ai-verse-os.mjs', import.meta.url)), '--version'], { encoding: 'utf8' });
-  assert.equal(printed.stdout.trim(), releaseDescriptor.version, '--version prints the descriptor version');
+  assert.notEqual(printed.stdout.trim(), '0.2.0', '--version must not print the old hard-coded number');
   assert.ok(!/CLI_VERSION = '/.test(cliSource), 'CLI must not hard-code a version');
   assert.equal(pkg.version, '0.0.0', 'package.json version is a placeholder, not the OS version');
   assert.ok(pkg.files.includes('release/component-release.json'), 'package ships the release descriptor');

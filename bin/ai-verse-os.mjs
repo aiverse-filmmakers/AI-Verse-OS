@@ -6,20 +6,32 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 // The OS version has one authority: release/component-release.json (the accepted
-// release descriptor). The CLI never carries its own number. package.json's
-// version is only an npm placeholder and is not the OS version.
-function readReleaseVersion() {
+// release descriptor). The CLI never carries its own number, and it asks the
+// TARGET install (not this launcher) to resolve the label, so a global CLI of one
+// version never stamps its own version on another install. The target's
+// scripts/os-version.mjs verifies the descriptor describes the checked out source
+// before the label is trusted; otherwise the label is reported as unverified.
+// package.json's version is only an npm placeholder and is not the OS version.
+const LAUNCHER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function versionFields(root) {
+  const unknown = { version: 'unknown', version_status: 'unverified', release_descriptor_version: null };
   try {
-    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'release', 'component-release.json');
-    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (data.component_id === 'ai-verse-os' && typeof data.version === 'string' && data.version) return data.version;
+    const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'os-version.mjs'), '--local', '--root', root], {
+      encoding: 'utf8', shell: false, timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    if (result.error || result.status !== 0) return unknown;
+    const info = JSON.parse(result.stdout);
+    return {
+      version: info.status === 'verified' && typeof info.version === 'string' && info.version ? info.version : 'unknown',
+      version_status: info.status === 'verified' ? 'verified' : 'unverified',
+      release_descriptor_version: typeof info.descriptor_version === 'string' ? info.descriptor_version : null,
+    };
   } catch {
-    // Fall through to an honest unknown.
+    return unknown;
   }
-  return 'unknown';
 }
 
-const CLI_VERSION = readReleaseVersion();
 const LIFECYCLE_SCHEMA = '1.0';
 const SETUP_SCHEMA = '1.0';
 const DEFAULT_REPO = 'https://github.com/aiverse-filmmakers/AI-Verse-OS.git';
@@ -202,7 +214,7 @@ function writeSetup(root, profile, previous = null) {
   const payload = {
     schema_version: SETUP_SCHEMA,
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     profile,
     setup_at: previous?.setup_at || now,
     updated_at: now,
@@ -250,7 +262,7 @@ function statusObject(root, options = {}) {
     return {
       schema_version: LIFECYCLE_SCHEMA,
       component_id: 'ai-verse-os',
-      version: CLI_VERSION,
+      ...versionFields(root),
       state: 'unhealthy',
       health: 'unhealthy',
       ready: false,
@@ -270,7 +282,7 @@ function statusObject(root, options = {}) {
   return {
     schema_version: LIFECYCLE_SCHEMA,
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     state,
     health: state === 'ready' ? 'healthy' : (state === 'unhealthy' ? 'unhealthy' : 'not-ready'),
     ready: state === 'ready',
@@ -283,7 +295,7 @@ function statusObject(root, options = {}) {
 }
 
 function usage() {
-  out(`AI-Verse OS CLI v${CLI_VERSION}\n`);
+  out(`AI-Verse OS CLI v${versionFields(LAUNCHER_ROOT).version}\n`);
   out('Usage:');
   out('  ai-verse-os install [folder] [--json]');
   out('  ai-verse-os setup [--dir folder] [--profile detected|core] [--json]');
@@ -342,7 +354,7 @@ function install(options) {
     schema_version: LIFECYCLE_SCHEMA,
     command: 'install',
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(target),
     state: 'installed',
     changed: true,
     root: target,
@@ -374,7 +386,7 @@ function setup(options) {
     schema_version: LIFECYCLE_SCHEMA,
     command: 'setup',
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     root,
     profile,
     state: current.state,
@@ -403,7 +415,8 @@ function status(options) {
     const result = {
       schema_version: LIFECYCLE_SCHEMA,
       component_id: 'ai-verse-os',
-      version: CLI_VERSION,
+      version: 'unknown',
+      version_status: 'unverified',
       state: 'absent',
       ready: false,
     };
@@ -504,7 +517,7 @@ function update(options) {
     schema_version: LIFECYCLE_SCHEMA,
     command: 'update',
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     state: after.state,
     root,
     setup_preserved: before.setup_at ? before.setup_at === after.setup_at : after.configured === false,
@@ -531,7 +544,7 @@ function reinstall(options) {
     schema_version: LIFECYCLE_SCHEMA,
     command: 'reinstall',
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     state: after.state,
     root,
     tracked_files_restored: true,
@@ -581,7 +594,7 @@ function descriptor(options) {
   const result = {
     schema_version: LIFECYCLE_SCHEMA,
     component_id: 'ai-verse-os',
-    version: CLI_VERSION,
+    ...versionFields(root),
     compatibility: { os_schema: '2.x', extension_registry_schema: '1.0' },
     package_install_source: 'github:aiverse-filmmakers/AI-Verse-OS',
     setup_requirements: ['explicit setup after install', 'selected composed profile readiness'],
@@ -640,7 +653,7 @@ function onboard(options) {
 const { command, options } = parse(process.argv.slice(2));
 
 if (options.version || command === '--version' || command === '-v') {
-  out(CLI_VERSION);
+  out(versionFields(LAUNCHER_ROOT).version);
   process.exit(0);
 }
 if (options.help) {
@@ -658,7 +671,7 @@ switch (command) {
   case 'onboard': onboard(options); break;
   case 'components': components(options); break;
   case 'descriptor': descriptor(options); break;
-  case 'version': out(CLI_VERSION); break;
+  case 'version': out(versionFields(LAUNCHER_ROOT).version); break;
   case 'help': usage(); break;
   default:
     usage();

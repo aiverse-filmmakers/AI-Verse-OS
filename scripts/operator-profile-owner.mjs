@@ -389,9 +389,6 @@ function correctIdentity(profileRoot, request) {
   const label = (entry) => (typeof entry === 'string' ? entry : entry.text);
   const values = identity[request.category];
   const replacementKey = request.replacement ? normalizeFact(request.replacement) : null;
-  if (request.retire && !values.some((value) => normalizeFact(label(value)) === normalizeFact(request.previous))) {
-    return { ...base, state: 'existing', changed: false, identity_source_sha256: sha, reason: 'the line is already retired' };
-  }
   if (!request.retire && !values.some((value) => label(value) === request.previous)
       && values.some((value) => normalizeFact(label(value)) === replacementKey)) {
     return { ...base, state: 'existing', changed: false, identity_source_sha256: sha, reason: 'the requested line is already current' };

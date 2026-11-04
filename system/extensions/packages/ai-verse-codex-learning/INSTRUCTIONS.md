@@ -37,3 +37,5 @@ Use OS scoped discovery and exact identities for same-named alternatives; never
 silently prefer a generated built-in copy over an explicitly requested package.
 
 Claude Code: the same hooks run with `--harness claude`. JSON is never typed into a command; the review, `intent`, `sources --match` and `query --depth source` input goes in a new note file inside `runtime/codex-learning/claude-input/`, named with `--input-file`. The bridge deletes the note after reading it. `bridge.py set --enabled false` switches learning off for both apps.
+
+Tidying: when the chat start says tidying is due, run its three `reflect` commands (plan, apply, done) before the final answer. When it includes a tidy note, begin the next reply with it exactly. Use everyday words with the operator: "what I know about you", "projects", "what I remember", "your goals", "AI-Verse OS helpers".

@@ -125,3 +125,15 @@ Each turn has its own list of destinations, shown in the instructions as "Where 
 - A fact about the operator himself, stated by him in a project chat, may go to the profile with `"scope":"operator"` and `"general_fact":{"stated_by_operator_about_self":true,"contains_project_figures":false}`. It needs his own words as evidence and must contain no digits.
 - Profile corrections accept `"section":"identity"` with category `roles`, `domains`, `ventures` or `notes`; the bridge checks the identity version instead of the preferences version.
 - `query --scope workspace:<id>` reads context or Memory from one of the turn's destinations (the operator scope is always readable).
+
+## Tidying (`reflect`)
+
+When the start of a chat says tidying is due, run the three printed commands after the operator's request and before the final answer: `reflect plan`, `reflect apply`, `reflect done` (same `--session --turn --token` as the review command; no JSON, so no note file is needed in either app). A pass looks at no more than 20 recent saves, reads no more than 40 records, makes no more than 5 changes and stops starting new work after about 45 seconds; it says when it was cut short. Only projects in view this turn are tidied. Changes the helpers cannot prove came from the operator's own words are still made, but they are marked "guess" in what is stored.
+
+A finished pass leaves a tidy note. When the start of a chat includes one, begin the next reply with it exactly as given. Never put it in the middle of an answer. If the operator says "undo N", run `reflect undo --note ID --item N`; if they correct an item in words, save the right fact normally and run `reflect undo --note ID --item N --mode corrected`.
+
+Not in this build: merging two goals that mean the same, linking a goal to a project, and any change to what a goal means. These need Brain to offer a reversible API and an explicit statement from the operator.
+
+## Maintainer feedback (the upgrade list)
+
+Only when `maintainer_feedback` is true in the extension configuration. A remark about how AI-Verse OS itself behaves may be saved with `{"route":"upgrade","parameters":{"text":"..."},"evidence":[...the operator's own words...]}`. The text holds the request only and is refused if it names another project. With the switch off the candidate is ignored. `reflect list` rebuilds the derived view `workspaces/ai-verse-os-development/knowledge/AI-VERSE-OS-UPGRADE-LIST.md`.

@@ -37,6 +37,8 @@ DEFAULTS = {
     "source_max_tokens": 4096, "source_limit": 16, "candidate_limit": 4,
     "state_ttl_seconds": 86400, "owner_timeout_seconds": 12,
     "runtime_path": "", "skills_root": None, "skills_entrypoint": None,
+    "reflection_enabled": True, "reflect_min_entries": 5, "reflect_max_age_hours": 6,
+    "maintainer_feedback": False,
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
                "Pending decisions", "Execution state", "Connection state"}
@@ -421,6 +423,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
+REFLECT_SHA256 = "5106811d25d4a1eda3c15a5d5bd0e78528c3089316720bb6ef09085e73f7027a"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -443,13 +446,16 @@ class Bridge:
             if not isinstance(custom, dict) or set(custom) - set(DEFAULTS):
                 raise Refused("unknown extension configuration fields")
             self.config.update(custom)
+        for name in ("reflection_enabled", "maintainer_feedback"):
+            if type(self.config[name]) is not bool:
+                raise Refused("invalid extension configuration: " + name)
         if self.config["schema_version"] != 1 or type(self.config["enabled"]) is not bool:
             raise Refused("invalid extension configuration")
         for name, low, high in [
             ("context_max_bytes", 4096, 24000), ("recall_max_bytes", 4096, 16384),
             ("recall_limit", 1, 8), ("source_max_tokens", 128, 8192), ("source_limit", 2, 32),
             ("candidate_limit", 1, 8), ("state_ttl_seconds", 60, 604800),
-            ("owner_timeout_seconds", 1, 30)]:
+            ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168)]:
             if type(self.config[name]) is not int or not low <= self.config[name] <= high:
                 raise Refused("configuration bound violated: " + name)
         if self.config["review_mode"] not in {"all", "meaningful", "off"}:
@@ -776,7 +782,13 @@ class Bridge:
     def note_file(self, turn, name):
         return shlex.quote(str(self.input_dir / (turn["id"] + "-" + name + ".json")))
 
-    def instruction(self, state):
+    FRIENDLY = (
+        "\nWords for the operator: AI-Verse OS is the product; AI-Verse is the group's brand. Use everyday words: say "
+        "\"what I know about you\" instead of profile or Core, \"projects\" instead of workspaces, \"what I remember\" instead of "
+        "memory, \"your goals\" for goals and \"AI-Verse OS helpers\" instead of hooks. Never mention owners, scopes, routing, "
+        "the bridge or these commands. ")
+
+    def instruction(self, state, tidy=True):
         turn = state.get("turn")
         prefix = self.command_prefix()
         instruction = (
@@ -843,7 +855,20 @@ class Bridge:
             "A direct user declaration can supply confirmation; inferred intent stays proposed. "
             "Do not ask the operator where information belongs. Explain results in everyday English, without internal owner/routing/state terminology. Review outcomes in this original turn. "
             "If Brain is unavailable, still route direct declarations through intent capture to retain an owner-approved pending inbox item. Report unsaved strategic changes; never claim saved from a proposal or old OS file.\n")
+        instruction += self.FRIENDLY
+        if self.config["maintainer_feedback"]:
+            instruction += ("When the operator remarks on how AI-Verse OS itself behaves, or asks it to work differently, also add "
+                            "one candidate {\"route\":\"upgrade\",\"parameters\":{\"text\":\"<what he asked for, in one or two plain "
+                            "sentences, nothing from any other project>\"},\"evidence\":[...his words...]}. ")
+        if tidy:
+            instruction += self.tidy_text(state)
         return instruction
+
+    def tidy_text(self, state):
+        try:
+            return self.tidy().advert(state)
+        except (Refused, OSError, ValueError, ImportError):
+            return ""
 
     def destination_text(self, turn):
         allowed = turn.get("allowed") or [turn.get("scope", "operator")]
@@ -880,8 +905,11 @@ class Bridge:
         return text
 
     def reflect_short(self, state):
-        """Hook for the tidy commands at the smallest budgets; replaced when tidying is added."""
-        return ""
+        """The exact tidy commands for the smallest budgets (only when tidying is due)."""
+        try:
+            return self.tidy().advert(state, compact=True).replace("\n", " ")
+        except (Refused, OSError, ValueError, ImportError):
+            return ""
 
     def review_reminder(self, state):
         turn = state["turn"]
@@ -919,7 +947,7 @@ class Bridge:
                 "current_build_review_observed": any(r.get("event") == "review" for r in rows),
                 "client_surface": "not inferred from hook metadata"}
 
-    def context(self, state, prompt="", event="UserPromptSubmit"):
+    def context(self, state, prompt="", event="UserPromptSubmit", tidy=True):
         scope = state["scope"]
         warnings = []
         context = {}
@@ -962,7 +990,7 @@ class Bridge:
         limit = self.config["context_max_bytes"]
         if self.harness == "claude":
             limit = min(limit, CLAUDE_CONTEXT_BYTES)  # Claude Code spills above 10,000 characters; Codex keeps its own budget.
-        header = self.instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+        header = self.instruction(state, tidy=tidy) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
         budget = limit - len(header.encode())
         encoded = json.dumps(context, ensure_ascii=False)
         if len(encoded.encode()) > budget:
@@ -1055,7 +1083,7 @@ class Bridge:
                     if isinstance(current_id, str) and SAFE_ID.fullmatch(current_id):
                         old.setdefault("runtime_turn_ids", [old["id"]]).append(current_id)
                     self.save(state)
-                    result = self.context(state, "", kind)
+                    result = self.context(state, "", kind, tidy=False)
                 else:
                     try:
                         dest = self.destinations(event["cwd"], prompt)
@@ -1126,6 +1154,10 @@ class Bridge:
                 elif kind == "Stop":
                     message = event.get("last_assistant_message") or ""
                     self.add_source(turn, "assistant", "assistant", message)
+                    try:
+                        self.tidy().acknowledge(state, message)
+                    except (Refused, OSError, ValueError, ImportError):
+                        pass
                     turn["stopped_at"] = utc()
                     if event.get("stop_hook_active") is True:
                         # Codex's own recursion flag always wins; never issue a second continuation.
@@ -1153,7 +1185,7 @@ class Bridge:
                                   "an empty candidate list if nothing deserves saving. Do not redo the user's task "
                                   "or ask the user to trigger memory. Do not change goals or permissions. "
                                   "Only report an actual durable change or actionable owner failure; otherwise "
-                                  "keep the completion minimal. " + self.instruction(state))
+                                  "keep the completion minimal. " + self.instruction(state, tidy=False))
                         result = {"decision": "block", "reason": reason}
                 elif kind == "Interrupt":
                     turn["state"] = "interrupted"
@@ -1213,8 +1245,20 @@ class Bridge:
             raise Refused("an assistant claim alone is insufficient evidence")
         return refs, kinds
 
+    def tidy(self):
+        """The tidy engine, loaded from its pinned file. Learning keeps working if it is unavailable."""
+        if getattr(self, "_tidy", None) is None:
+            file = safe(self.extension / "reflect.py", self.root, file=True)
+            if hashlib.sha256(file.read_bytes()).hexdigest() != REFLECT_SHA256:
+                raise Refused("Tidy engine differs from the reviewed build")
+            self._tidy = load_module(file, "_aiverse_reflect").Tidy(self, sys.modules[__name__])
+        return self._tidy
+
     def note_effect(self, state, turn, candidate, result, kinds):
-        """Hook for the tidy ledger; replaced when tidying is added."""
+        try:
+            self.tidy().record(turn, candidate, result, kinds)
+        except (Refused, OSError, ValueError, ImportError):
+            pass
 
     def review(self, session, turn_id, token, payload):
         if not self.registered():
@@ -1253,6 +1297,16 @@ class Bridge:
                         or set(candidate) - {"route", "parameters", "evidence", "scope", "general_fact"}):
                     raise Refused("candidate needs exactly route, parameters, evidence (and optionally scope); read REVIEW-SCHEMA.md before retrying; do not discard warranted learning to bypass a schema error")
                 route, parameters = candidate["route"], candidate["parameters"]
+                if route == "upgrade":
+                    # The maintainer's copy only: a plain request about how AI-Verse OS behaves, from his own words.
+                    if not self.config["maintainer_feedback"]:
+                        continue
+                    if not isinstance(parameters, dict) or set(parameters) != {"text"}:
+                        raise Refused("an upgrade note has only a text field")
+                    refs, kinds = self.evidence(turn, candidate["evidence"], None, True)
+                    self.tidy().check_upgrade_text(parameters["text"])
+                    checked.append(({**candidate, "scope": "workspace:ai-verse-os-development"}, refs, kinds))
+                    continue
                 scope = candidate.get("scope") or ("operator" if route == "profile" else state["scope"])
                 if not isinstance(scope, str) or not SCOPE.fullmatch(scope):
                     raise Refused("candidate scope is invalid")
@@ -1346,6 +1400,13 @@ class Bridge:
                 if self.cancelled(session, turn_id):
                     break
                 try:
+                    if candidate["route"] == "upgrade":
+                        try:
+                            result = self.tidy().upgrade_note(candidate["parameters"]["text"], state, turn)
+                        except (Refused, subprocess.TimeoutExpired):
+                            result = {"state": "skipped"}  # never deferred: it may not leave this project
+                        effects.append({"route": "upgrade", "scope": candidate["scope"], "result": result})
+                        continue
                     result = self.owner("learn", {
                         "scope": candidate["scope"], "session_id": session, "turn_id": turn_id,
                         "route": candidate["route"], "parameters": candidate["parameters"],
@@ -1478,6 +1539,102 @@ def current_write(root, host, module, payload):
             "source": str(file.relative_to(root)), "sha256": digest(after)}
 
 
+def current_remove(root, host, payload):
+    """Undo a tidy note line: remove exactly the line carrying that effect's marker, nothing else."""
+    scope, effect = payload["scope"], payload["parameters"]["effect_id"]
+    host.read_context(scope)  # Enforce ownership and scope first.
+    file = root / ("operator/context/CURRENT.md" if scope == "operator" else f"workspaces/{scope[10:]}/context/CURRENT.md")
+    safe(file, root)
+    if not file.exists():
+        return {"state": "absent", "changed": False}
+    marker = f"<!-- codex-effect:{digest(effect)} -->"
+    lock_path = file.parent / ".codex-operational-write.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "r+") as lock, file_lock(lock):
+        before = file.read_text()
+        lines = before.splitlines(keepends=True)
+        kept = [line for line in lines if marker not in line]
+        if len(kept) == len(lines):
+            return {"state": "absent", "changed": False}
+        fd2, temp = tempfile.mkstemp(prefix=".codex-current-", dir=file.parent)
+        try:
+            with os.fdopen(fd2, "w") as output:
+                output.write("".join(kept))
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temp, file)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+    return {"state": "removed", "changed": True}
+
+
+def reflect_scan(bridge, module, host, payload):
+    """Read only: bounded view of Memory records, project facts and venture lines for the tidy pass."""
+    entry = host._extension_entry("ai-verse-memory")
+    if not entry:
+        raise Refused("Memory is unavailable")
+    memory = load_module(host._safe_repo_file(entry.get("engine"), "Memory engine"), "_codex_reflect_scan")
+    limit = max(1, min(int(payload.get("limit", 40)), 40))
+    projects = [p for p in payload.get("projects", []) if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", p)]
+    result = {"records": [], "workspaces": {}, "ventures": [], "truncated": False}
+    names = {}
+    workspace_root = safe(bridge.root / "workspaces", bridge.root)
+    if payload.get("names_only"):
+        for folder in workspace_root.iterdir():
+            if folder.is_dir() and not folder.name.startswith("_"):
+                with contextlib.suppress(Refused):
+                    meta = bridge.manifest(folder.name)
+                    names[folder.name] = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
+        return {"all_names": names}
+    for project in projects:
+        meta = bridge.manifest(project)
+        notes = bridge.root / "workspaces" / project / "context/CURRENT.md"
+        age = None
+        sha = None
+        if notes.is_file():
+            safe(notes, bridge.root)
+            age = round((time.time() - notes.stat().st_mtime) / 86400, 1)
+            sha = digest(notes.read_text())
+        result["workspaces"][project] = {"name": meta.get("name", project), "status": meta.get("status"),
+                                         "aliases": meta.get("aliases", []), "notes_age_days": age, "notes_sha256": sha}
+    wanted = {"operator", *("workspace:" + p for p in projects)}
+    if payload.get("upgrade"):
+        wanted = {"workspace:ai-verse-os-development"}
+    seen = 0
+    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+        meta, body = memory.parse_markdown(path)
+        scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE),
+                                       bridge.root, memory.MODE_NATIVE)
+        if scope not in wanted or meta.get("status", "active") != "active":
+            continue
+        text = body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip()
+        refs = meta.get("evidence_refs", "[]")
+        try:
+            refs = json.loads(refs) if isinstance(refs, str) else refs
+        except ValueError:
+            refs = []
+        record = {"id": meta.get("id"), "scope": scope, "type": meta.get("type"), "status": meta.get("status", "active"),
+                  "text": text[:600], "tags": meta.get("tags", ""), "source": meta.get("source", ""),
+                  "created": meta.get("created_at", ""), "evidence_refs": refs[:30] if isinstance(refs, list) else []}
+        if payload.get("upgrade"):
+            if "upgrade-note" in record["tags"]:
+                result.setdefault("upgrade_notes", []).append({"text": text[:600], "created": record["created"]})
+            continue
+        seen += 1
+        if seen > limit:
+            result["truncated"] = True
+            break
+        result["records"].append(record)
+    if payload.get("upgrade"):
+        result["upgrade_notes"] = sorted(result.get("upgrade_notes", []), key=lambda n: n["created"], reverse=True)[:40]
+        return result
+    profile = host.request_action(host_action(module, host, "operator", "operator.profile.read", {},
+                                              "reflect-read:" + secrets.token_hex(8), "read_local"))["result"]["operator_profile"]
+    result["ventures"] = [v["project"] for v in profile["identity"].get("ventures", []) if isinstance(v, dict) and v.get("project")]
+    return result
+
+
 def profile_correct(bridge, module, host, payload, parameters):
     """Read the profile, then correct one preference; one internal retry if it changed in between."""
     correction = parameters["correction"]
@@ -1520,6 +1677,10 @@ def run_owner(bridge, operation, payload):
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
                                                "profile-read:" + secrets.token_hex(8), "read_local"))
         return read["result"]["operator_profile"]
+    if operation == "reflect_scan":
+        return reflect_scan(bridge, module, host, payload)
+    if operation == "current_remove":
+        return current_remove(bridge.root, host, payload)
     if operation == "retrieve_history_progressive":
         return curated_recall(host.retrieve_history_progressive(payload))
     if operation in {"check_correction", "inspect_history"}:
@@ -1647,6 +1808,15 @@ def main():
     intent.add_argument("--turn")
     intent.add_argument("--token")
     intent.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
+    reflect = commands.add_parser("reflect")
+    reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list"])
+    reflect.add_argument("--session")
+    reflect.add_argument("--turn")
+    reflect.add_argument("--token")
+    reflect.add_argument("--note", help="Tidy note id (undo)")
+    reflect.add_argument("--item", type=int, help="Item number inside the note (undo)")
+    reflect.add_argument("--mode", choices=["undo", "corrected"], default="undo")
+    reflect.add_argument("--action-id", help="Apply one planned action only")
     commands.add_parser("status")
     switch = commands.add_parser("set")
     switch.add_argument("--enabled", choices=["true", "false"])
@@ -1674,6 +1844,26 @@ def main():
             result = {"ok": True, "result": run_owner(bridge, args.operation, payload)}
         elif args.command == "intent":
             result = bridge.intent(args.action, args.scope, payload, args.session, args.turn, args.token)
+        elif args.command == "reflect":
+            tidy = bridge.tidy()
+            if args.action == "status":
+                result = tidy.status()
+            elif args.action == "list":
+                result = {"view": tidy.write_upgrade_list() if bridge.config["maintainer_feedback"] else None,
+                          "maintainer_feedback": bridge.config["maintainer_feedback"]}
+            else:
+                if not (args.session and args.turn and args.token):
+                    raise Refused("reflect needs --session, --turn and --token")
+                if args.action == "plan":
+                    result = tidy.plan(args.session, args.turn, args.token)
+                elif args.action == "apply":
+                    result = tidy.apply(args.session, args.turn, args.token, args.action_id)
+                elif args.action == "done":
+                    result = tidy.done(args.session, args.turn, args.token)
+                else:
+                    if not args.note or not args.item:
+                        raise Refused("undo needs --note and --item")
+                    result = tidy.undo(args.session, args.turn, args.token, args.note, args.item, args.mode)
         elif args.command == "review":
             result = bridge.review(args.session, args.turn, args.token, payload)
         elif args.command == "sources":

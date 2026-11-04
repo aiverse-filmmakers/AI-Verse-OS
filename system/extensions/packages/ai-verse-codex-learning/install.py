@@ -20,7 +20,8 @@ from lifecycle import claude_build, claude_definition, definition, is_ours_claud
 
 SOURCE = Path(__file__).resolve().parent
 FILES = ("bridge.py", "lifecycle.py", "install.py", "maintenance.py", "inspect_runtime.py",
-         "INSTRUCTIONS.md", "README.md", "REVIEW-SCHEMA.md", "SETUP.md", "intent.py", "brain_read.py", "INTENT.md")
+         "INSTRUCTIONS.md", "README.md", "REVIEW-SCHEMA.md", "SETUP.md", "intent.py", "brain_read.py", "INTENT.md",
+         "reflect.py")
 
 
 def sha(path):
@@ -362,7 +363,7 @@ def remove(root):
 # Claude Code adapter: manages only ROOT/.claude/settings.local.json and one record file.
 # It never touches .codex/, the shared registry entry, the install receipt or config.json.
 # ---------------------------------------------------------------------------
-CLAUDE_SUBCOMMANDS = ("review", "sources", "query", "intent")
+CLAUDE_SUBCOMMANDS = ("review", "sources", "query", "intent", "reflect")
 
 
 def claude_paths(root):

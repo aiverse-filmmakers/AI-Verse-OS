@@ -115,13 +115,21 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("ALPHA PRIVATE", text)
         self.assertNotIn("BETA PRIVATE", text)
         self.assertEqual(self.bridge.state(self.session)["scope"], "workspace:alpha")
+        # Changed for per-turn destinations: a binding never carries over to the next turn.
         response = self.bridge.hook(self.event("UserPromptSubmit", turn_id="turn-2", prompt="Continue the same task."))
-        self.assertIn("ALPHA PRIVATE", response["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("ALPHA PRIVATE", response["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(self.bridge.state(self.session)["scope"], "operator")
 
-    def test_ambiguity_and_unknown_workspace_are_refused(self):
-        for prompt in ["Compare Alpha Study with Beta Study", "workspace:missing", "workspace:alpha workspace:beta"]:
-            with self.assertRaises(Refused):
-                self.start(prompt)
+    def test_two_named_projects_are_two_destinations_and_unknown_ones_ask(self):
+        # Changed for per-turn destinations: two clear names used to be refused; now both are destinations.
+        for prompt in ["Compare Alpha Study with Beta Study", "workspace:alpha workspace:beta"]:
+            self.start(prompt, turn_id="t-" + str(abs(hash(prompt))))
+            turn = self.bridge.state(self.session)["turn"]
+            self.assertEqual(set(turn["allowed"]), {"operator", "workspace:alpha", "workspace:beta"})
+        self.start("workspace:missing", turn_id="t-missing")
+        turn = self.bridge.state(self.session)["turn"]
+        self.assertEqual(turn["allowed"], ["operator"])
+        self.assertEqual(turn["ambiguous"], [{"name": "workspace:missing", "could_mean": []}])
 
     def test_physical_cwd_binding_and_outside_noop(self):
         response = self.start("Continue.", cwd=str(self.root / "workspaces/alpha"))
@@ -401,12 +409,12 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(effect["state"], "owner_unavailable")
         self.assertEqual(file.read_text(), "## Current state\n\nA newer human edit.\n")
 
-    def test_ambiguous_next_prompt_invalidates_old_review(self):
+    def test_next_prompt_invalidates_old_review(self):
         self.start()
+        old = self.bridge.state(self.session)["turn"]
+        self.start("Alpha Study and Beta Study", turn_id="turn-2")
         with self.assertRaises(Refused):
-            self.start("Alpha Study and Beta Study", turn_id="turn-2")
-        with self.assertRaises(Refused):
-            self.review(self.payload())
+            self.bridge.review(self.session, old["id"], old["token"], self.payload())
 
     def test_context_instruction_override_is_refused(self):
         self.start("This is a harmless operational fixture.")
@@ -519,14 +527,15 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(stale["status"], "stale")
         self.assertFalse(stale["exact_evidence"])
 
-    def test_compaction_restores_scope_without_reopening_completed_review(self):
+    def test_compaction_never_inherits_the_previous_project(self):
+        # Changed: compaction, resume and startup are resolved from the physical folder only.
         self.start("workspace:alpha completed the validation.")
         self.review(self.payload())
         response = self.bridge.hook(self.event("SessionStart", source="compact"))
         text = response["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("workspace:alpha", text)
-        self.assertIn("ALPHA PRIVATE", text)
+        self.assertNotIn("ALPHA PRIVATE", text)
         self.assertNotIn("review --session", text)
+        self.assertEqual(self.bridge.state(self.session)["scope"], "operator")
         self.assertEqual(self.bridge.state(self.session)["turn"]["state"], "reviewed")
 
     def test_interrupt_does_not_wait_for_review_and_prevents_next_write(self):

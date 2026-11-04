@@ -38,7 +38,7 @@ For route profile, parameters use the existing OS owner shape:
        "contains_sensitive": false, "contains_secret": false,
        "reason": "The user explicitly gave a durable working preference."}}
 
-Identity uses `name` (a string), and `roles`, `domains`, `notes` (arrays of strings). For example: `{"identity":{"notes":["As of the stated date, the operator lives in the stated country."]},"evidence":{...}}`. Preference categories `communication`, `working_style`, `quality_expectations`, `avoid` also require arrays of strings. The bridge converts a single plain string in these list fields to a one-element array without changing its meaning; objects or invalid list items are refused before any batch write. The profile owner retains final admission. Permission/approval changes are excluded from learning. Profile writes require operator scope and direct user evidence. Keep workspace corrections scoped unless the user clearly generalizes them.
+Identity uses `name` (a string), and `roles`, `domains`, `ventures`, `notes` (arrays of strings). `ventures` are one line each about what the operator runs or works on, under "What I run and work on"; a line may be `{"text": "...", "project": "<project id>"}` to point at an existing project (one live line per project). For example: `{"identity":{"notes":["As of the stated date, the operator lives in the stated country."]},"evidence":{...}}`. Preference categories `communication`, `working_style`, `quality_expectations`, `avoid` also require arrays of strings. The bridge converts a single plain string in these list fields to a one-element array without changing its meaning; objects or invalid list items are refused before any batch write. The profile owner retains final admission. Permission/approval changes are excluded from learning. Profile writes require operator scope and direct user evidence. Keep workspace corrections scoped unless the user clearly generalizes them.
 
 For route current, parameters are exactly heading, text, old_text, expected_sha256, admission. Admission must be:
 
@@ -82,11 +82,11 @@ candidates restricted and operator candidates as drafts. Explicit `workspace_loc
 intent stays restricted even when the method is portable. Existing proposal/auto
 policy still controls activation. Do not set declarations just to pass a gate.
 
-## Claude Code input
+## Note files (Claude Code, optional for Codex)
 
-In Claude Code the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused.
+In Claude Code, which blocks JSON typed into shell commands, the review JSON, `intent` JSON, the `sources --match` quote and the `query --depth source` item go in a new note file inside `runtime/codex-learning/claude-input/` (written with the file Write tool) and are passed with `--input-file PATH` instead of a heredoc. The file must sit directly in that folder. It is deleted after reading, whether the request is accepted or refused. Codex may use the same `--input-file` route; the folder name keeps its old path for compatibility.
 
-## Noticing durable things and correcting them (Claude Code)
+## Noticing durable things and correcting them
 
 A correction replaces the old entry through the owner's correction operation; never add a contradicting second entry.
 
@@ -98,7 +98,7 @@ A correction replaces the old entry through the owner's correction operation; ne
 | A historical outcome or lesson | route `memory`; a correction uses type `correction` with `supersedes` |
 | Project convention, tool quirk, current status in a workspace | route `current` (workspace scope) |
 
-Profile correction (Claude only; Codex refuses a `correction` object). Read the exact current line first with `query --session SESSION --kind profile` (Claude only, operator scope only; it returns `preferences` and `preferences_source_sha256`). Then submit:
+Profile correction (both apps). Read the exact current line first with `query --session SESSION --kind profile` (operator scope only; it returns `preferences` and `preferences_source_sha256`). Then submit:
 
     {"route": "profile",
      "parameters": {
@@ -110,5 +110,32 @@ Profile correction (Claude only; Codex refuses a `correction` object). Read the 
                     "reason": "The user explicitly changed a durable preference."}},
      "evidence": [{"source_id": "user", "quote": "give me answers as short paragraphs"}]}
 
-`category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: for Claude the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
+`category` is one of communication, working_style, quality_expectations, avoid. `previous` must be the existing line. The bridge fills the expected version and the provenance, and does one internal reread if the file changed in between; if it still cannot apply the change it keeps the proposal pending for the operator. Never type the quote into the owner fields yourself: the bridge stores the authenticated user quote in the owner's provenance reason as `user said: "<quote>"`.
 
+
+
+## Destinations: where a candidate is saved
+
+Each turn has its own list of destinations, shown in the instructions as "Where this turn may save". It comes from the folder the chat runs in plus any project the operator named in his own typed words (exact project id, name or alias). Names inside pasted, quoted or code blocks never count. Nothing carries over to the next turn.
+
+- A candidate may carry a top level `"scope": "workspace:<id>"` (or `"operator"`). Without it a `profile` candidate goes to the operator profile and every other route to the turn's main destination.
+- Two candidates in one review may go to two destinations. A review that spans destinations does not save a session digest.
+- Evidence can only support a write to a destination it came from. The operator's own words support every destination they named. Tool and assistant text supports only the turn's main destination.
+- If a name could mean more than one project, the instructions say so. Ask the operator one plain question before saving anything about it.
+- A fact about the operator himself, stated by him in a project chat, may go to the profile with `"scope":"operator"` and `"general_fact":{"stated_by_operator_about_self":true,"contains_project_figures":false}`. It needs his own words as evidence and must contain no digits.
+- Profile corrections accept `"section":"identity"` with category `roles`, `domains`, `ventures` or `notes`; the bridge checks the identity version instead of the preferences version.
+- `query --scope workspace:<id> --turn TURN --token TOKEN` reads context or Memory from one of the turn's destinations (the operator scope is always readable). A scoped query without the active turn id and token, or with a stale or cancelled turn, is refused. `bind` needs them too.
+- Startup, resume and compaction never carry a project over: the physical folder decides. Venture lines that point at a project are hidden from chats that may not read that project.
+- Clients that do not mark pasted text (Codex): a long message never authorizes a project by name; the AI is told to ask for one explicit choice.
+
+## Tidying (`reflect`)
+
+When the start of a chat says tidying is due, run the three printed commands after the operator's request and before the final answer: `reflect plan`, `reflect apply`, `reflect done` (same `--session --turn --token` as the review command; no JSON, so no note file is needed in either app). A pass looks at no more than 20 recent saves, reads no more than 40 records, makes no more than 5 changes and stops starting new work after about 45 seconds; it says when it was cut short. Only projects in view this turn are tidied. Changes the helpers cannot prove came from the operator's own words are still made, but they are marked "guess" in what is stored.
+
+A finished pass leaves a tidy note. When the start of a chat includes one, begin the next reply with it exactly as given. Never put it in the middle of an answer. If the operator says "undo N", run `reflect undo --note ID --item N`; if they correct an item in words, save the right fact normally and run `reflect undo --note ID --item N --mode corrected`.
+
+Not in this build: merging two goals that mean the same, linking a goal to a project, and any change to what a goal means. These need Brain to offer a reversible API and an explicit statement from the operator.
+
+## Maintainer feedback (the upgrade list)
+
+Only when `maintainer_feedback` is true in the extension configuration. A remark about how AI-Verse OS itself behaves may be saved with `{"route":"upgrade","parameters":{"text":"..."},"evidence":[...the operator's own words...]}`. The text holds the request only and is refused if it names another project. With the switch off the candidate is ignored. `reflect list` rebuilds the derived view `workspaces/ai-verse-os-development/knowledge/AI-VERSE-OS-UPGRADE-LIST.md`.

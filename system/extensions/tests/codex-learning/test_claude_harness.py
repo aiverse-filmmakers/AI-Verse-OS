@@ -242,18 +242,20 @@ class InputFileTests(ClaudeFixture):
         self.assertIn("budget", json.loads(result.stdout)["error"])
         self.assertFalse(path.exists())
 
-    def test_codex_refuses_input_file_and_keeps_stdin(self):
+    def test_codex_accepts_input_file_and_keeps_stdin(self):
         Bridge(self.root).hook({"session_id": "codex-session-0004", "turn_id": "turn-9", "cwd": str(self.root),
                                 "hook_event_name": "UserPromptSubmit", "permission_mode": "default",
                                 "prompt": "The validated filter retained all twelve correct records."})
         turn = Bridge(self.root).state("codex-session-0004")["turn"]
         path = self.note(json.dumps(review_payload()))
         base = ["review", "--session", "codex-session-0004", "--turn", turn["id"], "--token", turn["token"]]
-        refused = self.cli(*base, "--input-file", str(path))
-        self.assertEqual(refused.returncode, 2)
-        self.assertTrue(path.exists())
-        accepted = self.cli(*base, stdin=json.dumps(review_payload()))
-        self.assertEqual(accepted.returncode, 0, accepted.stdout)
+        # Parity change: Codex may now use the note file route (it used to be refused).
+        by_file = self.cli(*base, "--input-file", str(path))
+        self.assertEqual(by_file.returncode, 0, by_file.stdout)
+        self.assertFalse(path.exists())
+        replay = self.cli(*base, stdin=json.dumps(review_payload()))
+        self.assertEqual(replay.returncode, 0, replay.stdout)
+        self.assertTrue(json.loads(replay.stdout)["replayed"])
 
     def test_intent_sources_and_query_accept_note_files(self):
         self.start()
@@ -400,13 +402,15 @@ class ClaudeEventTests(ClaudeFixture):
             self.assertIn(call, prompt["hookSpecificOutput"]["additionalContext"])
             json.loads(prompt["hookSpecificOutput"]["additionalContext"].split("Owner data (JSON):\n", 1)[1])
 
-    def test_j_codex_context_has_no_key_preference_block(self):
+    def test_j_codex_context_has_the_key_preference_block_too(self):
+        # Parity change: Codex used to omit this block; both apps now share it.
         self.large_profile()
         codex = Bridge(self.root)
         with patch.object(Bridge, "owner", self.rich_owner):
             text = codex.hook(self.event("UserPromptSubmit", turn_id="turn-1", prompt="Hello there friend"))[
                 "hookSpecificOutput"]["additionalContext"]
-        self.assertNotIn("operator_key_preferences", text)
+        self.assertIn("operator_key_preferences", text)
+        self.assertLessEqual(len(text.encode()), 14000)
 
     def keys_at(self, prefs, limit=14000, event="prompt"):
         (self.root / "operator/profile/preferences.md").write_text(prefs)
@@ -1044,13 +1048,20 @@ class ProfileCorrectionTests(ClaudeFixture):
                                  candidate, session="claude-workspace-0001", cwd=str(self.root / "workspaces/alpha"))
         self.assertIn("short bullet points", self.preferences())
 
-    def test_codex_refuses_a_correction_object_exactly_as_before(self):
+    def test_codex_applies_a_correction_object_like_claude(self):
+        # Parity change: Codex used to refuse a correction object.
+        self.seed_bullets()
         codex = Bridge(self.root)
-        candidate = self.correction_candidate("Use brief evidence-based answers.", "Use paragraphs please.",
-                                              "give me answers as short paragraphs")
-        with self.assertRaisesRegex(Refused, "unbounded profile parameters"):
-            self.turn_and_review(codex, "Please give me answers as short paragraphs.", candidate,
-                                 session="codex-session-0009", turn_id="turn-codex-1")
+        candidate = self.correction_candidate("Prefers answers as short bullet points, not long paragraphs.",
+                                              "Prefers answers as short paragraphs instead of bullet points.",
+                                              "give me answers as short paragraphs instead of bullet points")
+        receipt = self.turn_and_review(codex, "Actually, give me answers as short paragraphs instead of bullet points.",
+                                       candidate, session="codex-session-0009", turn_id="turn-codex-1")
+        self.assertIn(receipt["effects"][0]["result"]["result"]["operator_profile"]["state"], {"evolved", "created"})
+        self.assertIn("short paragraphs", self.preferences())
+        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        self.assertIn("codex-desktop:user", history)
+        self.assertIn('user said: \\"give me answers as short paragraphs', history)
 
     def test_bad_correction_shapes_are_refused(self):
         for bad in ({"category": "identity", "previous": "a b c", "replacement": "d e f"},
@@ -1062,19 +1073,31 @@ class ProfileCorrectionTests(ClaudeFixture):
             with self.assertRaises(Refused):
                 self.turn_and_review(self.bridge, "Please give me answers as short paragraphs.", candidate)
 
-    def test_query_profile_is_claude_only_and_refused_in_a_workspace(self):
+    def test_query_profile_works_for_both_apps_with_the_turn_token_and_is_refused_in_a_workspace(self):
         self.seed_bullets()
-        good = self.cli("query", "--session", self.session, "--kind", "profile", harness="claude")
+        self.bridge.hook({"session_id": self.session, "cwd": str(self.root), "hook_event_name": "UserPromptSubmit",
+                          "permission_mode": "default", "prompt": "Let me check my preferences.", "turn_id": "turn-q"})
+        turn = self.bridge.state(self.session)["turn"]
+        auth = ["--turn", turn["id"], "--token", turn["token"]]
+        self.assertEqual(self.cli("query", "--session", self.session, "--kind", "profile", harness="claude").returncode, 2)
+        good = self.cli("query", "--session", self.session, "--kind", "profile", *auth, harness="claude")
         self.assertEqual(good.returncode, 0, good.stdout)
         data = json.loads(good.stdout)["result"] if "result" in json.loads(good.stdout) else json.loads(good.stdout)
         self.assertRegex(json.dumps(data), r"preferences_source_sha256")
         self.assertIn("short bullet points", json.dumps(data))
-        codex = self.cli("query", "--session", self.session, "--kind", "profile")
-        self.assertEqual(codex.returncode, 2)
+        codex = self.cli("query", "--session", self.session, "--kind", "profile", *auth)
+        self.assertEqual(codex.returncode, 0, codex.stdout)
+        self.assertIn("preferences_source_sha256", codex.stdout)
         self.bridge.hook({"session_id": "claude-workspace-0002", "cwd": str(self.root / "workspaces/alpha"),
-                          "hook_event_name": "UserPromptSubmit", "permission_mode": "default", "prompt": "Continue."})
-        denied = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile", harness="claude")
+                          "hook_event_name": "UserPromptSubmit", "permission_mode": "default", "prompt": "Continue.", "turn_id": "turn-w"})
+        wt = self.bridge.state("claude-workspace-0002")["turn"]
+        denied = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile",
+                          "--turn", wt["id"], "--token", wt["token"], harness="claude")
         self.assertEqual(denied.returncode, 2)
+        # Even asking for the operator scope from inside a project chat is refused.
+        scoped = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile", "--scope", "operator",
+                          "--turn", wt["id"], "--token", wt["token"], harness="claude")
+        self.assertEqual(scoped.returncode, 2)
 
 
 if __name__ == "__main__":

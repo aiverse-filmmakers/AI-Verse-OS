@@ -111,6 +111,16 @@ Optional extensions must not edit tracked OS files during normal install, update
 - When `ai-verse-data` is installed and enabled, structured Data operations use `node scripts/data-host.mjs --root <os-root>` through the registered extension engine. Do not open `workspaces/*/data/ai-verse-data.sqlite` directly from runtime or model code. Workspace initialization remains explicit and destructive Data operations must satisfy the OS action-permission boundary.
 - See `system/extensions/README.md` for the local registry contract and migration rules.
 
+## Missing helpers rule
+
+AI-Verse OS helpers (the optional learning connection) save what the operator tells you and tidy it afterwards. This rule applies even when the helpers are not running, because it is read from this file.
+
+- If this chat is inside an AI-Verse OS folder and the expected AI-Verse context did not arrive at the start (no "AI-Verse" connection text, no bound scope), do not guess the reason. Run the relevant read-only doctor: `claude-doctor` for Claude Code, `doctor` for Codex, both from `.aiverse/extensions/ai-verse-codex-learning/install.py`, using the installation's own tool stack.
+- Say what the doctor found in everyday words. Never mention hooks, owners, scopes or the bridge to a member.
+- Only if the diagnostics identify helpers waiting for approval, say: "AI-Verse OS updated its helpers. Open Settings, then Hooks, and approve the AI-Verse OS ones." If approval cannot be inspected, say it is unverified and offer that step as a possibility, not a fact.
+- If the operator switched learning off on purpose, respect that and say nothing about repair. If the doctor reports nothing installed, or an adapter fault, say exactly that.
+- Never claim an update happened unless the updater said so. Never edit trust records, hook files or settings to fix this yourself; hand the step to the operator.
+
 ## Four Cs
 
 Read `references/4cs-framework.md` when evaluating the system.

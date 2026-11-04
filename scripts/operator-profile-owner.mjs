@@ -8,6 +8,9 @@ const SCHEMA_VERSION = 1;
 const IDENTITY_FILE = 'identity.md';
 const PREFERENCES_FILE = 'preferences.md';
 const PROVENANCE_FILE = 'AUTO-ORGANIZATION.json';
+const PROJECT_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+const PROJECT_MARK = /\s*<!-- project:([a-z0-9][a-z0-9-]{0,127}) -->\s*$/;
+const IDENTITY_LISTS = ['roles', 'domains', 'ventures', 'notes'];
 const START = '<!-- ai-verse-profile:auto:start -->';
 const END = '<!-- ai-verse-profile:auto:end -->';
 
@@ -113,9 +116,45 @@ function containsForeignRuntimeInstruction(value) {
   return /\b(?:you are\s+(?:hermes|claude|chatgpt|codex)|call\s+(?:the\s+)?[A-Za-z0-9_-]*\s*(?:memory|tool)|use\s+(?:hermes|claude|chatgpt|codex)\s+(?:tool|subagent|agent)|ignore\s+(?:the\s+)?(?:system|developer|previous)\s+instructions?)\b/i.test(text);
 }
 
-function normalizeRequest(raw) {
+// A venture is one line about what the operator runs or works on. It may point at a project.
+function cleanVentures(value, root) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error('identity.ventures must be an array');
+  if (value.length > 32) throw new Error('identity.ventures exceeds 32 items');
+  const out = [];
+  for (const [index, item] of value.entries()) {
+    const entry = typeof item === 'string' ? { text: item } : item;
+    rejectUnknownKeys(entry, new Set(['text', 'project']), `identity.ventures[${index}]`);
+    const text = cleanString(entry.text, `identity.ventures[${index}].text`, { required: true, max: 500 });
+    if (/<!--|-->/.test(text) || /[\r\n]/.test(text)) throw new Error('identity.ventures text must be one plain line');
+    let project = null;
+    if (entry.project != null) {
+      project = cleanString(entry.project, `identity.ventures[${index}].project`, { max: 128 });
+      if (!project || !PROJECT_RE.test(project) || project === '_template') throw new Error('venture project reference is invalid');
+      if (!root || !fs.existsSync(path.join(root, 'workspaces', project, 'WORKSPACE.yaml'))) {
+        throw new Error('venture project reference does not name an existing project');
+      }
+    }
+    out.push({ text, project });
+  }
+  return out;
+}
+
+function ventureKey(entry) { return entry.project ? `project:${entry.project}` : `text:${normalizeFact(entry.text)}`; }
+
+function mergeVentures(existing, additions) {
+  const out = [...existing];
+  const seen = new Set(existing.map(ventureKey));
+  for (const entry of additions) {
+    const key = ventureKey(entry);
+    if (!seen.has(key)) { seen.add(key); out.push(entry); }
+  }
+  return out;
+}
+
+function normalizeRequest(raw, root) {
   rejectUnknownKeys(raw, new Set(['identity', 'preferences', 'evidence', 'provenance']), 'request');
-  rejectUnknownKeys(raw.identity ?? {}, new Set(['name', 'roles', 'domains', 'notes']), 'identity');
+  rejectUnknownKeys(raw.identity ?? {}, new Set(['name', 'roles', 'domains', 'ventures', 'notes']), 'identity');
   rejectUnknownKeys(
     raw.preferences ?? {},
     new Set(['communication', 'working_style', 'approval_boundaries', 'quality_expectations', 'avoid']),
@@ -132,6 +171,7 @@ function normalizeRequest(raw) {
     name: cleanString(raw.identity?.name, 'identity.name', { max: 200 }),
     roles: cleanStringArray(raw.identity?.roles, 'identity.roles', 32),
     domains: cleanStringArray(raw.identity?.domains, 'identity.domains', 32),
+    ventures: cleanVentures(raw.identity?.ventures, root),
     notes: cleanStringArray(raw.identity?.notes, 'identity.notes', 64),
   };
   const preferences = {
@@ -155,7 +195,7 @@ function normalizeRequest(raw) {
     source: cleanString(raw.provenance?.source, 'provenance.source', { max: 300 }),
   };
 
-  const hasIdentity = identity.name || identity.roles.length || identity.domains.length || identity.notes.length;
+  const hasIdentity = identity.name || identity.roles.length || identity.domains.length || identity.ventures.length || identity.notes.length;
   const hasPreferences = Object.values(preferences).some((items) => items.length);
   if (!hasIdentity && !hasPreferences) throw new Error('operator profile request contains no profile facts');
 
@@ -178,16 +218,23 @@ function normalizeRequest(raw) {
 }
 
 function normalizePreferenceCorrection(raw) {
-  rejectUnknownKeys(raw, new Set(['category', 'previous', 'replacement', 'expected_sha256', 'evidence', 'provenance']), 'request');
+  rejectUnknownKeys(raw, new Set(['section', 'category', 'previous', 'replacement', 'retire', 'expected_sha256', 'evidence', 'provenance']), 'request');
+  const section = raw.section == null ? 'preferences' : raw.section;
+  if (!['preferences', 'identity'].includes(section)) throw new Error('section must be preferences or identity');
+  const retire = raw.retire === true;
+  if (raw.retire != null && typeof raw.retire !== 'boolean') throw new Error('retire must be true or false');
+  if (retire && section !== 'identity') throw new Error('only identity lines can be retired');
   const category = cleanString(raw.category, 'category', { required: true, max: 64 });
-  if (!['communication', 'working_style', 'quality_expectations', 'avoid'].includes(category)) {
-    throw new Error('category must name a correctable preference category');
+  const allowedCategories = section === 'identity' ? IDENTITY_LISTS : ['communication', 'working_style', 'quality_expectations', 'avoid'];
+  if (!allowedCategories.includes(category)) {
+    throw new Error('category must name a correctable ' + section + ' category');
   }
   const previous = cleanString(raw.previous, 'previous', { required: true, max: 1000 });
-  const replacement = cleanString(raw.replacement, 'replacement', { required: true, max: 1000 });
+  if (retire && raw.replacement != null) throw new Error('a retirement takes no replacement');
+  const replacement = retire ? null : cleanString(raw.replacement, 'replacement', { required: true, max: 1000 });
   const expected_sha256 = cleanString(raw.expected_sha256, 'expected_sha256', { required: true, max: 64 });
   if (!/^[a-f0-9]{64}$/.test(expected_sha256)) throw new Error('expected_sha256 must be a lowercase SHA-256 digest');
-  if (normalizeFact(previous) === normalizeFact(replacement)) throw new Error('replacement must change the preference');
+  if (!retire && normalizeFact(previous) === normalizeFact(replacement)) throw new Error('replacement must change the preference');
   rejectUnknownKeys(raw.evidence, new Set(['stable', 'explicit_or_strong', 'privacy_ambiguous', 'contains_sensitive', 'contains_secret', 'reason']), 'evidence');
   rejectUnknownKeys(raw.provenance ?? {}, new Set(['trigger_ref', 'classifier', 'source']), 'provenance');
   const evidence = {
@@ -203,9 +250,9 @@ function normalizePreferenceCorrection(raw) {
     classifier: cleanString(raw.provenance?.classifier, 'provenance.classifier', { max: 200 }),
     source: cleanString(raw.provenance?.source, 'provenance.source', { max: 300 }),
   };
-  if (containsSecretLike({ previous, replacement, evidence, provenance })) throw new Error('profile correction appears to contain credential/secret material');
-  if (containsForeignRuntimeInstruction(replacement)) throw new Error('foreign runtime/system instructions cannot become operator preferences');
-  return { category, previous, replacement, expected_sha256, evidence, provenance };
+  if (containsSecretLike({ previous, replacement: replacement ?? '', evidence, provenance })) throw new Error('profile correction appears to contain credential/secret material');
+  if (replacement && containsForeignRuntimeInstruction(replacement)) throw new Error('foreign runtime/system instructions cannot become operator preferences');
+  return { section, category, previous, replacement, retire, expected_sha256, evidence, provenance };
 }
 
 function resolveProfileRoot(root, { create = false } = {}) {
@@ -235,13 +282,14 @@ function readProfile(profileRoot) {
   const identityFile = profileRoot ? safeFile(path.join(profileRoot, IDENTITY_FILE), profileRoot, 'operator profile identity') : null;
   const identityText = identityFile ? fs.readFileSync(identityFile, 'utf8') : '';
   const identityManaged = extractManagedBlock(identityText);
-  const identity = identityManaged ? parseManagedIdentity(identityManaged.body) : { name: null, roles: [], domains: [], notes: [] };
+  const identity = identityManaged ? parseManagedIdentity(identityManaged.body) : { name: null, roles: [], domains: [], ventures: [], notes: [] };
   const current = currentPreferences(profileRoot);
   return {
     schema_version: SCHEMA_VERSION,
     operation: 'read',
     state: 'ready',
     identity,
+    identity_source_sha256: crypto.createHash('sha256').update(identityText).digest('hex'),
     preferences: current.preferences,
     preferences_source_sha256: current.source_sha256,
   };
@@ -250,7 +298,7 @@ function readProfile(profileRoot) {
 function correctPreference(profileRoot, request) {
   const current = currentPreferences(profileRoot);
   const provenanceRequest = {
-    identity: { name: null, roles: [], domains: [], notes: [] },
+    identity: { name: null, roles: [], domains: [], ventures: [], notes: [] },
     preferences: { [request.category]: [request.replacement] },
     correction: { category: request.category, previous: request.previous, replacement: request.replacement },
     evidence: request.evidence,
@@ -317,6 +365,114 @@ function correctPreference(profileRoot, request) {
   return { ...base, state: current.file ? 'evolved' : 'created', changed: true, category: request.category, source_sha256: crypto.createHash('sha256').update(next).digest('hex'), provenance: { fingerprint: history.fingerprint, changed: history.changed } };
 }
 
+function correctIdentity(profileRoot, request) {
+  const identityFile = profileRoot ? safeFile(path.join(profileRoot, IDENTITY_FILE), profileRoot, 'operator profile identity') : null;
+  const text = identityFile ? fs.readFileSync(identityFile, 'utf8') : '';
+  const sha = crypto.createHash('sha256').update(text).digest('hex');
+  const managed = extractManagedBlock(text);
+  const identity = managed ? parseManagedIdentity(managed.body) : { name: null, roles: [], domains: [], ventures: [], notes: [] };
+  const provenanceRequest = {
+    identity: { name: null, roles: [], domains: [], ventures: [], notes: [] },
+    preferences: {},
+    correction: { section: 'identity', category: request.category, previous: request.previous, replacement: request.replacement, retire: request.retire },
+    evidence: request.evidence,
+    provenance: request.provenance,
+  };
+  const base = {
+    schema_version: SCHEMA_VERSION, operation: 'correct-preference', section: 'identity',
+    user_confirmation_required: false, permission_expanded: false, connection_created: false,
+    credential_created: false, automation_created: false, permanent_bot_created: false,
+  };
+  if (hasProvenance(profileRoot, provenanceRequest)) {
+    return { ...base, state: 'existing', changed: false, category: request.category, identity_source_sha256: sha, reason: 'this correction was already applied' };
+  }
+  const label = (entry) => (typeof entry === 'string' ? entry : entry.text);
+  const values = identity[request.category];
+  const replacementKey = request.replacement ? normalizeFact(request.replacement) : null;
+  if (!request.retire && !values.some((value) => label(value) === request.previous)
+      && values.some((value) => normalizeFact(label(value)) === replacementKey)) {
+    return { ...base, state: 'existing', changed: false, identity_source_sha256: sha, reason: 'the requested line is already current' };
+  }
+  if (request.expected_sha256 !== sha) {
+    return { ...base, state: 'stale', changed: false, identity_source_sha256: sha, reason: 'profile identity changed since it was read; reread and reconcile before correcting' };
+  }
+  if (!request.evidence.stable || !request.evidence.explicit_or_strong) {
+    return { ...base, state: 'ignored-weak', changed: false, reason: 'a correction needs stable, explicit or strong evidence' };
+  }
+  if (request.evidence.privacy_ambiguous || request.evidence.contains_sensitive) {
+    return { ...base, state: 'needs-clarification', changed: false, user_confirmation_required: true, reason: 'profile privacy/sensitivity is materially ambiguous' };
+  }
+  if (request.evidence.contains_secret) {
+    return { ...base, state: 'blocked-secret', changed: false, reason: 'secret-bearing material cannot be stored in operator profile' };
+  }
+  const matches = values.filter((value) => normalizeFact(label(value)) === normalizeFact(request.previous));
+  if (matches.length !== 1 || label(matches[0]) !== request.previous) {
+    return { ...base, state: 'needs-clarification', changed: false, user_confirmation_required: true, reason: matches.length > 1 ? 'the old line appears more than once' : 'the exact old line is no longer present' };
+  }
+  let inserted = false;
+  const updated = values.flatMap((value) => {
+    if (label(value) !== request.previous) return [value];
+    if (request.retire) return [];
+    if (values.some((existing) => label(existing) !== request.previous && normalizeFact(label(existing)) === replacementKey)) return [];
+    if (inserted) return [];
+    inserted = true;
+    return [typeof value === 'string' ? request.replacement : { text: request.replacement, project: value.project }];
+  });
+  const nextIdentity = { ...identity, [request.category]: updated };
+  const nextManaged = renderIdentity(nextIdentity);
+  const next = managed
+    ? managed.before + nextManaged.replace(/\n$/, '') + managed.after + (managed.after.endsWith('\n') ? '' : '\n')
+    : (text.trim() ? text.replace(/\s*$/, '\n\n') : '# Identity\n\n') + nextManaged;
+  if (next === text) return { ...base, state: 'existing', changed: false, identity_source_sha256: sha, reason: 'the correction is already reflected' };
+  atomicWrite(identityFile ?? path.join(profileRoot, IDENTITY_FILE), next);
+  const history = updateProvenance(profileRoot, provenanceRequest, new Date().toISOString(), request.retire ? 'retired' : 'corrected');
+  return { ...base, state: identityFile ? 'evolved' : 'created', changed: true, category: request.category,
+    identity_source_sha256: crypto.createHash('sha256').update(next).digest('hex'),
+    provenance: { fingerprint: history.fingerprint, changed: history.changed } };
+}
+
+// One owner-wide lock covers read, hash check, merge, write and provenance, across processes.
+function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+function withProfileLock(profileRoot, work) {
+  const lock = path.join(profileRoot, '.profile-owner.lock');
+  const mine = `${process.pid}:${crypto.randomBytes(12).toString('hex')}`;
+  const until = Date.now() + Number(process.env.AIVERSE_PROFILE_LOCK_WAIT_MS || 15000);
+  let fd = null;
+  for (;;) {
+    try {
+      fd = fs.openSync(lock, 'wx', 0o600);
+      fs.writeSync(fd, `${mine}\n`);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      // A lock is only taken over when its holder process is gone. Age alone never decides.
+      let text = '';
+      try { text = fs.readFileSync(lock, 'utf8'); } catch { /* released meanwhile */ }
+      const holder = Number(text.split(':')[0]);
+      let stale = false;
+      if (holder > 0) { try { process.kill(holder, 0); } catch (e) { stale = e.code !== 'EPERM'; } }
+      else {
+        // An empty or garbled file only counts as abandoned after half a minute (a writer died between create and write).
+        try { stale = Date.now() - fs.statSync(lock).mtimeMs > 30000; } catch { /* gone */ }
+      }
+      if (stale) {
+        const aside = `${lock}.stale-${crypto.randomBytes(6).toString('hex')}`;
+        try { fs.renameSync(lock, aside); fs.unlinkSync(aside); } catch { /* another process took it */ }
+        continue;
+      }
+      if (Date.now() > until) throw new Error('operator profile is busy; retry');
+      sleepMs(25);
+    }
+  }
+  try { return work(); }
+  finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+    // Release only our own lock: if it was taken over, leave the new holder's file alone.
+    try { if (fs.readFileSync(lock, 'utf8').trim() === mine) fs.unlinkSync(lock); } catch { /* ignore */ }
+  }
+}
+
 function atomicWrite(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
@@ -354,7 +510,7 @@ function extractManagedBlock(text) {
 }
 
 function parseManagedIdentity(body) {
-  const doc = { name: null, roles: [], domains: [], notes: [] };
+  const doc = { name: null, roles: [], domains: [], ventures: [], notes: [] };
   let section = null;
   for (const raw of body.split(/\r?\n/)) {
     const line = raw.trim();
@@ -365,8 +521,13 @@ function parseManagedIdentity(body) {
     }
     if (line === '### Roles and responsibilities') { section = 'roles'; continue; }
     if (line === '### Relevant domains') { section = 'domains'; continue; }
+    if (line === '### What I run and work on') { section = 'ventures'; continue; }
     if (line === '### Notes') { section = 'notes'; continue; }
-    if (line.startsWith('- ') && section) doc[section].push(line.slice(2).trim());
+    if (line.startsWith('- ') && section === 'ventures') {
+      const body = line.slice(2).trim();
+      const mark = body.match(PROJECT_MARK);
+      doc.ventures.push({ text: (mark ? body.slice(0, mark.index) : body).trim(), project: mark ? mark[1] : null });
+    } else if (line.startsWith('- ') && section) doc[section].push(line.slice(2).trim());
   }
   return doc;
 }
@@ -410,6 +571,7 @@ function renderIdentity(identity) {
     identity.name ? '' : '',
     renderList('Roles and responsibilities', identity.roles).trimEnd(),
     renderList('Relevant domains', identity.domains).trimEnd(),
+    renderList('What I run and work on', identity.ventures.map((v) => v.project ? `${v.text} <!-- project:${v.project} -->` : v.text)).trimEnd(),
     renderList('Notes', identity.notes).trimEnd(),
     END,
   ].filter((line, index, all) => !(line === '' && index > 0 && all[index - 1] === '')).join('\n') + '\n';
@@ -471,6 +633,7 @@ function mergeIdentity(current, incoming) {
     name: current.name || incoming.name,
     roles: mergeFacts(current.roles, incoming.roles),
     domains: mergeFacts(current.domains, incoming.domains),
+    ventures: mergeVentures(current.ventures, incoming.ventures),
     notes: mergeFacts(current.notes, incoming.notes),
   };
 }
@@ -546,10 +709,16 @@ async function main() {
   }
   if (command === 'correct-preference') {
     const request = normalizePreferenceCorrection(raw);
-    process.stdout.write(JSON.stringify(correctPreference(profileRoot, request), null, 2) + '\n');
+    const result = withProfileLock(profileRoot, () => (request.section === 'identity'
+      ? correctIdentity(profileRoot, request) : correctPreference(profileRoot, request)));
+    process.stdout.write(JSON.stringify(result, null, 2) + '\n');
     return;
   }
-  const request = normalizeRequest(raw);
+  const request = normalizeRequest(raw, root);
+  withProfileLock(profileRoot, () => ensureProfile(profileRoot, request));
+}
+
+function ensureProfile(profileRoot, request) {
 
   const base = {
     schema_version: SCHEMA_VERSION,
@@ -617,12 +786,12 @@ async function main() {
   }
 
   let identityResult = { state: 'unchanged', changed: false };
-  const hasIdentity = request.identity.name || request.identity.roles.length || request.identity.domains.length || request.identity.notes.length;
+  const hasIdentity = request.identity.name || request.identity.roles.length || request.identity.domains.length || request.identity.ventures.length || request.identity.notes.length;
   if (hasIdentity) {
     const currentFile = safeFile(identityFile, profileRoot, 'operator profile identity');
     const text = currentFile ? fs.readFileSync(currentFile, 'utf8') : '';
     const managed = extractManagedBlock(text);
-    const current = managed ? parseManagedIdentity(managed.body) : { name: null, roles: [], domains: [], notes: [] };
+    const current = managed ? parseManagedIdentity(managed.body) : { name: null, roles: [], domains: [], ventures: [], notes: [] };
     const merged = mergeIdentity(current, request.identity);
     identityResult = evolveFile(identityFile, profileRoot, 'operator profile identity', merged, parseManagedIdentity, renderIdentity);
   }

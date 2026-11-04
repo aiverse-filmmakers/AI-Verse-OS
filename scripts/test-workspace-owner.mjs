@@ -241,6 +241,30 @@ try {
   assert.match(evolvedManual, /"source:\/\/manual"/);
   assert.equal(fs.existsSync(path.join(manualRoot, 'context', 'CURRENT.md')), true);
 
+  // Aliases: spoken names are added, merged, kept on unrelated edits, and bounded.
+  r = run(root, request({
+    workspace: { aliases: ['Skool', 'the community'] },
+    evidence: { reason: 'The operator calls this project by a short name.' },
+    provenance: { trigger_ref: 'run:alias-1' },
+  }));
+  assert.equal(r.status, 0, r.stderr);
+  let aliased = fs.readFileSync(path.join(clientRoot, 'WORKSPACE.yaml'), 'utf8');
+  assert.match(aliased, /^aliases:\n  - "Skool"\n  - "the community"$/m);
+  r = run(root, request({
+    workspace: { domains: ['video', 'marketing', 'audio'] },
+    evidence: { reason: 'Client A gained an audio domain.' },
+    provenance: { trigger_ref: 'run:alias-2' },
+  }));
+  assert.equal(r.status, 0, r.stderr);
+  aliased = fs.readFileSync(path.join(clientRoot, 'WORKSPACE.yaml'), 'utf8');
+  assert.match(aliased, /"Skool"/, 'an unrelated edit must keep the aliases');
+  assert.match(aliased, /"audio"/);
+  r = run(root, request({ workspace: { aliases: ['bad;alias'] }, provenance: { trigger_ref: 'run:alias-3' } }));
+  assert.notEqual(r.status, 0, 'unsafe alias text must be refused');
+  const fresh = run(root, request({ workspace: { id: 'new-aliased', name: 'New Aliased', aliases: ['Nova'] } }));
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.match(fs.readFileSync(path.join(root, 'workspaces', 'new-aliased', 'WORKSPACE.yaml'), 'utf8'), /^aliases:\n  - "Nova"$/m);
+
   process.stdout.write('Automatic workspace owner acceptance: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

@@ -1430,9 +1430,12 @@ class AIverseOSHost:
             raise AdapterError("operator.profile.correct requires operator scope")
         if not isinstance(parameters, Mapping):
             raise AdapterError("operator.profile.correct parameters must be an object")
-        allowed = {"category", "previous", "replacement", "expected_sha256", "evidence", "provenance"}
-        if set(parameters) != allowed:
-            raise AdapterError("operator.profile.correct requires category, previous, replacement, expected_sha256, evidence and provenance")
+        required = {"category", "previous", "expected_sha256", "evidence", "provenance"}
+        optional = {"replacement", "section", "retire"}
+        keys = set(parameters)
+        if not required <= keys or keys - required - optional or (
+                "replacement" not in keys and parameters.get("retire") is not True):
+            raise AdapterError("operator.profile.correct requires category, previous, replacement (or retire), expected_sha256, evidence and provenance; section is optional")
         proc = subprocess.run(
             ["node", str(self.operator_profile_owner_cli), "correct-preference", "--root", str(self.root)],
             input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),

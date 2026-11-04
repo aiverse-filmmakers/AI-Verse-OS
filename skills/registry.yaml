@@ -19,6 +19,9 @@ capabilities:
   - id: learn
     scope: universal
     purpose: "Review the current conversation chronologically and route durable learning through its existing owners."
+  - id: reflect
+    scope: universal
+    purpose: "Tidy what AI-Verse OS knows about the operator: move what sits in the wrong place, tell the operator, and allow undo."
   - id: migration-drop
     scope: universal
     purpose: "Automatically classify and safely migrate accumulated prior-assistant context into existing AI-Verse owners."

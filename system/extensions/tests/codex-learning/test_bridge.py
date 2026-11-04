@@ -527,14 +527,15 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(stale["status"], "stale")
         self.assertFalse(stale["exact_evidence"])
 
-    def test_compaction_restores_scope_without_reopening_completed_review(self):
+    def test_compaction_never_inherits_the_previous_project(self):
+        # Changed: compaction, resume and startup are resolved from the physical folder only.
         self.start("workspace:alpha completed the validation.")
         self.review(self.payload())
         response = self.bridge.hook(self.event("SessionStart", source="compact"))
         text = response["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("workspace:alpha", text)
-        self.assertIn("ALPHA PRIVATE", text)
+        self.assertNotIn("ALPHA PRIVATE", text)
         self.assertNotIn("review --session", text)
+        self.assertEqual(self.bridge.state(self.session)["scope"], "operator")
         self.assertEqual(self.bridge.state(self.session)["turn"]["state"], "reviewed")
 
     def test_interrupt_does_not_wait_for_review_and_prevents_next_write(self):

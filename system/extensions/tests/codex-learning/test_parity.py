@@ -99,6 +99,13 @@ class ParityTests(unittest.TestCase):
             self.assertIn("preferences_source_sha256", queried.stdout)
         self.each(body)
 
+    def test_managed_block_markers_are_not_key_preferences(self):
+        from bridge import key_preferences
+        text = ("# Working Preferences\n\n<!-- ai-verse-profile:auto:start -->\n## Supported\n\n### Communication\n\n- Be brief.\n\n"
+                "### Avoid\n\n- Avoid filler.\n<!-- ai-verse-profile:auto:end -->\n")
+        keys = key_preferences(text)
+        self.assertEqual(keys, {"communication": ["Be brief."], "avoid": ["Avoid filler."]})
+
     def test_key_preferences_come_first_and_the_review_command_survives_every_budget(self):
         def body(sc):
             (sc.root / "operator/profile/preferences.md").write_text(

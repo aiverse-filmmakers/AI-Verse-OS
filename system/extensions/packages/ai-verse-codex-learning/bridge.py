@@ -282,7 +282,7 @@ def key_preferences(text, maximum=None):
                 level, label = depth, match.group(2).casefold()
             elif label and depth <= level:
                 level, label = 0, None
-        elif label and line.strip():
+        elif label and line.strip() and not re.fullmatch(r"(?:<!--.*?-->\s*)+", line.strip()):
             items.append((label, re.sub(r"^[-*]\s+", "", line.strip())))
     if not items:
         return {}
@@ -396,6 +396,22 @@ QUOTED_LINE = re.compile(r"(?m)^[ \t]*>.*$")
 def own_words(prompt):
     """The operator's own typed words: pasted, quoted and code blocks never bind a destination."""
     return QUOTED_LINE.sub(" ", FENCED.sub(" ", PASTED.sub(" ", prompt)))
+
+
+PROJECT_REF = re.compile(r"<!-- project:([a-z0-9][a-z0-9-]{0,127}) -->")
+
+
+def visible_profile_text(text, readable_projects, operator_view):
+    """Drop venture lines that point at a project this turn may not read. Operator scope sees everything."""
+    if operator_view:
+        return text
+    kept = []
+    for line in text.splitlines():
+        ref = PROJECT_REF.search(line)
+        if ref and ref.group(1) not in readable_projects:
+            continue
+        kept.append(line)
+    return "\n".join(kept) + ("\n" if text.endswith("\n") else "")
 
 
 def yaml_list(text, key):
@@ -713,6 +729,10 @@ class Bridge:
             raise Refused("event is outside this OS project")
         relative = working.relative_to(self.root).parts
         words = own_words(prompt)
+        unmarked = False
+        if self.harness != "claude" and len(words) > 1500:
+            # This client does not mark pasted text, so a long message may be a paste: names in it never authorize.
+            words, unmarked = "", True
         folder = None
         if len(relative) >= 2 and relative[0] == "workspaces":
             self.manifest(relative[1])
@@ -759,11 +779,29 @@ class Bridge:
         for scope in allowed:
             if not SCOPE.fullmatch(scope):
                 raise Refused("invalid destination")
+        if unmarked:
+            ambiguous.append({"name": "a long message that may contain pasted text", "could_mean": []})
         return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4]}
 
     def scope(self, cwd, prompt, previous=None):
         """Primary destination of one prompt. The previous scope is ignored: bindings never stick."""
         return self.destinations(cwd, prompt)["primary"]
+
+    def authorize_turn(self, session, turn_id, token):
+        """The active original turn, current and not cancelled. Scoped reads and bindings need it."""
+        if not turn_id or not token:
+            raise Refused("a scoped request needs --turn and --token of the active turn")
+        with self.lock(session):
+            state = self.state(session)
+            turn = self.bound_turn(state, turn_id, token)
+            if turn["state"] not in {"active", "review_requested"}:
+                raise Refused("the turn is no longer active")
+            return state, turn
+
+    def readable_projects(self, state):
+        turn = state.get("turn") or {}
+        scopes = turn.get("allowed") or [state.get("scope", "operator")]
+        return {s[10:] for s in scopes if s.startswith("workspace:")}
 
     def current_snapshot(self, scope):
         result = self.owner("read_context", {"scope": scope})
@@ -967,6 +1005,7 @@ class Bridge:
             if file.exists():
                 text = safe(file, self.root, file=True).read_text()
                 if not SECRET.search(text):
+                    text = visible_profile_text(text, self.readable_projects(state), state["scope"] == "operator")
                     profile[name] = small_window(text, prompt)
                     if name == "preferences.md" and key_preferences(text):
                         prefs = text
@@ -986,6 +1025,12 @@ class Bridge:
                 "max_bytes": self.config["recall_max_bytes"]})
         except (Refused, subprocess.TimeoutExpired):
             warnings.append("Historical Memory unavailable; prior history is not known.")
+        nav = context.get("historical_navigation")
+        if isinstance(nav, dict) and isinstance(nav.get("items"), list):
+            visible = self.readable_projects(state)
+            for item in nav["items"]:
+                if isinstance(item.get("excerpt"), str):
+                    item["excerpt"] = visible_profile_text(item["excerpt"], visible, scope == "operator")
         context["warnings"] = warnings
         limit = self.config["context_max_bytes"]
         if self.harness == "claude":
@@ -1110,15 +1155,10 @@ class Bridge:
                     self.save(state)
                     result = self.context(state, prompt, kind)
             elif kind == "SessionStart":
-                held = state.get("turn")
-                if (event.get("source") == "compact" and held and held.get("scope")
-                        and time.time() - held.get("created", 0) <= self.config["state_ttl_seconds"]):
-                    state["scope"] = held["scope"]  # The same turn carries on after compaction.
-                    self.manifest(state["scope"][10:]) if state["scope"].startswith("workspace:") else None
-                else:
-                    state["scope"] = self.scope(event["cwd"], "")
+                # Startup, resume and compaction never inherit an earlier project: the physical folder decides.
+                state["scope"] = self.scope(event["cwd"], "")
                 self.save(state)
-                result = self.context(state, "", kind)
+                result = self.context(state, "", kind, tidy=False)
             else:
                 turn = state.get("turn")
                 if not turn or time.time() - turn["created"] > self.config["state_ttl_seconds"]:
@@ -1794,12 +1834,16 @@ def main():
     binding.add_argument("--session", required=True)
     binding.add_argument("--scope", required=True)
     binding.add_argument("--quote", required=True)
+    binding.add_argument("--turn", required=True)
+    binding.add_argument("--token", required=True)
     query = commands.add_parser("query")
     query.add_argument("--session", required=True)
     query.add_argument("--kind", choices=["context", "memory", "capabilities", "connections", "profile"], required=True)
     query.add_argument("--query", default="")
     query.add_argument("--depth", choices=["catalog", "summary", "detail", "source"], default="summary")
-    query.add_argument("--scope", help="Read from one of this turn's destinations (or the operator scope)")
+    query.add_argument("--scope", help="Read from one of this turn's destinations (or the operator scope); needs --turn and --token")
+    query.add_argument("--turn")
+    query.add_argument("--token")
     query.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
     intent = commands.add_parser("intent")
     intent.add_argument("action", choices=["plan", "handover", "read", "capture", "confirm", "link"])
@@ -1881,6 +1925,7 @@ def main():
                                    "sha256": value["sha256"], "truncated": value["truncated"]}
                                   for key, value in selected]}
         elif args.command == "bind":
+            bridge.authorize_turn(args.session, args.turn, args.token)
             with bridge.lock(args.session):
                 state = bridge.state(args.session)
                 turn = state.get("turn")
@@ -1902,7 +1947,8 @@ def main():
             scope = state["scope"]
             if args.scope:
                 # Read only, and only inside this turn's destinations (the operator profile is always readable).
-                readable = {"operator", *((state.get("turn") or {}).get("allowed") or [scope])}
+                state, authorized = bridge.authorize_turn(args.session, args.turn, args.token)
+                readable = {"operator", *(authorized.get("allowed") or [scope])}
                 if args.scope not in readable:
                     raise Refused("scope is not readable from this turn")
                 scope = args.scope

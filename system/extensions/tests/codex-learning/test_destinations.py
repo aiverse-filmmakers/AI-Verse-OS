@@ -151,16 +151,61 @@ class DestinationTests(unittest.TestCase):
                 self.review(sc, tool)
         self.each(body)
 
-    def test_query_scope_reads_only_inside_the_turns_destinations(self):
+    def test_query_scope_reads_only_inside_the_turns_destinations_with_the_turn_token(self):
         def body(sc):
             sc.prompt("Alpha Study update please.")
-            ok = sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha")
+            turn = sc.turn()
+            auth = ["--turn", turn["id"], "--token", turn["token"]]
+            ok = sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha", *auth)
             self.assertEqual(ok.returncode, 0, ok.stdout)
             self.assertIn("ALPHA PRIVATE", ok.stdout)
-            denied = sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:beta")
+            denied = sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:beta", *auth)
             self.assertEqual(denied.returncode, 2)
             self.assertNotIn("BETA PRIVATE", denied.stdout)
+            # Session id alone, a wrong token, another session, and a stale turn are all refused.
+            self.assertEqual(sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha").returncode, 2)
+            self.assertEqual(sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha",
+                                    "--turn", turn["id"], "--token", "0" * 32).returncode, 2)
+            self.assertEqual(sc.cli("query", "--session", sc.session + "-other", "--kind", "context", "--scope", "workspace:alpha", *auth).returncode, 2)
+            sc.prompt("A new turn without alpha.")
+            self.assertEqual(sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha", *auth).returncode, 2)
+            # Cancelled turns lose it as well.
+            fresh = sc.turn()
+            sc.prompt("Alpha Study again.")
+            fresh = sc.turn()
+            sc.bridge.hook({"session_id": sc.session, "turn_id": fresh["id"], "cwd": str(sc.root), "hook_event_name": "Interrupt"})
+            self.assertEqual(sc.cli("query", "--session", sc.session, "--kind", "context", "--scope", "workspace:alpha",
+                                    "--turn", fresh["id"], "--token", fresh["token"]).returncode, 2)
         self.each(body)
+
+    def test_startup_resume_and_compaction_never_carry_a_project_over(self):
+        def body(sc):
+            alpha = str(sc.root / "workspaces/alpha")
+            sc.prompt("Continue.", cwd=alpha)
+            first = sc.bridge.hook({"session_id": sc.session, "cwd": str(sc.root), "hook_event_name": "SessionStart", "source": "resume"})
+            self.assertNotIn("ALPHA PRIVATE", first["hookSpecificOutput"]["additionalContext"])
+            sc.bridge.hook({"session_id": sc.session, "cwd": str(sc.root), "hook_event_name": "SessionStart", "source": "compact"})
+            beta = sc.bridge.hook({"session_id": sc.session, "cwd": str(sc.root / "workspaces/beta"), "hook_event_name": "SessionStart", "source": "startup"})
+            text = beta["hookSpecificOutput"]["additionalContext"]
+            self.assertIn("BETA PRIVATE", text)
+            self.assertNotIn("ALPHA PRIVATE", text)
+            self.assertNotIn("A tidy note is waiting", text)
+        self.each(body)
+
+    def test_a_long_message_never_authorizes_a_project_on_a_client_that_does_not_mark_pastes(self):
+        long_text = "Notes I pasted: Beta Study did well. " + "Filler sentence about nothing. " * 60
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                sc = Scenario(self, harness)
+                sc.prompt(long_text)
+                turn = sc.turn()
+                if harness == "codex":
+                    self.assertEqual(turn["allowed"], ["operator"])
+                    self.assertTrue(turn["ambiguous"])
+                else:
+                    self.assertIn("workspace:beta", turn["allowed"])  # Claude marks pastes, so unmarked prose is the operator's own
+                sc.prompt("Now about Beta Study, in a short message.")
+                self.assertIn("workspace:beta", sc.turn()["allowed"])
 
 
 if __name__ == "__main__":

@@ -124,7 +124,9 @@ Each turn has its own list of destinations, shown in the instructions as "Where 
 - If a name could mean more than one project, the instructions say so. Ask the operator one plain question before saving anything about it.
 - A fact about the operator himself, stated by him in a project chat, may go to the profile with `"scope":"operator"` and `"general_fact":{"stated_by_operator_about_self":true,"contains_project_figures":false}`. It needs his own words as evidence and must contain no digits.
 - Profile corrections accept `"section":"identity"` with category `roles`, `domains`, `ventures` or `notes`; the bridge checks the identity version instead of the preferences version.
-- `query --scope workspace:<id>` reads context or Memory from one of the turn's destinations (the operator scope is always readable).
+- `query --scope workspace:<id> --turn TURN --token TOKEN` reads context or Memory from one of the turn's destinations (the operator scope is always readable). A scoped query without the active turn id and token, or with a stale or cancelled turn, is refused. `bind` needs them too.
+- Startup, resume and compaction never carry a project over: the physical folder decides. Venture lines that point at a project are hidden from chats that may not read that project.
+- Clients that do not mark pasted text (Codex): a long message never authorizes a project by name; the AI is told to ask for one explicit choice.
 
 ## Tidying (`reflect`)
 

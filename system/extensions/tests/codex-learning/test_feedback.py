@@ -77,6 +77,29 @@ class MotherListTests(unittest.TestCase):
                 self.review(sc, upgrade("Stop mixing up the Beta Study numbers.", "AI-Verse OS should stop mixing things up"))
         self.each(body, maintainer_feedback=True)
 
+    def test_feedback_from_a_private_project_chat_carries_only_the_request(self):
+        def body(sc):
+            folder = add_development_project(sc)
+            alpha = str(sc.root / "workspaces/alpha")
+            sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.", cwd=alpha)
+            receipt = self.review(sc, upgrade("Make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
+            self.assertEqual(receipt["effects"][0]["result"]["state"], "saved")
+            self.assertEqual(len(list(folder.rglob("mem-*.md"))), 1)
+            self.assertEqual(list((sc.root / "workspaces/alpha").rglob("mem-*.md")), [])
+            self.assertEqual(list((sc.root / "operator/memory").rglob("mem-*.md")), [])
+            self.assertNotIn("ALPHA PRIVATE", (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text())
+            # An ordinary memory aimed at the development project from another chat is still refused.
+            sc.prompt("The validated filter retained all twelve correct records.", cwd=alpha)
+            ordinary = {"route": "memory", "scope": "workspace:ai-verse-os-development",
+                        "parameters": {"type": "lesson", "text": "The validated filter retained all twelve correct records.", "confidence": .95,
+                                       "admission": {"durable": True, "historical": True, "current_truth": False, "contains_secret": False,
+                                                     "strategic": False, "permission_expansion": False, "privacy_ambiguous": False,
+                                                     "external_authority": False}},
+                        "evidence": [{"source_id": "user", "quote": "filter retained all twelve correct records"}]}
+            with self.assertRaises(Refused):
+                self.review(sc, ordinary)
+        self.each(body, maintainer_feedback=True)
+
     def test_a_missing_development_project_is_skipped_quietly(self):
         def body(sc):
             sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.")
@@ -105,6 +128,28 @@ class MotherListTests(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
         config = json.loads((sc.root / ".aiverse/extensions/ai-verse-codex-learning/config.json").read_text())
         self.assertTrue(config["maintainer_feedback"])
+
+
+class VenturePrivacyTests(unittest.TestCase):
+    def test_a_project_chat_never_sees_another_projects_venture_line(self):
+        for harness in HARNESSES:
+            with self.subTest(harness=harness):
+                sc = Scenario(self, harness)
+                for project, name in (("alpha", "Alpha Study"), ("beta", "Beta Study")):
+                    sc.bridge.owner("learn", {"scope": "operator", "session_id": "s", "turn_id": "t", "route": "profile", "refs": ["x:1"],
+                        "parameters": {"identity": {"ventures": [{"text": f"Works on {name}", "project": project}]},
+                                       "evidence": {"stable": True, "explicit_or_strong": True, "privacy_ambiguous": False,
+                                                    "contains_sensitive": False, "contains_secret": False, "reason": "seed"}},
+                        "effect_id": "seed-" + project})
+                in_alpha = sc.prompt("Continue.", cwd=str(sc.root / "workspaces/alpha"))
+                self.assertIn("Works on Alpha Study", in_alpha)
+                self.assertNotIn("Beta Study", in_alpha)
+                self.assertNotIn("project:beta", in_alpha)
+                in_beta = sc.prompt("Continue.", cwd=str(sc.root / "workspaces/beta"))
+                self.assertNotIn("Alpha Study", in_beta)
+                at_root = sc.prompt("Continue.")
+                self.assertIn("Works on Alpha Study", at_root)  # the operator's own view is complete
+                self.assertIn("Works on Beta Study", at_root)
 
 
 class WordsAndReminderTests(unittest.TestCase):

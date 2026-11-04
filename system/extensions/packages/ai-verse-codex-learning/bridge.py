@@ -423,7 +423,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "5106811d25d4a1eda3c15a5d5bd0e78528c3089316720bb6ef09085e73f7027a"  # refreshed with the package hashes
+REFLECT_SHA256 = "8f9e727b34b7262f80ada15421a7201fde5b1c35630f2132d38cd5640a5122c2"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 

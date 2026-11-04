@@ -436,7 +436,7 @@ class ClaudeEventTests(ClaudeFixture):
             self.assertEqual(keys["avoid"], [self.AVOID], limit)
 
     def test_m_long_items_are_kept_whole(self):
-        long_rule = "Never do this thing. " + "Detail. " * 110
+        long_rule = ("Never do this thing. " + "Detail. " * 120).strip()
         self.assertGreater(len(long_rule), 900)
         text, keys = self.keys_at(f"### Communication\n\n- {long_rule}\n- {self.RULE}\n", 14000)
         self.assertEqual(keys["communication"][0], long_rule)

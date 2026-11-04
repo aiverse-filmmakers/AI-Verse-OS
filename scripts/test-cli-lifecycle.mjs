@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const cli = path.resolve('bin/ai-verse-os.mjs');
@@ -122,7 +123,7 @@ try {
   assert.equal(repaired.version, releaseDescriptor.version, 'setup output reports the descriptor version');
   assert.equal(JSON.parse(fs.readFileSync(setupFile, 'utf8')).version, releaseDescriptor.version, 'setup.json carries the descriptor version');
   assert.equal(invoke(['status', '--dir', root, '--json'], 0).version, releaseDescriptor.version, 'status reports the descriptor version');
-  const printed = spawnSync(process.execPath, [new URL('../bin/ai-verse-os.mjs', import.meta.url).pathname, '--version'], { encoding: 'utf8' });
+  const printed = spawnSync(process.execPath, [fileURLToPath(new URL('../bin/ai-verse-os.mjs', import.meta.url)), '--version'], { encoding: 'utf8' });
   assert.equal(printed.stdout.trim(), releaseDescriptor.version, '--version prints the descriptor version');
   assert.ok(!/CLI_VERSION = '/.test(cliSource), 'CLI must not hard-code a version');
   assert.equal(pkg.version, '0.0.0', 'package.json version is a placeholder, not the OS version');

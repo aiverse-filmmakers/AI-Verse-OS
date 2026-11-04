@@ -3,8 +3,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const CLI_VERSION = '0.2.0';
+// The OS version has one authority: release/component-release.json (the accepted
+// release descriptor). The CLI never carries its own number. package.json's
+// version is only an npm placeholder and is not the OS version.
+function readReleaseVersion() {
+  try {
+    const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'release', 'component-release.json');
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (data.component_id === 'ai-verse-os' && typeof data.version === 'string' && data.version) return data.version;
+  } catch {
+    // Fall through to an honest unknown.
+  }
+  return 'unknown';
+}
+
+const CLI_VERSION = readReleaseVersion();
 const LIFECYCLE_SCHEMA = '1.0';
 const SETUP_SCHEMA = '1.0';
 const DEFAULT_REPO = 'https://github.com/aiverse-filmmakers/AI-Verse-OS.git';

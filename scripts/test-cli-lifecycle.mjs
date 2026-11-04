@@ -114,6 +114,20 @@ try {
   assert.equal(repaired.state, 'ready');
   assert.equal(repaired.setup.profile, 'detected');
 
+  // One version authority: the accepted release descriptor. The CLI, the setup
+  // marker and package.json must not carry a competing OS version.
+  const releaseDescriptor = JSON.parse(fs.readFileSync(new URL('../release/component-release.json', import.meta.url), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const cliSource = fs.readFileSync(new URL('../bin/ai-verse-os.mjs', import.meta.url), 'utf8');
+  assert.equal(repaired.version, releaseDescriptor.version, 'setup output reports the descriptor version');
+  assert.equal(JSON.parse(fs.readFileSync(setupFile, 'utf8')).version, releaseDescriptor.version, 'setup.json carries the descriptor version');
+  assert.equal(invoke(['status', '--dir', root, '--json'], 0).version, releaseDescriptor.version, 'status reports the descriptor version');
+  const printed = spawnSync(process.execPath, [new URL('../bin/ai-verse-os.mjs', import.meta.url).pathname, '--version'], { encoding: 'utf8' });
+  assert.equal(printed.stdout.trim(), releaseDescriptor.version, '--version prints the descriptor version');
+  assert.ok(!/CLI_VERSION = '/.test(cliSource), 'CLI must not hard-code a version');
+  assert.equal(pkg.version, '0.0.0', 'package.json version is a placeholder, not the OS version');
+  assert.ok(pkg.files.includes('release/component-release.json'), 'package ships the release descriptor');
+
   process.stdout.write('CLI lifecycle acceptance: PASS\n');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

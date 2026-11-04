@@ -94,7 +94,9 @@ class ParityTests(unittest.TestCase):
             label = "claude-code:user" if sc.harness == "claude" else "codex-desktop:user"
             self.assertIn(label, history)
             self.assertIn('user said: \\"give me answers as short paragraphs', history)
-            queried = sc.cli("query", "--session", sc.session, "--kind", "profile")
+            sc.prompt("Show me what you know about my preferences.")
+            turn = sc.turn()
+            queried = sc.cli("query", "--session", sc.session, "--kind", "profile", "--turn", turn["id"], "--token", turn["token"])
             self.assertEqual(queried.returncode, 0, queried.stdout)
             self.assertIn("preferences_source_sha256", queried.stdout)
         self.each(body)

@@ -259,4 +259,24 @@ function baseRequest() {
   assert.equal(JSON.parse(fs.readFileSync(path.join(root, 'operator', 'profile', 'AUTO-ORGANIZATION.json'), 'utf8')).history.length, 6);
 }
 
+// A live holder's lock is never stolen because it is old, and a stranger's file is not removed on release.
+{
+  const root = fixture();
+  const evidence = { stable: true, explicit_or_strong: true, reason: 'Lock.' };
+  const lock = path.join(root, 'operator', 'profile', '.profile-owner.lock');
+  fs.writeFileSync(lock, `${process.pid}:someoneelse\n`);
+  const old = new Date(Date.now() - 120000);
+  fs.utimesSync(lock, old, old);
+  const busy = spawnSync(process.execPath, [script, 'ensure', '--root', root], {
+    input: JSON.stringify({ identity: { notes: ['blocked note'] }, evidence, provenance: { trigger_ref: 'lock-1' } }),
+    encoding: 'utf8', env: { ...process.env, AIVERSE_PROFILE_LOCK_WAIT_MS: '400' } });
+  assert.notEqual(busy.status, 0, 'a live holder must not be pushed aside');
+  assert.match(busy.stderr, /busy/);
+  assert.equal(fs.readFileSync(lock, 'utf8').trim(), `${process.pid}:someoneelse`, 'the other holder file is untouched');
+  // A dead holder is taken over.
+  fs.writeFileSync(lock, `999999:ghost\n`);
+  const ok = run(root, { identity: { notes: ['after ghost'] }, evidence, provenance: { trigger_ref: 'lock-2' } });
+  assert.equal(ok.state, 'created');
+}
+
 process.stdout.write('Operator profile owner acceptance: PASS\n');

@@ -41,6 +41,7 @@ class Tidy:
 
     def __init__(self, bridge, mod):
         self.b, self.m = bridge, mod
+        self.auth = None
         self.dir = mod.safe(bridge.runtime / "reflect", bridge.root)
         self.file = self.dir / "state.json"
         self.lockfile = self.dir / "lock"
@@ -71,6 +72,16 @@ class Tidy:
         # Keep the file small: finished entries and old closed batches are dropped.
         state["entries"] = [e for e in state["entries"] if not e.get("done")][-500:]
         state["batches"] = state["batches"][-30:]
+        keep = {i["action"] for b in state["batches"] for i in b["items"]}
+        live = {a for a, v in state["actions"].items() if v["status"] in {"planned", "applying", "undoing"}}
+        terminal = sorted((a for a in state["actions"] if a not in keep and a not in live),
+                          key=lambda a: state["actions"][a].get("applied_at", 0))
+        for aid in terminal[:-40]:
+            del state["actions"][aid]
+        for action in state["actions"].values():
+            if action["status"] in {"undone", "failed"}:
+                for heavy in ("ops", "results", "comp_results", "records"):
+                    action.pop(heavy, None)
         state["rejected"] = state["rejected"][-200:]
         self.m.atomic_json(self.file, state, self.b.root)
 
@@ -158,8 +169,9 @@ class Tidy:
         """Pick one delivery batch for this prompt. It is only acknowledged once the reply showing it is seen."""
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         readable = self.readable(turn)
+        claimer = state["session_id"] + ":" + turn["id"]  # turn ids alone are not unique across chats
         batch = next((b for b in data["batches"] if not b["acked"]
-                      and (b["turn"] == turn["id"] or self.now() - b["claimed_at"] > self.claim_seconds)), None)
+                      and (b["turn"] == claimer or self.now() - b["claimed_at"] > self.claim_seconds)), None)
         if batch is None:
             if data["last_delivery_day"] == day:
                 return ""
@@ -170,11 +182,11 @@ class Tidy:
                 return ""
             ids = [aid for aid, a in data["actions"].items() if a in ready]
             batch = {"id": secrets.token_hex(2).upper(), "items": [{"n": i + 1, "action": aid} for i, aid in enumerate(ids)],
-                     "turn": turn["id"], "claimed_at": self.now(), "acked": False, "day": day}
+                     "turn": claimer, "claimed_at": self.now(), "acked": False, "day": day}
             data["batches"].append(batch)
         if not all(self.action_scopes(data["actions"][i["action"]]) <= readable for i in batch["items"]):
             return ""  # kept for a turn that may read every project it mentions; nothing is revealed here
-        batch["turn"], batch["claimed_at"] = turn["id"], self.now()
+        batch["turn"], batch["claimed_at"] = claimer, self.now()
         return ("\nA tidy note is waiting. Start your next reply with this note exactly as written, before anything else, "
                 "then carry on with the answer. Never place it in the middle of an answer:\n" + self.render(data, batch) + "\n")
 
@@ -212,7 +224,14 @@ class Tidy:
             pass
 
     # ---------------------------------------------------------------- shared checks
+    def owner(self, operation, payload):
+        """Owner calls for the new operations carry the live turn capability."""
+        if operation in {"reflect_scan", "current_remove"}:
+            payload = {**payload, "auth": self.auth}
+        return self.b.owner(operation, payload)
+
     def active_turn(self, session, turn_id, token):
+        self.auth = {"session": session, "turn": turn_id, "token": token}
         with self.b.lock(session):
             state = self.b.state(session)
             turn = self.b.bound_turn(state, turn_id, token)
@@ -247,11 +266,11 @@ class Tidy:
             data["lease"] = {"session": session, "turn": turn_id, "generation": data["generation"],
                              "token": secrets.token_hex(8), "expires": self.now() + LEASE_SECONDS,
                              "started": self.now(), "inspected": [], "plan": [], "truncated": False}
-            self.recover(data, session, turn_id)
+            self.recover(data, session, turn_id, readable)
             pending = [e for e in self.pending(data) if {"operator", e["scope"]} <= readable]
             inspected = pending[:MAX_PENDING]
             truncated = len(pending) > MAX_PENDING
-            scan = self.b.owner("reflect_scan", {"projects": projects, "limit": MAX_RECORDS}) if projects else {
+            scan = self.owner("reflect_scan", {"projects": projects, "limit": MAX_RECORDS}) if projects else {
                 "records": [], "workspaces": {}, "ventures": [], "truncated": False}
             found = self.detect(data, scan, projects)
             truncated = truncated or bool(scan.get("truncated")) or len(found) > MAX_ACTIONS
@@ -260,6 +279,7 @@ class Tidy:
                 known = data["actions"].setdefault(item["id"], {**item, "status": "planned", "generation": data["generation"]})
                 if known["status"] == "planned" and len(items) < MAX_ACTIONS:
                     known["generation"] = data["generation"]
+                    known["authorized"] = ["operator", "workspace:" + known["project"]]
                     items.append(known)
             data["lease"].update({"inspected": [e["seq"] for e in inspected], "plan": [i["id"] for i in items],
                                   "truncated": truncated})
@@ -358,12 +378,15 @@ class Tidy:
             if op["name"] in results:
                 continue
             operation = "current_remove" if op["payload"]["route"] == "current_remove" else "learn"
-            results[op["name"]] = self.b.owner(operation, op["payload"])
+            results[op["name"]] = self.owner(operation, op["payload"])
 
-    def recover(self, data, session, turn_id):
-        """An action cut off part way is finished again from its recorded operations (all are idempotent)."""
+    def recover(self, data, session, turn_id, readable):
+        """An action cut off part way is finished again from its recorded operations (all are idempotent).
+        Only actions this turn is authorized to read are resumed; others wait for a turn that may."""
         for aid, action in data["actions"].items():
             if action["status"] in {"applying", "undoing"}:
+                if not set(action.get("authorized", [])) <= readable:
+                    continue
                 try:
                     ops = action["ops"] if action["status"] == "applying" else action["comp"]
                     results = action.setdefault("results" if action["status"] == "applying" else "comp_results", {})
@@ -449,9 +472,12 @@ class Tidy:
                                "evidence": {**PROFILE_EVIDENCE, "reason": f"The operator undid tidy {aid}."}},
                 "effect_id": f"tidy:{aid}:retire"}})
         else:
+            effect = f"tidy:{aid}:notes"
+            line = "- " + template["parameters"]["text"] + f" <!-- codex-effect:{self.m.digest(effect)} -->"
             comp.append({"name": "remove", "payload": {"scope": "workspace:" + action["project"],
                 "session_id": template["session_id"], "turn_id": template["turn_id"], "route": "current_remove",
-                "parameters": {"effect_id": f"tidy:{aid}:notes"}, "refs": [], "effect_id": f"tidy:{aid}:remove"}})
+                "parameters": {"effect_id": effect, "line_sha256": self.m.digest(line)}, "refs": [],
+                "effect_id": f"tidy:{aid}:remove"}})
         action["comp"] = comp
 
     def titles(self, action):
@@ -479,15 +505,17 @@ class Tidy:
         with self.locked(10):
             data = self.load()
             lease = self.fence(data, session, turn_id)
-            self.recover(data, session, turn_id)
+            self.recover(data, session, turn_id, self.readable(turn))
             inspected = set(lease["inspected"])
             unfinished = [a for a in lease["plan"] if data["actions"].get(a, {}).get("status") == "planned"]
+            unfinished_work = bool(unfinished) or any(
+                data["actions"].get(a, {}).get("status") in {"applying", "undoing"} for a in lease["plan"])
             for entry in data["entries"]:
-                if entry["seq"] in inspected:
-                    entry["done"] = True
+                if entry["seq"] in inspected and not unfinished_work:
+                    entry["done"] = True  # entries stay pending while their actions are not finished
             applied = [a for a in lease["plan"] if data["actions"].get(a, {}).get("status") == "applied"]
             result = {"pass": "done", "applied": len(applied), "inspected": len(inspected),
-                      "still_pending": len(self.pending(data)), "truncated": bool(lease.get("truncated") or unfinished),
+                      "still_pending": len(self.pending(data)), "truncated": bool(lease.get("truncated") or unfinished_work),
                       "note_waiting": bool(applied)}
             data["lease"] = None
             self.store(data)
@@ -506,6 +534,8 @@ class Tidy:
             if not entry:
                 raise self.m.Refused("that tidy item was not found")
             action = data["actions"][entry["action"]]
+            if not set(action.get("authorized", [])) <= self.readable(turn):
+                raise self.m.Refused("this turn may not undo a change that touches another project")
             if action["status"] == "undone":
                 return {"pass": "undo", "state": "already-undone"}
             if action["status"] != "applied" and mode == "undo":
@@ -531,7 +561,8 @@ class Tidy:
                 return {"pass": "undo", "state": "left-as-is",
                         "message": "I could not undo that cleanly, so I left it as it is. Tell me what you want it to say."}
             blocked = [r for r in action["comp_results"].values()
-                       if r.get("result", {}).get("operator_profile", {}).get("state") in {"needs-clarification", "stale"}]
+                       if r.get("result", {}).get("operator_profile", {}).get("state") in {"needs-clarification", "stale"}
+                       or r.get("state") == "edited"]
             action["status"] = "undone" if not blocked else "applied"
             self.store(data)
         if blocked:
@@ -549,23 +580,28 @@ class Tidy:
                 "lease_held": bool(data.get("lease") and data["lease"]["expires"] > self.now())}
 
     # ---------------------------------------------------------------- the mother list
-    def check_upgrade_text(self, text):
-        """Refuse before anything is saved: an upgrade note holds the request only, never another project's facts."""
-        text = self.m.bounded_text(text, 600)
+    UPGRADE_SHAPE = re.compile(r"^AI-Verse OS\b[^\n]{10,280}$")
+    UPGRADE_UNSAFE = re.compile(r"\d|https?:|www\.|@|[$\u00a3\u20ac%]|\bapi\b|\bpassword", re.I)
+
+    def check_upgrade_text(self, text, session_state=None, turn=None):
+        """Refuse before anything is saved. An upgrade note is one plain sentence about how AI-Verse OS itself should
+        behave: no figures, links, addresses or money, no other project's name. Anything doubtful is refused."""
+        if session_state is not None:
+            self.auth = {"session": session_state["session_id"], "turn": turn["id"], "token": turn["token"]}
+        text = self.m.bounded_text(text, 300).strip()
         self.m.no_secrets(text)
-        names = self.b.owner("reflect_scan", {"projects": [], "limit": 1, "names_only": True}).get("all_names", {})
-        for project, words in names.items():
-            if project == UPGRADE_SCOPE[10:]:
-                continue
-            if any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words if w):
-                raise self.m.Refused("an upgrade note must not mention another project")
-        return text, names
+        if not self.UPGRADE_SHAPE.fullmatch(text) or self.UPGRADE_UNSAFE.search(text):
+            raise self.m.Refused("an upgrade note must be one plain sentence starting with AI-Verse OS, with no figures or links")
+        check = self.owner("reflect_scan", {"projects": [], "limit": 1, "check_text": text})
+        if check.get("mentions_other_project"):
+            raise self.m.Refused("an upgrade note must not mention another project")
+        return text, check
 
     def upgrade_note(self, text, session_state, turn):
         if not self.b.config.get("maintainer_feedback"):
             return {"state": "off"}
-        text, names = self.check_upgrade_text(text)
-        if not names or UPGRADE_SCOPE[10:] not in names:
+        text, check = self.check_upgrade_text(text, session_state, turn)
+        if not check.get("development_project_available"):
             return {"state": "skipped"}
         result = self.b.owner("learn", self.payload(session_state, turn, "memory", UPGRADE_SCOPE, {
             "type": "lesson", "text": "AI-Verse OS upgrade note: " + text, "confidence": .9, "admission": dict(ADMISSION),
@@ -575,7 +611,7 @@ class Tidy:
         return {"state": "saved", "result": result}
 
     def write_upgrade_list(self):
-        scan = self.b.owner("reflect_scan", {"projects": [], "limit": MAX_RECORDS, "upgrade": True})
+        scan = self.owner("reflect_scan", {"projects": [], "limit": MAX_RECORDS, "upgrade": True})
         notes = scan.get("upgrade_notes", [])
         folder = self.b.root / "workspaces/ai-verse-os-development"
         if not folder.is_dir():

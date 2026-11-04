@@ -391,11 +391,12 @@ HARNESSES = {
 PASTED = re.compile(r"<(pasted_content|system-reminder|untrusted[\w-]*)\b[^>]*>.*?</\1\s*>", re.S | re.I)
 FENCED = re.compile(r"(```|~~~).*?(\1|\Z)", re.S)
 QUOTED_LINE = re.compile(r"(?m)^[ \t]*>.*$")
+INLINE_QUOTE = re.compile(r'"[^"\n]{0,2000}"|\u201c[^\u201d\n]{0,2000}\u201d|\u00ab[^\u00bb\n]{0,2000}\u00bb')
 
 
 def own_words(prompt):
     """The operator's own typed words: pasted, quoted and code blocks never bind a destination."""
-    return QUOTED_LINE.sub(" ", FENCED.sub(" ", PASTED.sub(" ", prompt)))
+    return INLINE_QUOTE.sub(" ", QUOTED_LINE.sub(" ", FENCED.sub(" ", PASTED.sub(" ", prompt))))
 
 
 PROJECT_REF = re.compile(r"<!-- project:([a-z0-9][a-z0-9-]{0,127}) -->")
@@ -439,7 +440,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "8f9e727b34b7262f80ada15421a7201fde5b1c35630f2132d38cd5640a5122c2"  # refreshed with the package hashes
+REFLECT_SHA256 = "57b564dfd6442103b3e680577d6cb1213ee7098f321f1621db6d281a77eb90c8"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -798,8 +799,8 @@ class Bridge:
                 raise Refused("the turn is no longer active")
             return state, turn
 
-    def readable_projects(self, state):
-        turn = state.get("turn") or {}
+    def readable_projects(self, state, event="UserPromptSubmit"):
+        turn = (state.get("turn") or {}) if event != "SessionStart" else {}
         scopes = turn.get("allowed") or [state.get("scope", "operator")]
         return {s[10:] for s in scopes if s.startswith("workspace:")}
 
@@ -876,7 +877,8 @@ class Bridge:
                 "\"outcomes\":[],\"unresolved\":[],\"candidates\":[],\"persist_digest\":false}. "
                 "For warranted learning read " + str(self.extension / "REVIEW-SCHEMA.md") + ". "
                 f"For history use this exact executable prefix: {prefix} query --session "
-                f"{shlex.quote(state['session_id'])} --kind memory --query 'relevant question' --depth detail. "
+                f"{shlex.quote(state['session_id'])} --turn {shlex.quote(turn['id'])} --token {shlex.quote(turn['token'])} "
+                "--kind memory --query 'relevant question' --depth detail. "
                 "For source depth pass the complete detail item on stdin; keep the query or let its ID supply it. "
                 "Evidence quotes must match the real user prompt or tool result, with source ids from "
                 f"{prefix} sources --session {shlex.quote(state['session_id'])}. "
@@ -896,8 +898,8 @@ class Bridge:
         instruction += self.FRIENDLY
         if self.config["maintainer_feedback"]:
             instruction += ("When the operator remarks on how AI-Verse OS itself behaves, or asks it to work differently, also add "
-                            "one candidate {\"route\":\"upgrade\",\"parameters\":{\"text\":\"<what he asked for, in one or two plain "
-                            "sentences, nothing from any other project>\"},\"evidence\":[...his words...]}. ")
+                            "one candidate {\"route\":\"upgrade\",\"parameters\":{\"text\":\"AI-Verse OS should <the behaviour he asked for, one "
+                            "plain sentence, no numbers, links, names or facts from any project>\"},\"evidence\":[...his words...]}. ")
         if tidy:
             instruction += self.tidy_text(state)
         return instruction
@@ -1005,7 +1007,7 @@ class Bridge:
             if file.exists():
                 text = safe(file, self.root, file=True).read_text()
                 if not SECRET.search(text):
-                    text = visible_profile_text(text, self.readable_projects(state), state["scope"] == "operator")
+                    text = visible_profile_text(text, self.readable_projects(state, event), state["scope"] == "operator")
                     profile[name] = small_window(text, prompt)
                     if name == "preferences.md" and key_preferences(text):
                         prefs = text
@@ -1027,7 +1029,7 @@ class Bridge:
             warnings.append("Historical Memory unavailable; prior history is not known.")
         nav = context.get("historical_navigation")
         if isinstance(nav, dict) and isinstance(nav.get("items"), list):
-            visible = self.readable_projects(state)
+            visible = self.readable_projects(state, event)
             for item in nav["items"]:
                 if isinstance(item.get("excerpt"), str):
                     item["excerpt"] = visible_profile_text(item["excerpt"], visible, scope == "operator")
@@ -1035,7 +1037,9 @@ class Bridge:
         limit = self.config["context_max_bytes"]
         if self.harness == "claude":
             limit = min(limit, CLAUDE_CONTEXT_BYTES)  # Claude Code spills above 10,000 characters; Codex keeps its own budget.
-        header = self.instruction(state, tidy=tidy) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+        # Startup, resume and compaction are not a user turn: the earlier turn's destinations never carry over.
+        view = state if event != "SessionStart" else {**state, "turn": None}
+        header = self.instruction(view, tidy=tidy) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
         budget = limit - len(header.encode())
         encoded = json.dumps(context, ensure_ascii=False)
         if len(encoded.encode()) > budget:
@@ -1052,7 +1056,7 @@ class Bridge:
         if len((header + encoded).encode()) > limit:
             # Final enforcement for both apps: shrink owner data first, then use the short instruction.
             warning = ["Context budget exceeded; query current/profile/Memory owners on demand."]
-            short = self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+            short = self.short_instruction(view) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
             intent = context.get("purpose_intent", {})
             full = {"operator_key_preferences": key_preferences(prefs)} if prefs else {}
             options = [(header, {"scope": scope, **full, "purpose_intent": {"status": "omitted", "query_required": True},
@@ -1344,7 +1348,7 @@ class Bridge:
                     if not isinstance(parameters, dict) or set(parameters) != {"text"}:
                         raise Refused("an upgrade note has only a text field")
                     refs, kinds = self.evidence(turn, candidate["evidence"], None, True)
-                    self.tidy().check_upgrade_text(parameters["text"])
+                    self.tidy().check_upgrade_text(parameters["text"], state, turn)
                     checked.append(({**candidate, "scope": "workspace:ai-verse-os-development"}, refs, kinds))
                     continue
                 scope = candidate.get("scope") or ("operator" if route == "profile" else state["scope"])
@@ -1470,7 +1474,8 @@ class Bridge:
             if not turn.get("review_started_at"):
                 turn["review_started_at"] = utc()
                 self.save(state)
-            mixed = len({c["scope"] for c, _, _ in checked}) > 1
+            projects_in_turn = [a for a in (turn.get("allowed") or []) if a.startswith("workspace:")]
+            mixed = len({c["scope"] for c, _, _ in checked}) > 1 or len(projects_in_turn) > 1
             if (not self.cancelled(session, turn_id) and payload["persist_digest"] and not mixed
                     and (checked or any(s["kind"] == "tool" for s in turn["sources"].values()))):
                 try:
@@ -1579,6 +1584,17 @@ def current_write(root, host, module, payload):
             "source": str(file.relative_to(root)), "sha256": digest(after)}
 
 
+def verify_capability(bridge, auth):
+    """New owner operations are never open: they need a live turn capability and return the turn's destinations."""
+    if not isinstance(auth, dict) or set(auth) != {"session", "turn", "token"}:
+        raise Refused("this operation needs a turn capability")
+    state = bridge.state(auth["session"])
+    turn = bridge.bound_turn(state, auth["turn"], auth["token"])
+    if turn["state"] not in {"active", "review_requested", "reviewed"}:
+        raise Refused("the turn is not live")
+    return {"operator", *(turn.get("allowed") or [state["scope"]])}
+
+
 def current_remove(root, host, payload):
     """Undo a tidy note line: remove exactly the line carrying that effect's marker, nothing else."""
     scope, effect = payload["scope"], payload["parameters"]["effect_id"]
@@ -1588,14 +1604,18 @@ def current_remove(root, host, payload):
     if not file.exists():
         return {"state": "absent", "changed": False}
     marker = f"<!-- codex-effect:{digest(effect)} -->"
+    expected = payload["parameters"].get("line_sha256")
     lock_path = file.parent / ".codex-operational-write.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     with os.fdopen(fd, "r+") as lock, file_lock(lock):
         before = file.read_text()
         lines = before.splitlines(keepends=True)
-        kept = [line for line in lines if marker not in line]
-        if len(kept) == len(lines):
+        found = [line for line in lines if marker in line]
+        if not found:
             return {"state": "absent", "changed": False}
+        if expected is not None and any(digest(line.rstrip("\r\n")) != expected for line in found):
+            return {"state": "edited", "changed": False}  # the operator changed that line since: leave it
+        kept = [line for line in lines if marker not in line]
         fd2, temp = tempfile.mkstemp(prefix=".codex-current-", dir=file.parent)
         try:
             with os.fdopen(fd2, "w") as output:
@@ -1620,13 +1640,19 @@ def reflect_scan(bridge, module, host, payload):
     result = {"records": [], "workspaces": {}, "ventures": [], "truncated": False}
     names = {}
     workspace_root = safe(bridge.root / "workspaces", bridge.root)
-    if payload.get("names_only"):
+    if payload.get("check_text") is not None:
+        # Answers only yes or no, never the names themselves.
+        text, other, dev = payload["check_text"], False, False
         for folder in workspace_root.iterdir():
             if folder.is_dir() and not folder.name.startswith("_"):
                 with contextlib.suppress(Refused):
                     meta = bridge.manifest(folder.name)
-                    names[folder.name] = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
-        return {"all_names": names}
+                    if folder.name == "ai-verse-os-development":
+                        dev = True
+                        continue
+                    words = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
+                    other = other or any(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words)
+        return {"mentions_other_project": other, "development_project_available": dev}
     for project in projects:
         meta = bridge.manifest(project)
         notes = bridge.root / "workspaces" / project / "context/CURRENT.md"
@@ -1643,6 +1669,9 @@ def reflect_scan(bridge, module, host, payload):
         wanted = {"workspace:ai-verse-os-development"}
     seen = 0
     for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+        guessed = memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE)
+        if guessed not in wanted:
+            continue  # cheap path check first: other projects' files are never even parsed
         meta, body = memory.parse_markdown(path)
         scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE),
                                        bridge.root, memory.MODE_NATIVE)
@@ -1718,8 +1747,15 @@ def run_owner(bridge, operation, payload):
                                                "profile-read:" + secrets.token_hex(8), "read_local"))
         return read["result"]["operator_profile"]
     if operation == "reflect_scan":
+        allowed = verify_capability(bridge, payload.get("auth"))
+        wanted = {"workspace:" + p for p in payload.get("projects", [])}
+        if not wanted <= allowed:
+            raise Refused("a destination is not authorized for this turn")
         return reflect_scan(bridge, module, host, payload)
     if operation == "current_remove":
+        allowed = verify_capability(bridge, payload.get("auth"))
+        if payload["scope"] not in allowed:
+            raise Refused("this project is not authorized for this turn")
         return current_remove(bridge.root, host, payload)
     if operation == "retrieve_history_progressive":
         return curated_recall(host.retrieve_history_progressive(payload))
@@ -1893,8 +1929,13 @@ def main():
             if args.action == "status":
                 result = tidy.status()
             elif args.action == "list":
-                result = {"view": tidy.write_upgrade_list() if bridge.config["maintainer_feedback"] else None,
-                          "maintainer_feedback": bridge.config["maintainer_feedback"]}
+                view = None
+                if bridge.config["maintainer_feedback"]:
+                    if not (args.session and args.turn and args.token):
+                        raise Refused("reflect list needs --session, --turn and --token")
+                    tidy.active_turn(args.session, args.turn, args.token)
+                    view = tidy.write_upgrade_list()
+                result = {"view": view, "maintainer_feedback": bridge.config["maintainer_feedback"]}
             else:
                 if not (args.session and args.turn and args.token):
                     raise Refused("reflect needs --session, --turn and --token")
@@ -1932,26 +1973,28 @@ def main():
                 if not turn or turn["state"] != "active":
                     raise Refused("bind requires an active user turn")
                 bridge.evidence(turn, [{"source_id": "user", "quote": args.quote}])
-                selected = bridge.scope(str(bridge.root), args.quote)
-                if selected != args.scope:
-                    raise Refused("binding is not explicit in the user's quoted scope reference")
-                # Applies to this turn only; the next prompt works out its destinations again.
+                selected = args.scope
+                # Only a destination this turn already authorized from the operator's own typed words.
+                if selected not in (turn.get("allowed") or []):
+                    raise Refused("binding is not one of this turn's destinations")
                 state["scope"] = selected
                 turn["scope"] = selected
-                turn["allowed"] = list(dict.fromkeys([*(turn.get("allowed") or []), selected]))
-                turn["sources"]["user"]["scopes"] = list(turn["allowed"])
                 bridge.save(state)
                 result = {"scope": selected, "context": bridge.current_snapshot(selected)}
         elif args.command == "query":
             state = bridge.state(args.session)
             scope = state["scope"]
-            if args.scope:
-                # Read only, and only inside this turn's destinations (the operator profile is always readable).
+            session_scope = scope
+            if args.scope or scope != "operator" or args.kind == "profile":
+                # Any project context, and any scoped or profile read, needs the active turn and its token.
                 state, authorized = bridge.authorize_turn(args.session, args.turn, args.token)
-                readable = {"operator", *(authorized.get("allowed") or [scope])}
-                if args.scope not in readable:
-                    raise Refused("scope is not readable from this turn")
-                scope = args.scope
+                scope = state["scope"]
+                session_scope = scope
+                if args.scope:
+                    readable = {"operator", *(authorized.get("allowed") or [scope])}
+                    if args.scope not in readable:
+                        raise Refused("scope is not readable from this turn")
+                    scope = args.scope
             if args.kind == "context":
                 result = bridge.current_snapshot(scope)
             elif args.kind == "memory":
@@ -1966,7 +2009,7 @@ def main():
                         request["query"] = request["evidence_ref"].get("id", "")
                 result = bridge.owner("retrieve_history_progressive", request)
             elif args.kind == "profile":
-                if scope != "operator":
+                if session_scope != "operator" or scope != "operator":
                     raise Refused("profile query is refused for workspace bound sessions")
                 result = bridge.owner("profile_read", {"scope": scope})
             else:

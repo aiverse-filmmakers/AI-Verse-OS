@@ -436,24 +436,38 @@ function sleepMs(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0,
 
 function withProfileLock(profileRoot, work) {
   const lock = path.join(profileRoot, '.profile-owner.lock');
-  const until = Date.now() + 15000;
+  const mine = `${process.pid}:${crypto.randomBytes(12).toString('hex')}`;
+  const until = Date.now() + Number(process.env.AIVERSE_PROFILE_LOCK_WAIT_MS || 15000);
   let fd = null;
   for (;;) {
     try {
       fd = fs.openSync(lock, 'wx', 0o600);
-      fs.writeSync(fd, `${process.pid} ${Date.now()}\n`);
+      fs.writeSync(fd, `${mine}\n`);
       break;
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      let stale = false;
-      try { stale = Date.now() - fs.statSync(lock).mtimeMs > 30000; } catch { /* released meanwhile */ }
-      if (stale) { try { fs.unlinkSync(lock); } catch { /* another process cleaned it */ } continue; }
+      // A lock is only taken over when its holder process is gone, never merely because it is old.
+      let holder = null;
+      try { holder = Number(fs.readFileSync(lock, 'utf8').split(':')[0]); } catch { /* released meanwhile */ }
+      let alive = true;
+      if (holder) { try { process.kill(holder, 0); } catch (e) { alive = e.code === 'EPERM'; } }
+      let veryOld = false;
+      try { veryOld = Date.now() - fs.statSync(lock).mtimeMs > 600000; } catch { /* gone */ }
+      if (!alive || veryOld) {
+        const aside = `${lock}.stale-${crypto.randomBytes(6).toString('hex')}`;
+        try { fs.renameSync(lock, aside); fs.unlinkSync(aside); } catch { /* another process took it */ }
+        continue;
+      }
       if (Date.now() > until) throw new Error('operator profile is busy; retry');
       sleepMs(25);
     }
   }
   try { return work(); }
-  finally { try { fs.closeSync(fd); } catch { /* ignore */ } try { fs.unlinkSync(lock); } catch { /* ignore */ } }
+  finally {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+    // Release only our own lock: if it was taken over, leave the new holder's file alone.
+    try { if (fs.readFileSync(lock, 'utf8').trim() === mine) fs.unlinkSync(lock); } catch { /* ignore */ }
+  }
 }
 
 function atomicWrite(file, content) {

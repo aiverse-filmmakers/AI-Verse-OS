@@ -1,0 +1,1779 @@
+#!/usr/bin/env python3
+"""Public-beta hardening for the existing AI-Verse Memory engine.
+
+This module deliberately does not replace the Markdown + rebuildable SQLite
+architecture. It strengthens the existing owner boundary with write
+containment, serialized canonical mutation, retry-safe effects, and
+snapshot-bound legacy adoption.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+PUBLIC_BETA_SCHEMA = 1
+LOCK_STALE_SECONDS = 600
+LOCK_DEAD_PROCESS_GRACE_SECONDS = 2
+LOCK_WAIT_SECONDS = 120
+_LOCK_LOCAL = threading.local()
+_LOCK_PROCESS_GUARD = threading.Lock()
+_LOCK_PROCESS_LOCKS: Dict[str, threading.Lock] = {}
+_HANDOFF_FAULT_INJECTOR = None
+
+
+def _handoff_fault(stage: str) -> None:
+    hook = _HANDOFF_FAULT_INJECTOR
+    if hook is not None:
+        hook(stage)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _payload_digest(payload: object) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return _sha256_bytes(raw)
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and (path.is_symlink() or not path.is_file()):
+        raise RuntimeError(f"Unsafe canonical file destination: {path}")
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        try:
+            os.chmod(temp_name, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if path.exists() and (path.is_symlink() or not path.is_file()):
+            raise RuntimeError(f"Canonical file destination became unsafe: {path}")
+        os.replace(temp_name, path)
+        try:
+            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        except (AttributeError, OSError):
+            dir_fd = None
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            except OSError:
+                pass
+            finally:
+                os.close(dir_fd)
+    finally:
+        try:
+            Path(temp_name).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _atomic_write_json(path: Path, payload: object) -> None:
+    _atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _safe_existing_dir(path: Path, label: str) -> Path:
+    if not path.exists():
+        raise RuntimeError(f"Required {label} does not exist: {path}")
+    if path.is_symlink() or not path.is_dir():
+        raise RuntimeError(f"Unsafe {label}: expected real directory, found {path}")
+    return path.resolve(strict=True)
+
+
+def _safe_child_dir(parent: Path, name: str, *, create: bool = True) -> Path:
+    if parent.is_symlink() or not parent.is_dir():
+        raise RuntimeError(f"Unsafe canonical parent directory: {parent}")
+    parent_real = parent.resolve(strict=True)
+    child = parent / name
+    if child.exists():
+        if child.is_symlink() or not child.is_dir():
+            raise RuntimeError(f"Unsafe canonical directory: {child}")
+    elif create:
+        try:
+            child.mkdir(mode=0o700)
+        except FileExistsError:
+            # Another serialized contender may have created the same owner
+            # directory between the existence check and mkdir. Revalidate it.
+            if child.is_symlink() or not child.is_dir():
+                raise RuntimeError(f"Unsafe canonical directory: {child}")
+    else:
+        return child
+    child_real = child.resolve(strict=True)
+    try:
+        child_real.relative_to(parent_real)
+    except ValueError as exc:
+        raise RuntimeError(f"Canonical directory escapes owner boundary: {child}") from exc
+    return child
+
+
+def _native_atomic_base(engine, root: Path, scope: str) -> Path:
+    root = Path(root).resolve(strict=True)
+    operator = root / "operator"
+    workspaces = root / "workspaces"
+    _safe_existing_dir(operator, "operator root")
+    _safe_existing_dir(workspaces, "workspace root")
+    normalized = engine.normalize_scope(scope, root, engine.MODE_NATIVE)
+    if normalized == "operator":
+        owner = operator
+    else:
+        wid = normalized.split(":", 1)[1]
+        owner = workspaces / wid
+        _safe_existing_dir(owner, f"workspace {wid}")
+        manifest = owner / "WORKSPACE.yaml"
+        if not manifest.exists() or manifest.is_symlink() or not manifest.is_file():
+            raise RuntimeError(f"Unsafe or missing workspace manifest: {manifest}")
+    memory = _safe_child_dir(owner, "memory")
+    atomic = _safe_child_dir(memory, "atomic")
+    owner_real = owner.resolve(strict=True)
+    try:
+        atomic.resolve(strict=True).relative_to(owner_real)
+    except ValueError as exc:
+        raise RuntimeError(f"Atomic Memory path escapes canonical owner: {atomic}") from exc
+    return atomic
+
+
+def _standalone_home(engine, root: Path) -> Path:
+    p = engine.paths(root, engine.MODE_STANDALONE)
+    home = Path(p["home"])
+    if home.exists():
+        if home.is_symlink() or not home.is_dir():
+            raise RuntimeError(f"Unsafe standalone Memory home: {home}")
+    else:
+        home.mkdir(parents=True, mode=0o700)
+    return home
+
+
+def _standalone_atomic_base(engine, root: Path) -> Path:
+    home = _standalone_home(engine, root)
+    return _safe_child_dir(home, "memories")
+
+
+def _safe_atomic_path(engine, mem_id: str, created_at: str, scope: str, root: Path, mode: str) -> Path:
+    if "/" in mem_id or "\\" in mem_id or mem_id in {".", ".."}:
+        raise ValueError("Invalid memory id")
+    normalized = engine.normalize_scope(scope, root, mode)
+    base = (
+        _native_atomic_base(engine, root, normalized)
+        if mode == engine.MODE_NATIVE
+        else _standalone_atomic_base(engine, root)
+    )
+    try:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        dt = datetime.now(timezone.utc)
+    year = _safe_child_dir(base, f"{dt.year:04d}")
+    month = _safe_child_dir(year, f"{dt.month:02d}")
+    target = month / f"{mem_id}.md"
+    if target.exists() and target.is_symlink():
+        raise RuntimeError(f"Unsafe canonical memory destination: {target}")
+    base_real = base.resolve(strict=True)
+    try:
+        month.resolve(strict=True).relative_to(base_real)
+    except ValueError as exc:
+        raise RuntimeError(f"Memory destination escapes canonical scope: {target}") from exc
+    return target
+
+
+def _state_dir(engine, root: Path, mode: str) -> Path:
+    if mode == engine.MODE_NATIVE:
+        operator = Path(root).resolve(strict=True) / "operator"
+        _safe_existing_dir(operator, "operator root")
+        memory = _safe_child_dir(operator, "memory")
+        return _safe_child_dir(memory, ".ai-verse-memory-state")
+    home = _standalone_home(engine, root)
+    return _safe_child_dir(home, "state")
+
+
+def _lock_counts() -> Dict[str, int]:
+    counts = getattr(_LOCK_LOCAL, "counts", None)
+    if counts is None:
+        counts = {}
+        _LOCK_LOCAL.counts = counts
+    return counts
+
+
+def _lock_is_stale(lock: Path) -> bool:
+    try:
+        age = max(0.0, time.time() - lock.stat().st_mtime)
+    except OSError:
+        return False
+
+    pid = 0
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+        pid = int(payload.get("pid") or 0)
+    except Exception:
+        pid = 0
+
+    # A parsed dead owner is safe to reclaim quickly after a short creation
+    # grace. This prevents crashed processes from forcing healthy callers to
+    # consume the full live-holder wait budget.
+    if pid > 0 and age >= LOCK_DEAD_PROCESS_GRACE_SECONDS and not _pid_alive(pid):
+        return True
+
+    # Missing/partial metadata may be a writer still filling the newly-created
+    # lock file. Only the long stale threshold can reclaim that ambiguous case.
+    if age < LOCK_STALE_SECONDS:
+        return False
+    return not _pid_alive(pid)
+
+
+def _lock_progress_token(lock: Path):
+    """Return a best-effort identity for the current lock holder.
+
+    The canonical mutation timeout is a *no progress* timeout, not a cap on the
+    total duration of a healthy serialized queue. A new lock file/holder resets
+    the wait budget while one stuck holder still times out normally.
+    """
+
+    try:
+        stat = lock.stat()
+    except OSError:
+        return None
+
+    holder = ""
+    try:
+        payload = json.loads(lock.read_text(encoding="utf-8"))
+        holder = str(payload.get("holder") or "")
+    except Exception:
+        pass
+
+    return (
+        int(getattr(stat, "st_ino", 0) or 0),
+        int(getattr(stat, "st_mtime_ns", 0) or 0),
+        int(getattr(stat, "st_ctime_ns", 0) or 0),
+        int(stat.st_size),
+        holder,
+    )
+
+
+def _process_mutation_lock(key: str) -> threading.Lock:
+    with _LOCK_PROCESS_GUARD:
+        lock = _LOCK_PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _LOCK_PROCESS_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def _mutation_lock(engine, root: Path, mode: str):
+    state = _state_dir(engine, root, mode)
+    lock = state / "mutation.lock"
+    key = str(lock.resolve(strict=False))
+    counts = _lock_counts()
+    if counts.get(key, 0):
+        counts[key] += 1
+        try:
+            yield
+        finally:
+            counts[key] -= 1
+        return
+
+    # Same-process writers serialize without repeatedly polling the filesystem
+    # lock. The durable file lock remains the cross-process authority and keeps
+    # all existing stale-owner/recovery semantics unchanged.
+    process_lock = _process_mutation_lock(key)
+    process_lock.acquire()
+    try:
+        deadline = time.monotonic() + LOCK_WAIT_SECONDS
+        observed_holder = None
+        while True:
+            try:
+                fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except FileExistsError as exc:
+                if _lock_is_stale(lock):
+                    try:
+                        lock.unlink()
+                    except FileNotFoundError:
+                        pass
+                    observed_holder = None
+                    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+                    continue
+
+                progress = _lock_progress_token(lock)
+                if progress is not None and progress != observed_holder:
+                    observed_holder = progress
+                    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"Timed out waiting for AI-Verse Memory canonical mutation lock: {lock}") from exc
+                time.sleep(0.05)
+            except OSError as exc:
+                raise RuntimeError(f"Could not acquire Memory mutation lock: {exc}") from exc
+
+        try:
+            holder = hashlib.sha256(
+                f"{os.getpid()}:{threading.get_ident()}:{time.monotonic_ns()}".encode("utf-8")
+            ).hexdigest()[:20]
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": PUBLIC_BETA_SCHEMA,
+                        "pid": os.getpid(),
+                        "holder": holder,
+                        "created_at": _now_iso(),
+                    },
+                    handle,
+                )
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            counts[key] = 1
+            _recover_transactions(engine, root, mode)
+            yield
+        finally:
+            counts.pop(key, None)
+            try:
+                lock.unlink()
+            except FileNotFoundError:
+                pass
+    finally:
+        process_lock.release()
+
+
+def _assert_path_within(path: Path, boundary: Path) -> None:
+    try:
+        path.resolve(strict=False).relative_to(boundary.resolve(strict=True))
+    except (ValueError, OSError) as exc:
+        raise RuntimeError(f"Path escapes canonical Memory boundary: {path}") from exc
+
+
+def _transaction_dir(engine, root: Path, mode: str) -> Path:
+    state = _state_dir(engine, root, mode)
+    return _safe_child_dir(state, "transactions")
+
+
+def _recover_transactions(engine, root: Path, mode: str) -> None:
+    tx_dir = _transaction_dir(engine, root, mode)
+    boundary = Path(root).resolve(strict=True) if mode == engine.MODE_NATIVE else _standalone_home(engine, root).resolve(strict=True)
+    for journal in sorted(tx_dir.glob("*.json")):
+        if journal.is_symlink() or not journal.is_file():
+            raise RuntimeError(f"Unsafe Memory transaction journal: {journal}")
+        payload = json.loads(journal.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != PUBLIC_BETA_SCHEMA or payload.get("status") != "prepared":
+            continue
+        for effect in payload.get("files", []):
+            target = Path(root) / effect["path"] if mode == engine.MODE_NATIVE else Path(effect["path"])
+            _assert_path_within(target.parent, boundary)
+            _atomic_write_text(target, effect["content"])
+        journal.unlink()
+
+
+def _write_transaction(engine, root: Path, mode: str, tx_id: str, files: Sequence[Tuple[Path, str]]) -> Path:
+    tx_dir = _transaction_dir(engine, root, mode)
+    payload_files = []
+    for path, content in files:
+        stored = engine.relpath(path, root) if mode == engine.MODE_NATIVE else str(path)
+        payload_files.append({"path": stored, "content": content})
+    journal = tx_dir / f"{tx_id}.json"
+    _atomic_write_json(
+        journal,
+        {
+            "schema_version": PUBLIC_BETA_SCHEMA,
+            "operation": "supersede",
+            "status": "prepared",
+            "created_at": _now_iso(),
+            "files": payload_files,
+        },
+    )
+    return journal
+
+
+def _effect_dir(engine, root: Path, mode: str) -> Path:
+    state = _state_dir(engine, root, mode)
+    return _safe_child_dir(state, "effects")
+
+
+def _effect_path(engine, root: Path, mode: str, effect_id: str) -> Path:
+    key = hashlib.sha256(effect_id.encode("utf-8")).hexdigest()
+    return _effect_dir(engine, root, mode) / f"{key}.json"
+
+
+def _load_effect(engine, root: Path, mode: str, effect_id: str, digest: str):
+    if not effect_id:
+        return None
+    path = _effect_path(engine, root, mode, effect_id)
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Unsafe Memory effect receipt: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("effect_id") != effect_id:
+        raise RuntimeError("Memory effect receipt identity mismatch")
+    if payload.get("input_digest") != digest:
+        raise RuntimeError(f"Idempotency key {effect_id!r} was already used for a different Memory effect")
+    return payload
+
+
+def _record_effect(
+    engine,
+    root: Path,
+    mode: str,
+    effect_id: str,
+    digest: str,
+    mem_id: str,
+    path: Path,
+    *,
+    operation: str = "remember",
+    extra: Optional[dict] = None,
+) -> None:
+    if not effect_id:
+        return
+    receipt = _effect_path(engine, root, mode, effect_id)
+    payload = {
+        "schema_version": PUBLIC_BETA_SCHEMA,
+        "effect_id": effect_id,
+        "operation": operation,
+        "input_digest": digest,
+        "memory_id": mem_id,
+        "path": engine.relpath(path, root) if mode == engine.MODE_NATIVE else str(path),
+        "completed_at": _now_iso(),
+    }
+    if extra:
+        payload.update(extra)
+    _atomic_write_json(receipt, payload)
+
+
+def _sync_atomic_projection(
+    engine,
+    original_rebuild,
+    root: Path,
+    mode: str,
+    *,
+    paths: Sequence[Path] = (),
+    remove_ids: Sequence[str] = (),
+) -> None:
+    """Keep disposable atomic recall state current without a full rebuild.
+
+    Canonical mutation remains serialized. The derived SQLite projection is
+    updated only for records changed by the current canonical effect. If the
+    shared derived DB is absent, fall back to the established full rebuild so
+    all pre-existing canonical records are recovered losslessly.
+    """
+
+    layout = engine.ensure_layout(root, mode)
+    if not layout["db"].exists():
+        original_rebuild(silent=True, root=root, mode=mode)
+        return
+
+    rows = []
+    delete_ids = [str(item) for item in remove_ids if str(item)]
+    for raw_path in paths:
+        row = engine.index_atomic(Path(raw_path), root, mode)
+        if row is None:
+            raise RuntimeError(
+                f"Canonical Memory mutation could not be indexed safely: {raw_path}"
+            )
+        delete_ids.append(str(row[0]))
+        rows.append(row)
+
+    conn, fts = engine.connect_db(root, mode)
+    try:
+        engine._delete_index_ids(conn, fts, delete_ids)
+        engine._insert_index_rows(conn, fts, rows)
+        if mode == engine.MODE_NATIVE:
+            states = []
+            for row in rows:
+                state = engine._source_state_for_row(
+                    row,
+                    root,
+                    "historical",
+                    mode,
+                )
+                if state is None:
+                    raise RuntimeError(
+                        f"Canonical Memory source state could not be derived: {row[0]}"
+                    )
+                states.append(state)
+            engine._upsert_source_states(conn, states)
+        conn.commit()
+    except Exception:
+        conn.close()
+        # SQLite is disposable. Rebuild from canonical Markdown instead of
+        # leaving a partially updated projection after an indexing failure.
+        original_rebuild(silent=True, root=root, mode=mode)
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _authority_file(engine, root: Path, mode: str) -> Path:
+    if mode == engine.MODE_STANDALONE:
+        return _standalone_home(engine, root) / "AUTHORITY.json"
+    return _state_dir(engine, root, mode) / "authority-handoff.json"
+
+
+def _read_authority_json(path: Path, label: str) -> Optional[dict]:
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Unsafe {label}: {path}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Unreadable {label}: {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Invalid {label}: expected JSON object")
+    return payload
+
+
+def _native_registry_entry(root: Path) -> dict:
+    registry_path = root / ".aiverse" / "extensions" / "registry.json"
+    payload = _read_authority_json(registry_path, "Memory extension registry")
+    if payload is None:
+        raise RuntimeError("Memory canonical writes require an attached local extension registry entry")
+    if payload.get("schema_version") != "1.0" or not isinstance(payload.get("extensions"), dict):
+        raise RuntimeError("Memory canonical writes require a valid local extension registry")
+    entry = payload["extensions"].get("ai-verse-memory")
+    if not isinstance(entry, dict):
+        raise RuntimeError("Memory canonical writes require an attached ai-verse-memory registry entry")
+    return entry
+
+
+
+def _native_migration_required(engine, root: Path) -> Tuple[bool, str]:
+    handoff = _read_authority_json(
+        _authority_file(engine, root, engine.MODE_NATIVE),
+        "native Memory authority handoff",
+    )
+
+    if handoff is not None:
+        handoff_status = str(handoff.get("status") or "")
+        if handoff_status not in {"prepared", "pending", "complete"}:
+            return True, f"native Memory authority handoff has invalid state: {handoff_status or 'missing'}"
+        if handoff_status != "complete":
+            return True, f"native Memory authority handoff is {handoff_status}"
+        if handoff.get("source_retirement_verified") is not True:
+            return True, "native Memory authority handoff completion has not durably verified source retirement"
+
+    plan = root / "operator" / "memory" / "migrations" / "legacy-ai-verse-memory-plan.json"
+    if plan.exists():
+        if plan.is_symlink() or not plan.is_file():
+            return True, "migration plan is unsafe"
+        if handoff is None:
+            return True, "reviewed legacy migration plan has not completed authority handoff"
+
+    legacy = root / ".ai-verse-memory"
+    if legacy.exists():
+        if legacy.is_symlink() or not legacy.is_dir():
+            return True, "legacy standalone Memory root is unsafe"
+        source_authority = _read_authority_json(
+            legacy / "AUTHORITY.json",
+            "legacy Memory authority marker",
+        )
+        retired = bool(
+            source_authority
+            and source_authority.get("status") == "retired"
+            and handoff
+            and handoff.get("status") == "complete"
+            and handoff.get("source_retirement_verified") is True
+            and source_authority.get("handoff_id") == handoff.get("handoff_id")
+        )
+        if not retired:
+            return True, "legacy standalone Memory is still an active writable canonical route"
+    return False, ""
+
+def _native_write_readiness(engine, root: Path) -> dict:
+    root = Path(root).resolve()
+    receipt = read_component_state(engine, root, engine.MODE_NATIVE)
+    entry = _native_registry_entry(root)
+
+    checks = {
+        "supported": entry.get("supported") is True,
+        "registry_installed": entry.get("installed") is True,
+        "attached": True,
+        "enabled": entry.get("enabled") is True and receipt.get("enabled") is True,
+        "receipt_installed": receipt.get("installed") is True,
+        "setup_complete": receipt.get("setup_completed") is True,
+    }
+    migration_required, migration_reason = _native_migration_required(engine, root)
+    return {
+        "ready": all(checks.values()) and not migration_required,
+        "base_ready": all(checks.values()),
+        "migration_required": migration_required,
+        "migration_reason": migration_reason,
+        "checks": checks,
+    }
+
+
+def _assert_writable_authority(
+    engine,
+    root: Path,
+    mode: str,
+    *,
+    intent: str = "normal",
+) -> None:
+    root = Path(root).resolve()
+    if mode == engine.MODE_STANDALONE:
+        authority = _authority_file(engine, root, mode)
+        if not authority.exists():
+            return
+        if authority.is_symlink() or not authority.is_file():
+            raise RuntimeError(f"Unsafe standalone authority marker: {authority}")
+        payload = json.loads(authority.read_text(encoding="utf-8"))
+        if payload.get("status") == "retiring":
+            replacement = payload.get("replacement_root") or "the adopted AI-Verse OS"
+            raise RuntimeError(
+                "This standalone Memory store is being retired during canonical authority handoff. "
+                f"Canonical writes are temporarily fenced while ownership moves to {replacement}."
+            )
+        if payload.get("status") == "retired":
+            replacement = payload.get("replacement_root") or "the adopted AI-Verse OS"
+            raise RuntimeError(
+                "This standalone Memory store is retired and preserved as historical evidence. "
+                f"Canonical writes moved to {replacement}."
+            )
+        return
+
+    if mode != engine.MODE_NATIVE:
+        raise RuntimeError(f"Unsupported Memory write mode: {mode}")
+
+    readiness = _native_write_readiness(engine, root)
+    failed = [name for name, ok in readiness["checks"].items() if not ok]
+    if failed:
+        raise RuntimeError(
+            "Native Memory canonical writes require supported + installed + attached + enabled + "
+            "setup-complete lifecycle authority; failed: " + ", ".join(failed)
+        )
+
+    if readiness["migration_required"] and intent != "migration":
+        raise RuntimeError(
+            "Native Memory canonical writes are blocked while migration is required: "
+            + (readiness["migration_reason"] or "authority handoff incomplete")
+        )
+
+    if intent not in {"normal", "migration"}:
+        raise RuntimeError(f"Unsupported Memory write intent: {intent}")
+
+
+def _patched_write_atomic(engine, original_rebuild):
+    def write_atomic(
+        text: str,
+        mem_type: str,
+        scope: Optional[str] = None,
+        importance: int = 3,
+        confidence: float = 1.0,
+        source: str = "",
+        why: str = "",
+        tags: str = "",
+        valid_from: str = "",
+        supersedes: str = "",
+        force: bool = False,
+        root: Optional[Path] = None,
+        mode: Optional[str] = None,
+        effect_id: str = "",
+        evidence_refs: Optional[Sequence[str]] = None,
+    ):
+        root = Path(root or engine.repository_root()).resolve()
+        mode = mode or engine.detect_mode(root)
+        if mem_type not in engine.MEMORY_TYPES:
+            raise ValueError(f"Unsupported memory type: {mem_type}")
+        text = text.strip()
+        if not text:
+            raise ValueError("Memory text cannot be empty")
+        normalized_scope = engine.normalize_scope(scope, root, mode)
+        refs = [str(item).strip() for item in (evidence_refs or []) if str(item).strip()]
+        effect_payload = {
+            "operation": "remember",
+            "text": text,
+            "type": mem_type,
+            "scope": normalized_scope,
+            "importance": int(importance),
+            "confidence": float(confidence),
+            "source": source,
+            "why": why,
+            "tags": tags,
+            "valid_from": valid_from,
+            "supersedes": supersedes,
+            "evidence_refs": refs,
+        }
+        effect_digest = _payload_digest(effect_payload)
+
+        with _mutation_lock(engine, root, mode):
+            _assert_writable_authority(engine, root, mode)
+            existing_effect = _load_effect(engine, root, mode, effect_id, effect_digest)
+            if existing_effect:
+                mem_id = str(existing_effect["memory_id"])
+                path = engine.locate_memory(mem_id, root, mode)
+                if not path:
+                    raise RuntimeError(f"Idempotent Memory effect {effect_id!r} points to missing canonical memory")
+                return mem_id, path, False
+
+            duplicate = engine.find_exact_active(text, normalized_scope, root, mode)
+            if duplicate and not force:
+                path = root / duplicate[1] if mode == engine.MODE_NATIVE else Path(duplicate[1])
+                _record_effect(engine, root, mode, effect_id, effect_digest, duplicate[0], path)
+                return duplicate[0], path, False
+
+            created = engine.now_iso()
+            mem_id = engine.memory_id(text, normalized_scope)
+            path = _safe_atomic_path(engine, mem_id, created, normalized_scope, root, mode)
+            normalized_type = "state" if mem_type == "project_state" and mode == engine.MODE_NATIVE else mem_type
+            meta = {
+                "id": mem_id,
+                "type": normalized_type,
+                "scope": normalized_scope,
+                "status": "active",
+                "importance": str(max(1, min(5, int(importance)))),
+                "confidence": f"{max(0.0, min(1.0, float(confidence))):.2f}",
+                "created_at": created,
+                "updated_at": created,
+                "valid_from": valid_from,
+                "valid_to": "",
+                "supersedes": supersedes,
+                "superseded_by": "",
+                "source": source,
+                "tags": tags,
+            }
+            if refs:
+                meta["evidence_refs"] = json.dumps(refs, separators=(",", ":"))
+            body = f"# Memory\n\n{text}\n"
+            if why.strip():
+                body += f"\n# Why it matters\n\n{why.strip()}\n"
+            _atomic_write_text(path, engine.render_frontmatter(meta) + "\n\n" + body)
+            _sync_atomic_projection(
+                engine,
+                original_rebuild,
+                root,
+                mode,
+                paths=[path],
+            )
+            _record_effect(engine, root, mode, effect_id, effect_digest, mem_id, path)
+            return mem_id, path, True
+
+    return write_atomic
+
+
+
+def _patched_supersede_atomic(engine, original_rebuild):
+    def supersede_atomic(
+        supersedes: str,
+        text: str,
+        *,
+        mem_type: str = "correction",
+        scope: Optional[str] = None,
+        workspace: Optional[str] = None,
+        importance: Optional[int] = None,
+        confidence: Optional[float] = None,
+        source: str = "",
+        why: str = "",
+        tags: str = "",
+        valid_from: str = "",
+        root: Optional[Path] = None,
+        mode: Optional[str] = None,
+        effect_id: str = "",
+        evidence_refs: Optional[Sequence[str]] = None,
+    ) -> Tuple[str, Path, bool]:
+        """Atomically replace one historical Memory record with retry-safe evidence."""
+
+        if not isinstance(supersedes, str) or not supersedes.strip():
+            raise ValueError("supersedes must identify an existing Memory record")
+        supersedes = supersedes.strip()
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Correction text cannot be empty")
+        text = text.strip()
+        if mem_type not in engine.MEMORY_TYPES:
+            raise ValueError(f"Unsupported memory type: {mem_type}")
+        if not isinstance(effect_id, str) or not effect_id.strip():
+            raise ValueError("Retry-safe supersession requires an effect_id")
+        effect_id = effect_id.strip()
+
+        refs = []
+        for raw in evidence_refs or []:
+            value = str(raw).strip()
+            if value and value not in refs:
+                refs.append(value)
+
+        root = Path(root or engine.repository_root()).resolve()
+        mode = mode or engine.detect_mode(root)
+
+        with _mutation_lock(engine, root, mode):
+            _assert_writable_authority(engine, root, mode)
+            old_path = engine.locate_memory(supersedes, root, mode)
+            if not old_path:
+                raise ValueError(f"Superseded Memory record not found: {supersedes}")
+            if mode == engine.MODE_NATIVE:
+                engine._native_source_identity(old_path, root, expected_kind="memory")
+            else:
+                _assert_path_within(old_path, _standalone_atomic_base(engine, root))
+
+            old_meta, old_body = engine.parse_markdown(old_path)
+            old_scope = engine.normalize_scope(
+                old_meta.get("scope") or engine.infer_scope_from_path(old_path, root, mode),
+                root,
+                mode,
+            )
+            requested_scope = scope
+            if workspace is not None:
+                if not isinstance(workspace, str) or not workspace.strip():
+                    raise ValueError("workspace must be a non-empty string")
+                workspace_scope = f"workspace:{workspace.strip()}"
+                if requested_scope not in (None, "", workspace_scope):
+                    raise ValueError("scope conflicts with workspace")
+                requested_scope = workspace_scope
+            normalized_scope = engine.normalize_scope(requested_scope or old_scope, root, mode)
+            if normalized_scope != old_scope:
+                raise ValueError("Correction cannot supersede Memory across scope boundaries")
+
+            resolved_importance = (
+                int(importance)
+                if importance is not None
+                else int(old_meta.get("importance", "3") or 3)
+            )
+            resolved_confidence = (
+                float(confidence)
+                if confidence is not None
+                else float(old_meta.get("confidence", "1") or 1)
+            )
+            resolved_tags = tags or old_meta.get("tags", "")
+            new_id = engine.memory_id(text, normalized_scope)
+            if new_id == supersedes:
+                raise ValueError("Correction must change the historical Memory content")
+
+            effect_payload = {
+                "operation": "supersede",
+                "supersedes": supersedes,
+                "text": text,
+                "type": mem_type,
+                "scope": normalized_scope,
+                "importance": resolved_importance,
+                "confidence": resolved_confidence,
+                "source": source,
+                "why": why,
+                "tags": resolved_tags,
+                "valid_from": valid_from,
+                "evidence_refs": refs,
+            }
+            effect_digest = _payload_digest(effect_payload)
+            existing_effect = _load_effect(engine, root, mode, effect_id, effect_digest)
+            if existing_effect:
+                if existing_effect.get("operation") != "supersede":
+                    raise RuntimeError(
+                        f"Idempotency key {effect_id!r} belongs to a different Memory operation"
+                    )
+                if existing_effect.get("superseded_id") != supersedes:
+                    raise RuntimeError("Memory supersession effect target mismatch")
+                existing_id = str(existing_effect.get("memory_id") or "")
+                existing_path = engine.locate_memory(existing_id, root, mode)
+                if not existing_path:
+                    raise RuntimeError(
+                        f"Idempotent Memory supersession {effect_id!r} points to missing canonical memory"
+                    )
+                refreshed_old, _ = engine.parse_markdown(old_path)
+                if (
+                    refreshed_old.get("status") != "superseded"
+                    or refreshed_old.get("superseded_by") != existing_id
+                ):
+                    raise RuntimeError("Memory supersession effect is not reflected in canonical history")
+                return existing_id, existing_path, False
+
+            existing_new_path = engine.locate_memory(new_id, root, mode)
+
+            # Recover a completed two-file mutation whose receipt was lost after
+            # the canonical writes but before receipt persistence. locate_memory
+            # avoids assuming the recovery happens on the same calendar date.
+            if (
+                old_meta.get("status") == "superseded"
+                and old_meta.get("superseded_by") == new_id
+                and existing_new_path is not None
+            ):
+                new_path = existing_new_path
+                new_meta, new_body = engine.parse_markdown(new_path)
+                stored_refs = []
+                if new_meta.get("evidence_refs"):
+                    try:
+                        stored_refs = json.loads(new_meta["evidence_refs"])
+                    except json.JSONDecodeError as exc:
+                        raise RuntimeError("Recovered correction has invalid evidence_refs") from exc
+                if (
+                    new_meta.get("supersedes") == supersedes
+                    and new_meta.get("scope") == normalized_scope
+                    and new_meta.get("type") == mem_type
+                    and text in new_body
+                    and list(stored_refs) == refs
+                ):
+                    _record_effect(
+                        engine,
+                        root,
+                        mode,
+                        effect_id,
+                        effect_digest,
+                        new_id,
+                        new_path,
+                        operation="supersede",
+                        extra={"superseded_id": supersedes},
+                    )
+                    return new_id, new_path, False
+
+            if old_meta.get("status", "active") != "active":
+                raise RuntimeError(
+                    f"Memory record {supersedes} is not active and cannot be superseded again"
+                )
+            if existing_new_path is not None:
+                raise RuntimeError(
+                    f"Correction destination already exists without matching supersession evidence: {new_id}"
+                )
+
+            created = engine.now_iso()
+            new_path = _safe_atomic_path(engine, new_id, created, normalized_scope, root, mode)
+            new_meta = {
+                "id": new_id,
+                "type": "state" if mem_type == "project_state" and mode == engine.MODE_NATIVE else mem_type,
+                "scope": normalized_scope,
+                "status": "active",
+                "importance": str(max(1, min(5, resolved_importance))),
+                "confidence": f"{max(0.0, min(1.0, resolved_confidence)):.2f}",
+                "created_at": created,
+                "updated_at": created,
+                "valid_from": valid_from,
+                "valid_to": "",
+                "supersedes": supersedes,
+                "superseded_by": "",
+                "source": source,
+                "tags": resolved_tags,
+            }
+            if refs:
+                new_meta["evidence_refs"] = json.dumps(refs, separators=(",", ":"))
+            new_body = f"# Memory\n\n{text}\n"
+            if why.strip():
+                new_body += f"\n# Why it matters\n\n{why.strip()}\n"
+            new_content = engine.render_frontmatter(new_meta) + "\n\n" + new_body
+
+            replaced_meta = dict(old_meta)
+            replaced_meta.update(
+                {
+                    "status": "superseded",
+                    "valid_to": created,
+                    "superseded_by": new_id,
+                    "updated_at": created,
+                }
+            )
+            replaced_content = (
+                engine.render_frontmatter(replaced_meta)
+                + "\n\n"
+                + old_body.strip()
+                + "\n"
+            )
+
+            tx_id = (
+                "supersede-"
+                + hashlib.sha256(
+                    (supersedes + "\n" + new_id + "\n" + effect_id).encode("utf-8")
+                ).hexdigest()[:24]
+            )
+            journal = _write_transaction(
+                engine,
+                root,
+                mode,
+                tx_id,
+                [(new_path, new_content), (old_path, replaced_content)],
+            )
+            _atomic_write_text(new_path, new_content)
+            _atomic_write_text(old_path, replaced_content)
+            _sync_atomic_projection(
+                engine,
+                original_rebuild,
+                root,
+                mode,
+                paths=[old_path, new_path],
+            )
+            _record_effect(
+                engine,
+                root,
+                mode,
+                effect_id,
+                effect_digest,
+                new_id,
+                new_path,
+                operation="supersede",
+                extra={"superseded_id": supersedes},
+            )
+            try:
+                journal.unlink()
+            except FileNotFoundError:
+                pass
+            return new_id, new_path, True
+
+    return supersede_atomic
+
+
+def _root_and_mode_for_memory_path(engine, path: Path) -> Tuple[Path, str]:
+    path = Path(path).absolute()
+    for parent in [path.parent, *path.parents]:
+        manifest = parent / "AI-VERSE.yaml"
+        if manifest.exists():
+            return parent.resolve(), engine.detect_mode(parent)
+        if parent.name == ".ai-verse-memory":
+            return parent.parent.resolve(), engine.MODE_STANDALONE
+    root = engine.repository_root()
+    return root, engine.detect_mode(root)
+
+
+def _patched_update_meta(engine):
+    def update_meta(path: Path, changes: Dict[str, str]) -> None:
+        path = Path(path)
+        root, mode = _root_and_mode_for_memory_path(engine, path)
+        with _mutation_lock(engine, root, mode):
+            _assert_writable_authority(engine, root, mode)
+            if mode == engine.MODE_NATIVE:
+                engine._native_source_identity(path, root, expected_kind="memory")
+            else:
+                _assert_path_within(path, _standalone_atomic_base(engine, root))
+            meta, body = engine.parse_markdown(path)
+            if not meta:
+                raise ValueError(f"Not an AI-Verse atomic memory: {path}")
+            meta.update(changes)
+            meta["updated_at"] = engine.now_iso()
+            _atomic_write_text(path, engine.render_frontmatter(meta) + "\n\n" + body.strip() + "\n")
+
+    return update_meta
+
+
+def _patched_forget(engine, original_rebuild):
+    def forget_memory(mem_id: str, confirmed: bool, root: Optional[Path] = None, mode: Optional[str] = None) -> None:
+        root = Path(root or engine.repository_root()).resolve()
+        mode = mode or engine.detect_mode(root)
+        with _mutation_lock(engine, root, mode):
+            _assert_writable_authority(engine, root, mode)
+            path = engine.locate_memory(mem_id, root, mode)
+            if not path:
+                raise SystemExit(f"Memory not found: {mem_id}")
+            if not confirmed:
+                raise SystemExit(f"Refusing to delete {mem_id} without --yes. This removes canonical Markdown memory.")
+            if mode == engine.MODE_NATIVE:
+                engine._native_source_identity(path, root, expected_kind="memory")
+            else:
+                _assert_path_within(path, _standalone_atomic_base(engine, root))
+            path.unlink()
+            _sync_atomic_projection(
+                engine,
+                original_rebuild,
+                root,
+                mode,
+                remove_ids=[mem_id],
+            )
+            print(f"Forgot: {mem_id}")
+
+    return forget_memory
+
+
+def _patched_supersede(engine, original_rebuild):
+    def supersede(args: argparse.Namespace, root: Path, mode: str) -> None:
+        root = Path(root).resolve()
+        with _mutation_lock(engine, root, mode):
+            _assert_writable_authority(engine, root, mode)
+            old_path = engine.locate_memory(args.id, root, mode)
+            if not old_path:
+                raise SystemExit(f"Memory not found: {args.id}")
+            if mode == engine.MODE_NATIVE:
+                engine._native_source_identity(old_path, root, expected_kind="memory")
+            old_meta, old_body = engine.parse_markdown(old_path)
+            new_type = args.type or old_meta.get("type", "fact")
+            new_scope = args.scope or old_meta.get("scope") or engine.infer_scope_from_path(old_path, root, mode)
+            if getattr(args, "workspace", None):
+                new_scope = f"workspace:{args.workspace}"
+            normalized_scope = engine.normalize_scope(new_scope, root, mode)
+            created = engine.now_iso()
+            new_id = engine.memory_id(args.text, normalized_scope)
+            new_path = _safe_atomic_path(engine, new_id, created, normalized_scope, root, mode)
+            new_meta = {
+                "id": new_id,
+                "type": "state" if new_type == "project_state" and mode == engine.MODE_NATIVE else new_type,
+                "scope": normalized_scope,
+                "status": "active",
+                "importance": str(args.importance if args.importance is not None else int(old_meta.get("importance", "3") or 3)),
+                "confidence": f"{args.confidence if args.confidence is not None else float(old_meta.get('confidence', '1') or 1):.2f}",
+                "created_at": created,
+                "updated_at": created,
+                "valid_from": getattr(args, "valid_from", "") or "",
+                "valid_to": "",
+                "supersedes": args.id,
+                "superseded_by": "",
+                "source": getattr(args, "source", "") or "",
+                "tags": getattr(args, "tags", "") or old_meta.get("tags", ""),
+            }
+            new_body = f"# Memory\n\n{args.text.strip()}\n"
+            if getattr(args, "why", "").strip():
+                new_body += f"\n# Why it matters\n\n{args.why.strip()}\n"
+            new_content = engine.render_frontmatter(new_meta) + "\n\n" + new_body
+
+            old_meta = dict(old_meta)
+            old_meta.update({"status": "superseded", "valid_to": created, "superseded_by": new_id, "updated_at": created})
+            old_content = engine.render_frontmatter(old_meta) + "\n\n" + old_body.strip() + "\n"
+            tx_id = f"supersede-{hashlib.sha256((args.id + new_id).encode('utf-8')).hexdigest()[:24]}"
+            journal = _write_transaction(engine, root, mode, tx_id, [(new_path, new_content), (old_path, old_content)])
+            _atomic_write_text(new_path, new_content)
+            _atomic_write_text(old_path, old_content)
+            _sync_atomic_projection(
+                engine,
+                original_rebuild,
+                root,
+                mode,
+                paths=[old_path, new_path],
+            )
+            try:
+                journal.unlink()
+            except FileNotFoundError:
+                pass
+            print(f"Superseded: {args.id} -> {new_id}")
+            print(engine.relpath(new_path, root))
+
+    return supersede
+
+
+def _patched_rebuild(engine, original_rebuild):
+    def rebuild(silent: bool = False, root: Optional[Path] = None, mode: Optional[str] = None) -> int:
+        root = Path(root or engine.repository_root()).resolve()
+        mode = mode or engine.detect_mode(root)
+        with _mutation_lock(engine, root, mode):
+            return original_rebuild(silent=silent, root=root, mode=mode)
+
+    return rebuild
+
+
+def _legacy_snapshot(engine, root: Path, source_root: Optional[Path]) -> dict:
+    source_base, legacy = engine._legacy_source(root, source_root)
+    old_memories = legacy / "memories"
+    memories_real = old_memories.resolve(strict=True)
+    records = []
+    digest_rows = []
+    counts = {"migratable": 0, "duplicate": 0, "unresolved": 0, "invalid": 0}
+    for old_path in sorted(old_memories.rglob("*.md")):
+        try:
+            display_source = old_path.relative_to(source_base).as_posix()
+        except ValueError:
+            display_source = str(old_path)
+        record = {"path": display_source}
+        try:
+            if old_path.is_symlink() or not old_path.is_file():
+                raise ValueError("not a regular file")
+            resolved_old = old_path.resolve(strict=True)
+            resolved_old.relative_to(memories_real)
+            file_sha = _sha256_file(old_path)
+            meta, body = engine.parse_markdown(old_path)
+            mem_id = meta.get("id")
+            if not mem_id:
+                raise ValueError("missing id")
+            mapped = engine.map_legacy_scope(meta.get("scope", "global"), root)
+            record.update(
+                {
+                    "file_sha256": file_sha,
+                    "id": mem_id,
+                    "legacy_scope": meta.get("scope", "global"),
+                    "mapped_scope": mapped,
+                }
+            )
+            if not mapped:
+                record.update({"result": "unresolved", "reason": meta.get("scope", "")})
+                counts["unresolved"] += 1
+            else:
+                existing = engine.locate_memory(mem_id, root, engine.MODE_NATIVE)
+                if existing:
+                    existing_meta, existing_body = engine.parse_markdown(existing)
+                    if existing_meta.get("scope") == mapped and existing_body.strip() == body.strip():
+                        record.update({"result": "duplicate", "reason": engine.relpath(existing, root)})
+                        counts["duplicate"] += 1
+                    else:
+                        record.update({"result": "invalid", "reason": "destination id conflict"})
+                        counts["invalid"] += 1
+                else:
+                    record.update({"result": "migratable", "reason": mapped})
+                    counts["migratable"] += 1
+        except (OSError, ValueError) as exc:
+            record.update({"result": "invalid", "reason": str(exc), "file_sha256": None})
+            counts["invalid"] += 1
+        records.append(record)
+        digest_rows.append(
+            {
+                "path": record.get("path"),
+                "sha256": record.get("file_sha256"),
+            }
+        )
+    source_fingerprint = _payload_digest(digest_rows)
+    scope_fingerprint = _payload_digest(engine.workspace_ids(root))
+    return {
+        "schema_version": PUBLIC_BETA_SCHEMA,
+        "source_root": str(source_base),
+        "legacy_root": str(legacy),
+        "source_fingerprint": source_fingerprint,
+        "target_scope_fingerprint": scope_fingerprint,
+        "records": records,
+        "counts": counts,
+    }
+
+
+def _migration_paths(engine, root: Path) -> Tuple[Path, Path]:
+    operator = Path(root).resolve(strict=True) / "operator"
+    _safe_existing_dir(operator, "operator root")
+    memory = _safe_child_dir(operator, "memory")
+    report_dir = _safe_child_dir(memory, "migrations")
+    return (
+        report_dir / "legacy-ai-verse-memory-plan.json",
+        report_dir / "legacy-ai-verse-memory-migration.md",
+    )
+
+
+def _write_migration_report(path: Path, snapshot: dict, applied: bool, copied: int, handoff_complete: bool) -> None:
+    lines = [
+        "# Legacy AI-Verse Memory Migration",
+        "",
+        f"Generated: {_now_iso()}",
+        f"Applied: {'yes' if applied else 'no'}",
+        f"Source: `{snapshot['legacy_root']}`",
+        f"Source fingerprint: `{snapshot['source_fingerprint']}`",
+        f"Authority handoff: {'complete' if handoff_complete else 'pending'}",
+        "",
+        "The source memory Markdown is preserved. After a verified handoff the old supported writer is retired, while the old bytes remain historical evidence.",
+        "",
+        "| Source | Result | Destination / note |",
+        "|---|---|---|",
+    ]
+    for record in snapshot["records"]:
+        lines.append(f"| `{record['path']}` | {record['result']} | `{record.get('reason', '')}` |")
+    if copied:
+        lines.extend(["", f"Copied this apply: {copied}"])
+    _atomic_write_text(path, "\n".join(lines) + "\n")
+
+
+def _retirement_stub(authority_file: Path) -> str:
+    return f'''#!/usr/bin/env python3
+"""Retired AI-Verse Memory standalone writer."""
+from __future__ import annotations
+import json
+from pathlib import Path
+
+authority = Path(__file__).with_name("AUTHORITY.json")
+payload = json.loads(authority.read_text(encoding="utf-8")) if authority.exists() else {{}}
+replacement = payload.get("replacement_root", "the adopted AI-Verse OS")
+raise SystemExit(
+    "This standalone AI-Verse Memory writer was retired after canonical authority handoff. "
+    f"Use the adopted Memory at {{replacement}}. The old memory files remain preserved as evidence."
+)
+'''
+
+
+
+def _retire_legacy_authority(engine, root: Path, snapshot: dict, counts: dict) -> dict:
+    source_base = Path(snapshot["source_root"]).resolve(strict=True)
+    legacy = Path(snapshot["legacy_root"])
+    if not legacy.exists() or legacy.is_symlink() or not legacy.is_dir():
+        raise RuntimeError(f"Unsafe legacy Memory authority root: {legacy}")
+    legacy = legacy.resolve(strict=True)
+    root = Path(root).resolve(strict=True)
+
+    handoff_id = "handoff-" + hashlib.sha256(
+        (snapshot["source_fingerprint"] + "\n" + str(root)).encode("utf-8")
+    ).hexdigest()[:24]
+    identity = {
+        "schema_version": PUBLIC_BETA_SCHEMA,
+        "handoff_protocol": "2",
+        "handoff_id": handoff_id,
+        "source_root": snapshot["source_root"],
+        "legacy_root": snapshot["legacy_root"],
+        "source_fingerprint": snapshot["source_fingerprint"],
+        "target_root": str(root),
+        "target_scope_fingerprint": snapshot["target_scope_fingerprint"],
+    }
+
+    native_authority = _authority_file(engine, root, engine.MODE_NATIVE)
+    source_authority = legacy / "AUTHORITY.json"
+
+    def validate_identity(payload: dict, label: str) -> None:
+        for key in (
+            "handoff_id",
+            "source_root",
+            "legacy_root",
+            "source_fingerprint",
+            "target_root",
+            "target_scope_fingerprint",
+        ):
+            if payload.get(key) != identity[key]:
+                raise RuntimeError(f"{label} identity mismatch for {key}")
+
+    def native_payload(status: str, current: Optional[dict] = None, **extra) -> dict:
+        payload = dict(identity)
+        payload["status"] = status
+        if current:
+            for key in ("prepared_at", "pending_at", "replaced_prepared_handoff_id"):
+                if current.get(key):
+                    payload[key] = current[key]
+            if current.get("recovered_from_unverified_complete"):
+                payload["recovered_from_unverified_complete"] = True
+        payload.update(extra)
+        return payload
+
+    def source_payload(status: str, current: Optional[dict] = None, **extra) -> dict:
+        payload = {
+            "schema_version": PUBLIC_BETA_SCHEMA,
+            "handoff_protocol": "2",
+            "handoff_id": handoff_id,
+            "status": status,
+            "source_root": snapshot["source_root"],
+            "legacy_root": snapshot["legacy_root"],
+            "source_fingerprint": snapshot["source_fingerprint"],
+            "replacement_root": str(root),
+            "reason": "Canonical Memory authority adopted by native AI-Verse Memory.",
+        }
+        if current:
+            for key in ("retiring_at", "retired_at"):
+                if current.get(key):
+                    payload[key] = current[key]
+        payload.update(extra)
+        return payload
+
+    with _mutation_lock(engine, source_base, engine.MODE_STANDALONE):
+        locked_snapshot = _legacy_snapshot(engine, root, source_base)
+        if locked_snapshot["source_fingerprint"] != snapshot["source_fingerprint"]:
+            raise RuntimeError("Legacy source memory bytes changed before authority handoff")
+        if locked_snapshot["target_scope_fingerprint"] != snapshot["target_scope_fingerprint"]:
+            raise RuntimeError("Target workspace topology changed before authority handoff")
+
+        native = _read_authority_json(native_authority, "native Memory authority handoff")
+        if native is None:
+            native = native_payload("prepared", prepared_at=_now_iso())
+            _atomic_write_json(native_authority, native)
+        else:
+            status = str(native.get("status") or "")
+            if status == "prepared" and native.get("handoff_id") != handoff_id:
+                # A crash immediately after target preparation intentionally leaves
+                # the source as the sole writable authority. If that authoritative
+                # source changes before retry, a newly reviewed dry run gets a new
+                # fingerprint/handoff identity. The stale target-only prepared
+                # reservation can be replaced only while no source-side handoff
+                # marker exists, so no committed/fenced authority is discarded.
+                source = _read_authority_json(source_authority, "legacy Memory authority marker")
+                if source is not None:
+                    raise RuntimeError("Cannot replace stale prepared handoff after source-side handoff state exists")
+                replaced_handoff_id = str(native.get("handoff_id") or "")
+                native = native_payload(
+                    "prepared",
+                    prepared_at=_now_iso(),
+                    replaced_prepared_handoff_id=replaced_handoff_id,
+                )
+                _atomic_write_json(native_authority, native)
+            else:
+                validate_identity(native, "native Memory handoff")
+                if status == "complete" and native.get("source_retirement_verified") is True:
+                    source = _read_authority_json(source_authority, "legacy Memory authority marker")
+                    if not source or source.get("status") != "retired" or source.get("handoff_id") != handoff_id:
+                        raise RuntimeError("Completed native handoff is missing matching retired source authority")
+                    return native
+                if status == "complete":
+                    native = native_payload(
+                        "pending",
+                        native,
+                        pending_at=native.get("pending_at") or _now_iso(),
+                        recovered_from_unverified_complete=True,
+                    )
+                    _atomic_write_json(native_authority, native)
+                elif status not in {"prepared", "pending"}:
+                    raise RuntimeError(f"Unsupported native Memory handoff state: {status or 'missing'}")
+
+        _handoff_fault("after-target-prepared")
+
+        source = _read_authority_json(source_authority, "legacy Memory authority marker")
+        if source is None:
+            source = source_payload("retiring", retiring_at=_now_iso())
+            _atomic_write_json(source_authority, source)
+        else:
+            if source.get("handoff_id") != handoff_id:
+                raise RuntimeError("Legacy Memory authority belongs to a different handoff")
+            if source.get("source_fingerprint") != snapshot["source_fingerprint"]:
+                raise RuntimeError("Legacy Memory authority source fingerprint mismatch")
+            if source.get("replacement_root") != str(root):
+                raise RuntimeError("Legacy Memory authority replacement root mismatch")
+            if source.get("status") not in {"retiring", "retired"}:
+                raise RuntimeError("Legacy Memory authority is in an unsupported handoff state")
+
+        _handoff_fault("after-source-retiring")
+
+        native = _read_authority_json(native_authority, "native Memory authority handoff")
+        if native is None:
+            raise RuntimeError("Native Memory handoff state disappeared during retirement")
+        validate_identity(native, "native Memory handoff")
+        if native.get("status") != "pending":
+            native = native_payload(
+                "pending",
+                native,
+                pending_at=native.get("pending_at") or _now_iso(),
+            )
+            _atomic_write_json(native_authority, native)
+
+        _handoff_fault("after-target-pending")
+
+        old_writer = legacy / "memory.py"
+        backup = legacy / "memory.py.pre-handoff"
+        expected_stub = _retirement_stub(source_authority)
+        if old_writer.exists():
+            if old_writer.is_symlink() or not old_writer.is_file():
+                raise RuntimeError(f"Cannot retire unsafe legacy Memory writer: {old_writer}")
+            if backup.exists():
+                if backup.is_symlink() or not backup.is_file():
+                    raise RuntimeError(f"Unsafe legacy Memory writer backup: {backup}")
+            else:
+                current_text = old_writer.read_text(encoding="utf-8")
+                if current_text == expected_stub:
+                    raise RuntimeError("Legacy writer is already retired but its original backup is missing")
+                _atomic_write_bytes(backup, old_writer.read_bytes())
+            if old_writer.read_text(encoding="utf-8") != expected_stub:
+                _atomic_write_text(old_writer, expected_stub)
+            if old_writer.read_text(encoding="utf-8") != expected_stub:
+                raise RuntimeError("Legacy Memory writer retirement stub verification failed")
+
+        _handoff_fault("after-writer-fenced")
+
+        final_locked_snapshot = _legacy_snapshot(engine, root, source_base)
+        if final_locked_snapshot["source_fingerprint"] != snapshot["source_fingerprint"]:
+            raise RuntimeError("Legacy source memory bytes changed during authority handoff")
+
+        source = _read_authority_json(source_authority, "legacy Memory authority marker")
+        if source is None:
+            raise RuntimeError("Legacy Memory authority marker disappeared during handoff")
+        if source.get("status") != "retired":
+            source = source_payload(
+                "retired",
+                source,
+                retired_at=source.get("retired_at") or _now_iso(),
+            )
+            _atomic_write_json(source_authority, source)
+
+        source = _read_authority_json(source_authority, "legacy Memory authority marker")
+        if (
+            not source
+            or source.get("status") != "retired"
+            or source.get("handoff_id") != handoff_id
+            or source.get("source_fingerprint") != snapshot["source_fingerprint"]
+            or source.get("replacement_root") != str(root)
+        ):
+            raise RuntimeError("Legacy Memory source retirement verification failed")
+
+        _handoff_fault("after-source-retired")
+
+        native = _read_authority_json(native_authority, "native Memory authority handoff")
+        if native is None:
+            raise RuntimeError("Native Memory handoff state disappeared before completion")
+        validate_identity(native, "native Memory handoff")
+        complete = native_payload(
+            "complete",
+            native,
+            completed_at=native.get("completed_at") or _now_iso(),
+            source_retirement_verified=True,
+            source_retired_at=source.get("retired_at"),
+            counts=dict(counts),
+        )
+        _atomic_write_json(native_authority, complete)
+
+        verified = _read_authority_json(native_authority, "native Memory authority handoff")
+        if (
+            not verified
+            or verified.get("status") != "complete"
+            or verified.get("source_retirement_verified") is not True
+            or verified.get("handoff_id") != handoff_id
+        ):
+            raise RuntimeError("Native Memory authority completion verification failed")
+
+        _handoff_fault("after-target-complete")
+        return verified
+
+def _patched_migrate_legacy(engine, original_rebuild):
+    def migrate_legacy(root: Path, apply: bool = False, source_root: Optional[Path] = None) -> Dict[str, int]:
+        root = Path(root).resolve()
+        if engine.detect_mode(root) != engine.MODE_NATIVE:
+            raise ValueError("migrate-legacy is only for AI-Verse OS v2 native mode")
+        with _mutation_lock(engine, root, engine.MODE_NATIVE):
+            _assert_writable_authority(
+                engine,
+                root,
+                engine.MODE_NATIVE,
+                intent="migration",
+            )
+            plan_path, report_path = _migration_paths(engine, root)
+            snapshot = _legacy_snapshot(engine, root, source_root)
+            base_counts = dict(snapshot["counts"])
+            result_counts = {
+                "migratable": base_counts["migratable"],
+                "copied": 0,
+                "duplicate": base_counts["duplicate"],
+                "unresolved": base_counts["unresolved"],
+                "invalid": base_counts["invalid"],
+                "handoff_complete": 0,
+            }
+            if not apply:
+                plan = dict(snapshot)
+                plan["planned_at"] = _now_iso()
+                _atomic_write_json(plan_path, plan)
+                _write_migration_report(report_path, snapshot, False, 0, False)
+                print(f"Legacy migration plan: {engine.relpath(plan_path, root)}")
+                print(f"Legacy migration report: {engine.relpath(report_path, root)}")
+                print(json.dumps(result_counts, indent=2))
+                return result_counts
+
+            if not plan_path.exists():
+                raise ValueError("Migration apply requires a reviewed dry run first")
+            if plan_path.is_symlink() or not plan_path.is_file():
+                raise ValueError("Migration plan is unsafe")
+            planned = json.loads(plan_path.read_text(encoding="utf-8"))
+            if planned.get("source_root") != snapshot["source_root"]:
+                raise ValueError("Migration source differs from the reviewed dry run; run dry run again")
+            if planned.get("source_fingerprint") != snapshot["source_fingerprint"]:
+                raise ValueError("Legacy Memory source drifted after dry run; review a new migration plan before apply")
+            if planned.get("target_scope_fingerprint") != snapshot["target_scope_fingerprint"]:
+                raise ValueError("Target workspace topology changed after dry run; review a new migration plan before apply")
+
+            source_base = Path(snapshot["source_root"])
+            legacy = Path(snapshot["legacy_root"])
+            for record in snapshot["records"]:
+                if record["result"] != "migratable":
+                    continue
+                old_path = source_base / record["path"]
+                meta, body = engine.parse_markdown(old_path)
+                mapped = str(record["mapped_scope"])
+                mem_id = str(record["id"])
+                existing = engine.locate_memory(mem_id, root, engine.MODE_NATIVE)
+                if existing:
+                    existing_meta, existing_body = engine.parse_markdown(existing)
+                    if existing_meta.get("scope") == mapped and existing_body.strip() == body.strip():
+                        result_counts["duplicate"] += 1
+                        continue
+                    raise ValueError(f"Destination id conflict during migration: {mem_id}")
+
+                new_meta = dict(meta)
+                old_scope = new_meta.get("scope", "global")
+                new_meta["scope"] = mapped
+                if old_scope != mapped:
+                    new_meta["legacy_scope"] = old_scope
+                display_source = str(record["path"])
+                if not new_meta.get("source"):
+                    new_meta["source"] = f"legacy:{display_source}"
+                new_meta["migration_source_path"] = display_source
+                new_meta["migration_source_sha256"] = str(record["file_sha256"])
+                new_meta["migration_source_fingerprint"] = snapshot["source_fingerprint"]
+                new_meta["migrated_at"] = _now_iso()
+                created = new_meta.get("created_at") or _now_iso()
+                target = _safe_atomic_path(engine, mem_id, created, mapped, root, engine.MODE_NATIVE)
+                _atomic_write_text(target, engine.render_frontmatter(new_meta) + "\n\n" + body.strip() + "\n")
+                result_counts["copied"] += 1
+
+            original_rebuild(silent=True, root=root, mode=engine.MODE_NATIVE)
+
+            blocking = result_counts["unresolved"] + result_counts["invalid"]
+            if blocking == 0:
+                for record in snapshot["records"]:
+                    if record["result"] not in {"migratable", "duplicate"}:
+                        continue
+                    destination = engine.locate_memory(str(record["id"]), root, engine.MODE_NATIVE)
+                    if not destination:
+                        raise RuntimeError(f"Migration verification failed for {record['id']}")
+                    meta, _ = engine.parse_markdown(destination)
+                    if meta.get("scope") != record.get("mapped_scope"):
+                        raise RuntimeError(f"Migration verification scope mismatch for {record['id']}")
+                _retire_legacy_authority(engine, root, snapshot, result_counts)
+                result_counts["handoff_complete"] = 1
+
+            final_snapshot = _legacy_snapshot(engine, root, source_root)
+            # Retirement metadata and writer stub are outside memories/, so the source-memory
+            # fingerprint remains stable and proves the historical records were not rewritten.
+            if final_snapshot["source_fingerprint"] != snapshot["source_fingerprint"]:
+                raise RuntimeError("Legacy source memory bytes changed during migration")
+            _write_migration_report(
+                report_path,
+                snapshot,
+                True,
+                result_counts["copied"],
+                bool(result_counts["handoff_complete"]),
+            )
+            print(f"Legacy migration report: {engine.relpath(report_path, root)}")
+            print(json.dumps(result_counts, indent=2))
+            return result_counts
+
+    return migrate_legacy
+
+
+def _patched_migration_complete(engine):
+    def migration_complete(summary: str, root: Optional[Path] = None, mode: Optional[str] = None) -> None:
+        root = Path(root or engine.repository_root()).resolve()
+        mode = mode or engine.detect_mode(root)
+        with _mutation_lock(engine, root, mode):
+            p = engine.paths(root, mode)
+            if mode == engine.MODE_NATIVE:
+                _assert_writable_authority(
+                    engine,
+                    root,
+                    mode,
+                    intent="migration",
+                )
+                plan_path, _ = _migration_paths(engine, root)
+                legacy = root / ".ai-verse-memory"
+                if plan_path.exists():
+                    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                    handoff = _authority_file(engine, root, mode)
+                    if not handoff.exists():
+                        raise ValueError("Migration cannot be marked complete before canonical authority handoff")
+                    receipt = json.loads(handoff.read_text(encoding="utf-8"))
+                    if (
+                        receipt.get("status") != "complete"
+                        or receipt.get("source_retirement_verified") is not True
+                        or receipt.get("source_fingerprint") != plan.get("source_fingerprint")
+                    ):
+                        raise ValueError("Migration handoff receipt does not prove verified source retirement for the reviewed snapshot")
+                elif legacy.exists():
+                    raise ValueError("Legacy Memory exists. Run migrate-legacy dry run and apply before marking migration complete.")
+            payload = {
+                "schema_version": PUBLIC_BETA_SCHEMA,
+                "completed_at": _now_iso(),
+                "version": engine.VERSION,
+                "mode": mode,
+                "summary": summary.strip() or "Initial historical-memory migration completed.",
+            }
+            _atomic_write_json(p["migration"], payload)
+            print(f"Migration marked complete: {engine.relpath(p['migration'], root)}")
+
+    return migration_complete
+
+
+def component_state_path(engine, root: Path, mode: str) -> Path:
+    if mode == engine.MODE_NATIVE:
+        return Path(root) / "operator" / "memory" / ".ai-verse-memory-state" / "component.json"
+    return Path(engine.paths(root, mode)["home"]) / "state" / "component.json"
+
+
+def read_component_state(engine, root: Path, mode: str) -> dict:
+    path = component_state_path(engine, root, mode)
+    if not path.exists():
+        return {}
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError(f"Unsafe Memory component state: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_component_state(engine, root: Path, mode: str, **changes) -> dict:
+    with _mutation_lock(engine, root, mode):
+        payload = read_component_state(engine, root, mode)
+        payload.update(
+            {
+                "schema_version": PUBLIC_BETA_SCHEMA,
+                "component_id": "ai-verse-memory",
+                "version": engine.VERSION,
+                **changes,
+            }
+        )
+        payload["updated_at"] = _now_iso()
+        _atomic_write_json(component_state_path(engine, root, mode), payload)
+        return payload
+
+
+def apply(engine) -> None:
+    """Patch only public-beta seams while preserving the existing engine model."""
+    engine.MEMORY_TYPES.update({"lesson", "correction"})
+    original_rebuild = engine.rebuild
+    engine.atomic_path = lambda mem_id, created_at, scope, root=None, mode=None: _safe_atomic_path(
+        engine,
+        mem_id,
+        created_at,
+        scope,
+        Path(root or engine.repository_root()).resolve(),
+        mode or engine.detect_mode(root or engine.repository_root()),
+    )
+    engine.rebuild = _patched_rebuild(engine, original_rebuild)
+    engine.write_atomic = _patched_write_atomic(engine, original_rebuild)
+    engine.supersede_atomic = _patched_supersede_atomic(engine, original_rebuild)
+    engine.update_meta = _patched_update_meta(engine)
+    engine.forget_memory = _patched_forget(engine, original_rebuild)
+    engine.supersede = _patched_supersede(engine, original_rebuild)
+    engine.migrate_legacy = _patched_migrate_legacy(engine, original_rebuild)
+    engine.migration_complete = _patched_migration_complete(engine)
+
+    # Export owner-safe helpers for the lifecycle CLI and acceptance tests.
+    engine.public_beta_mutation_lock = lambda root, mode: _mutation_lock(engine, Path(root), mode)
+    engine.public_beta_atomic_write_json = _atomic_write_json
+    engine.public_beta_atomic_write_text = _atomic_write_text
+    engine.public_beta_payload_digest = _payload_digest
+    engine.public_beta_effect_path = lambda root, mode, effect_id: _effect_path(engine, Path(root), mode, effect_id)
+    engine.public_beta_load_effect = lambda root, mode, effect_id, digest: _load_effect(
+        engine, Path(root), mode, effect_id, digest
+    )
+    engine.public_beta_safe_child_dir = _safe_child_dir
+    engine.public_beta_native_memory_base = lambda root, scope: _native_atomic_base(
+        engine, Path(root), scope
+    ).parent
+    engine.public_beta_standalone_home = lambda root: _standalone_home(engine, Path(root))
+    engine.public_beta_authority_file = lambda root, mode: _authority_file(engine, Path(root), mode)
+    engine.public_beta_assert_writable_authority = lambda root, mode, intent="normal": _assert_writable_authority(
+        engine, Path(root), mode, intent=intent
+    )
+    engine.public_beta_native_write_readiness = lambda root: _native_write_readiness(
+        engine, Path(root)
+    )
+    engine.public_beta_component_state_path = lambda root, mode: component_state_path(engine, Path(root), mode)
+    engine.public_beta_read_component_state = lambda root, mode: read_component_state(engine, Path(root), mode)
+    engine.public_beta_write_component_state = lambda root, mode, **changes: write_component_state(
+        engine, Path(root), mode, **changes
+    )
+
+    # Session digests are an additive Memory-owned extension. Load them here,
+    # after hardening helpers are attached, so the compatibility entrypoint can
+    # evolve independently and concurrent runtime work does not need to edit it.
+    digest_path = Path(__file__).resolve().parent / "session_digest.py"
+    if digest_path.exists():
+        module_name = "_aiverse_memory_session_digest"
+        module = sys.modules.get(module_name)
+        if module is None:
+            spec = importlib.util.spec_from_file_location(module_name, digest_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Could not load session digest extension: {digest_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+        module.apply(engine)

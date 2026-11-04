@@ -1073,20 +1073,31 @@ class ProfileCorrectionTests(ClaudeFixture):
             with self.assertRaises(Refused):
                 self.turn_and_review(self.bridge, "Please give me answers as short paragraphs.", candidate)
 
-    def test_query_profile_works_for_both_apps_and_is_refused_in_a_workspace(self):
+    def test_query_profile_works_for_both_apps_with_the_turn_token_and_is_refused_in_a_workspace(self):
         self.seed_bullets()
-        good = self.cli("query", "--session", self.session, "--kind", "profile", harness="claude")
+        self.bridge.hook({"session_id": self.session, "cwd": str(self.root), "hook_event_name": "UserPromptSubmit",
+                          "permission_mode": "default", "prompt": "Let me check my preferences.", "turn_id": "turn-q"})
+        turn = self.bridge.state(self.session)["turn"]
+        auth = ["--turn", turn["id"], "--token", turn["token"]]
+        self.assertEqual(self.cli("query", "--session", self.session, "--kind", "profile", harness="claude").returncode, 2)
+        good = self.cli("query", "--session", self.session, "--kind", "profile", *auth, harness="claude")
         self.assertEqual(good.returncode, 0, good.stdout)
         data = json.loads(good.stdout)["result"] if "result" in json.loads(good.stdout) else json.loads(good.stdout)
         self.assertRegex(json.dumps(data), r"preferences_source_sha256")
         self.assertIn("short bullet points", json.dumps(data))
-        codex = self.cli("query", "--session", self.session, "--kind", "profile")
+        codex = self.cli("query", "--session", self.session, "--kind", "profile", *auth)
         self.assertEqual(codex.returncode, 0, codex.stdout)
         self.assertIn("preferences_source_sha256", codex.stdout)
         self.bridge.hook({"session_id": "claude-workspace-0002", "cwd": str(self.root / "workspaces/alpha"),
-                          "hook_event_name": "UserPromptSubmit", "permission_mode": "default", "prompt": "Continue."})
-        denied = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile", harness="claude")
+                          "hook_event_name": "UserPromptSubmit", "permission_mode": "default", "prompt": "Continue.", "turn_id": "turn-w"})
+        wt = self.bridge.state("claude-workspace-0002")["turn"]
+        denied = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile",
+                          "--turn", wt["id"], "--token", wt["token"], harness="claude")
         self.assertEqual(denied.returncode, 2)
+        # Even asking for the operator scope from inside a project chat is refused.
+        scoped = self.cli("query", "--session", "claude-workspace-0002", "--kind", "profile", "--scope", "operator",
+                          "--turn", wt["id"], "--token", wt["token"], harness="claude")
+        self.assertEqual(scoped.returncode, 2)
 
 
 if __name__ == "__main__":

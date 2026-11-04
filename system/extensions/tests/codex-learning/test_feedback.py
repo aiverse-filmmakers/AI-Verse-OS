@@ -47,7 +47,7 @@ class MotherListTests(unittest.TestCase):
             folder = add_development_project(sc)
             text = sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.")
             self.assertNotIn("\"route\":\"upgrade\"", text)
-            receipt = self.review(sc, upgrade("Make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
+            receipt = self.review(sc, upgrade("AI-Verse OS should make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
             self.assertEqual(receipt["effects"], [])
             self.assertEqual(list((folder).rglob("mem-*.md")), [])
             self.assertFalse((folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").exists())
@@ -58,15 +58,17 @@ class MotherListTests(unittest.TestCase):
             folder = add_development_project(sc)
             text = sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.")
             self.assertIn("\"route\":\"upgrade\"", text)
-            receipt = self.review(sc, upgrade("Make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
+            receipt = self.review(sc, upgrade("AI-Verse OS should make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
             self.assertEqual(receipt["effects"][0]["result"]["state"], "saved")
             note = "\n".join(p.read_text() for p in folder.rglob("mem-*.md"))
             self.assertIn("upgrade-note", note)
-            self.assertIn("Make the notes about what was saved shorter.", note)
+            self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", note)
             view = (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text()
             self.assertIn("Derived view", view)
-            self.assertIn("Make the notes about what was saved shorter.", view)
-            self.assertEqual(sc.cli("reflect", "list").returncode, 0)
+            self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", view)
+            turn = sc.turn()
+            self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
+            self.assertEqual(sc.cli("reflect", "list").returncode, 2)
         self.each(body, maintainer_feedback=True)
 
     def test_it_never_copies_another_projects_facts(self):
@@ -74,7 +76,7 @@ class MotherListTests(unittest.TestCase):
             add_development_project(sc)
             sc.prompt("AI-Verse OS should stop mixing things up, like the Beta Study numbers.")
             with self.assertRaises(Refused):
-                self.review(sc, upgrade("Stop mixing up the Beta Study numbers.", "AI-Verse OS should stop mixing things up"))
+                self.review(sc, upgrade("AI-Verse OS should stop mixing up the Beta Study notes.", "AI-Verse OS should stop mixing things up"))
         self.each(body, maintainer_feedback=True)
 
     def test_feedback_from_a_private_project_chat_carries_only_the_request(self):
@@ -82,7 +84,7 @@ class MotherListTests(unittest.TestCase):
             folder = add_development_project(sc)
             alpha = str(sc.root / "workspaces/alpha")
             sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.", cwd=alpha)
-            receipt = self.review(sc, upgrade("Make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
+            receipt = self.review(sc, upgrade("AI-Verse OS should make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
             self.assertEqual(receipt["effects"][0]["result"]["state"], "saved")
             self.assertEqual(len(list(folder.rglob("mem-*.md"))), 1)
             self.assertEqual(list((sc.root / "workspaces/alpha").rglob("mem-*.md")), [])
@@ -100,10 +102,22 @@ class MotherListTests(unittest.TestCase):
                 self.review(sc, ordinary)
         self.each(body, maintainer_feedback=True)
 
+    def test_uncertain_or_fact_carrying_text_is_refused(self):
+        def body(sc):
+            add_development_project(sc)
+            sc.prompt("AI-Verse OS should remember that the member count is 81 and the price is 289 dollars.")
+            for bad in ("AI-Verse OS should remember that the member count is 81 and the price is 289.",
+                        "Remember the member count and price for the community.",
+                        "AI-Verse OS should open https://example.com/private for me always.",
+                        "AI-Verse OS should email me at someone@example.com every day."):
+                with self.assertRaises(Refused):
+                    self.review(sc, upgrade(bad, "the member count is 81 and the price is 289 dollars"))
+        self.each(body, maintainer_feedback=True)
+
     def test_a_missing_development_project_is_skipped_quietly(self):
         def body(sc):
             sc.prompt("It would be better if AI-Verse OS told me what it saved in shorter notes.")
-            receipt = self.review(sc, upgrade("Make the notes shorter please.", "AI-Verse OS told me what it saved in shorter notes"))
+            receipt = self.review(sc, upgrade("AI-Verse OS should make the notes shorter please.", "AI-Verse OS told me what it saved in shorter notes"))
             self.assertEqual(receipt["effects"][0]["result"]["state"], "skipped")
         self.each(body, maintainer_feedback=True)
 

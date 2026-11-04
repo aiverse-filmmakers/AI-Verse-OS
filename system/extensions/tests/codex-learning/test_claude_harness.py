@@ -367,6 +367,90 @@ class ClaudeEventTests(ClaudeFixture):
             return {"scope": "operator", "current_context": "Context text. " * 600, "direction_owner": "brain"}
         raise Refused("unavailable")
 
+    RULE = "Never use dashes when communicating with me or writing content for me."
+    AVOID = "Avoid vague praise and filler openings."
+
+    def large_profile(self):
+        filler = lambda n, k: "\n".join(f"- {k} preference number {i} describes a detailed working habit." for i in range(n))
+        (self.root / "operator/profile/preferences.md").write_text(
+            "# Working Preferences\n\n## Durable writeback\n\n" + filler(10, "Writeback") +
+            "\n\n### Communication\n\n" + filler(8, "Voice") + "\n- " + self.RULE + " Use commas instead.\n" +
+            filler(25, "Tone") + "\n\n### Working style\n\n" + filler(40, "Style") +
+            "\n\n### Quality expectations\n\n" + filler(30, "Quality") +
+            "\n\n### Avoid\n\n- " + self.AVOID + "\n" + filler(10, "Avoid") + "\n")
+        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 60)
+        self.assertGreater(len((self.root / "operator/profile/preferences.md").read_bytes()), 7500)
+
+    def test_i_communication_rules_arrive_first_at_session_start_and_prompt_submit(self):
+        self.large_profile()
+        for limit in (6000, 14000):
+            self.set_config(context_max_bytes=limit)
+            with patch.object(Bridge, "owner", self.rich_owner):
+                start = self.bridge.hook(self.claude_event("SessionStart", source="startup"))
+                prompt = self.prompt("What goals and priorities matter?")
+            for result in (start, prompt):
+                text = result["hookSpecificOutput"]["additionalContext"]
+                self.assertIn(self.RULE, text, limit)
+                self.assertIn(self.AVOID, text, limit)
+                if "operator_profile" in text:
+                    self.assertLess(text.index("operator_key_preferences"), text.index("operator_profile"))
+                self.assertLessEqual(len(text.encode()), min(limit, 9000), limit)
+            turn = self.turn()
+            call = f"--harness claude review --session {self.session} --turn {turn['id']} --token {turn['token']}"
+            self.assertIn(call, prompt["hookSpecificOutput"]["additionalContext"])
+            json.loads(prompt["hookSpecificOutput"]["additionalContext"].split("Owner data (JSON):\n", 1)[1])
+
+    def test_j_codex_context_has_no_key_preference_block(self):
+        self.large_profile()
+        codex = Bridge(self.root)
+        with patch.object(Bridge, "owner", self.rich_owner):
+            text = codex.hook(self.event("UserPromptSubmit", turn_id="turn-1", prompt="Hello there friend"))[
+                "hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("operator_key_preferences", text)
+
+    def keys_at(self, prefs, limit=14000, event="prompt"):
+        (self.root / "operator/profile/preferences.md").write_text(prefs)
+        self.set_config(context_max_bytes=limit)
+        with patch.object(Bridge, "owner", self.rich_owner):
+            result = (self.prompt("What goals and priorities matter?") if event == "prompt" else
+                      self.bridge.hook(self.claude_event("SessionStart", source="startup")))
+        text = result["hookSpecificOutput"]["additionalContext"]
+        self.assertLessEqual(len(text.encode()), min(limit, 9000), limit)
+        return text, json.loads(text.split("Owner data (JSON):\n", 1)[1]).get("operator_key_preferences", {})
+
+    def test_k_full_preferences_survive_the_minimum_budgets_with_large_intent(self):
+        prefs = ("# Prefs\n\n### Communication\n\n- " + self.RULE + "\n- Keep answers short.\n\n"
+                 "### Working style\n\n- Style item.\n\n### Avoid\n\n- " + self.AVOID + "\n- Avoid jargon.\n")
+        for limit in (4096, 6000):
+            for event in ("prompt", "start"):
+                text, keys = self.keys_at(prefs, limit, event)
+                self.assertEqual(keys, {"communication": [self.RULE, "Keep answers short."],
+                                        "avoid": [self.AVOID, "Avoid jargon."]}, (limit, event))
+
+    def test_l_many_long_rules_do_not_push_out_later_rules_or_the_avoid_section(self):
+        rules = "\n".join(f"- Rule {i} must be followed: " + "x" * 190 for i in range(12))
+        prefs = f"### Communication\n\n{rules}\n- {self.RULE}\n\n### Avoid\n\n- {self.AVOID}\n"
+        for limit in (9000, 6000):
+            text, keys = self.keys_at(prefs, limit)
+            self.assertIn(self.RULE, keys["communication"], limit)
+            self.assertEqual(keys["avoid"], [self.AVOID], limit)
+
+    def test_m_long_items_are_kept_whole(self):
+        long_rule = ("Never do this thing. " + "Detail. " * 120).strip()
+        self.assertGreater(len(long_rule), 900)
+        text, keys = self.keys_at(f"### Communication\n\n- {long_rule}\n- {self.RULE}\n", 14000)
+        self.assertEqual(keys["communication"][0], long_rule)
+
+    def test_n_sections_are_labelled_and_nested_headings_stay_inside(self):
+        prefs = ("## Communication\n\n- Be brief.\n\n### Punctuation\n\n- " + self.RULE + "\n\n"
+                 "## Working style\n\n- Not a key rule.\n\n### Avoid\n\n- " + self.AVOID + "\n\n#### Detail\n\n- Avoid emoji.\n")
+        text, keys = self.keys_at(prefs)
+        self.assertEqual(keys, {"communication": ["Be brief.", self.RULE], "avoid": [self.AVOID, "Avoid emoji."]})
+        self.assertNotIn("Not a key rule.", keys["communication"])
+        text, keys = self.keys_at("## Communication\n\n### Avoid jargon\n\n- Be plain.\n\n## Style\n\n- Other.\n"
+                                  "\n## Avoid\n\n- " + self.AVOID + "\n")
+        self.assertEqual(keys, {"communication": ["Be plain."], "avoid": [self.AVOID]})
+
     def test_h_invalid_events_are_handled_without_a_crash(self):
         for bad in ({"hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},
                     {"session_id": "bad id!", "hook_event_name": "UserPromptSubmit", "cwd": str(self.root), "prompt": "x"},

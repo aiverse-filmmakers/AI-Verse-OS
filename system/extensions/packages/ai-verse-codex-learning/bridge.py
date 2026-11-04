@@ -241,6 +241,49 @@ def small_window(text, query, maximum=2200):
     return "\n".join(output) + "\n[Bounded excerpt; query the owner for further context.]"
 
 
+KEY_HEADING = re.compile(r"^(#{1,6})\s*(communication|avoid)\b", re.I)
+HARD_RULE = re.compile(r"\b(never|must|always|do not|don't|avoid)\b", re.I)
+
+
+def key_preferences(text, maximum=None):
+    """Communication rules and the avoid list as separate labelled fields.
+
+    A section runs until the next heading of the same or a higher level, so nested headings stay inside it.
+    Items are kept whole. With a maximum (serialized bytes), whole items are chosen: avoid items first,
+    then hard rules, then the rest, and the result keeps file order."""
+    items, level, label = [], 0, None
+    for line in text.splitlines():
+        heading = re.match(r"^(#{1,6})\s", line.strip())
+        if heading:
+            depth = len(heading.group(1))
+            if label and depth > level:
+                continue
+            match = KEY_HEADING.match(line.strip())
+            if match:
+                level, label = depth, match.group(2).casefold()
+            elif label and depth <= level:
+                level, label = 0, None
+        elif label and line.strip():
+            items.append((label, re.sub(r"^[-*]\s+", "", line.strip())))
+    if not items:
+        return {}
+    chosen = list(range(len(items)))
+    if maximum is not None:
+        order = sorted(chosen, key=lambda i: (items[i][0] != "avoid", not HARD_RULE.search(items[i][1]), i))
+        chosen = []
+        for index in order:
+            if len(json.dumps(render_key_items(items, chosen + [index]), ensure_ascii=False).encode()) <= maximum:
+                chosen.append(index)
+    return render_key_items(items, chosen)
+
+
+def render_key_items(items, chosen):
+    result = {}
+    for index in sorted(chosen):
+        result.setdefault(items[index][0], []).append(items[index][1])
+    return result
+
+
 def proof(text, maximum):
     salt = secrets.token_hex(16)
     words = tokens(text)
@@ -793,12 +836,17 @@ class Bridge:
         if scope.startswith("workspace:"):
             context["workspace"] = self.manifest(scope[10:])
         profile = {}
+        keys, prefs = {}, ""
         for name in ("identity.md", "preferences.md"):
             file = self.root / "operator/profile" / name
             if file.exists():
                 text = safe(file, self.root, file=True).read_text()
                 if not SECRET.search(text):
                     profile[name] = small_window(text, prompt)
+                    if self.harness == "claude" and name == "preferences.md" and key_preferences(text):
+                        prefs = text
+                        keys = {"operator_key_preferences": key_preferences(text)}
+        context = {**keys, **context}
         context["operator_profile"] = profile
         try:
             context["purpose_intent"] = self.owner("intent_context", {"scope": scope, "prompt": prompt[:4096]})
@@ -828,19 +876,24 @@ class Bridge:
             context["operator_profile"] = {name: small_window(value, prompt, 600) for name, value in profile.items()}
             encoded = json.dumps(context, ensure_ascii=False)
         if len((header + encoded).encode()) > limit:
-            context = {"scope": scope, "purpose_intent": context.get("purpose_intent", {}),
+            context = {"scope": scope, **keys, "purpose_intent": context.get("purpose_intent", {}),
                        "warnings": ["Context budget exceeded; query current/profile/Memory owners on demand."]}
             encoded = json.dumps(context, ensure_ascii=False)
         if self.harness == "claude" and len((header + encoded).encode()) > limit:
             # Final enforcement for Claude: shrink owner data first, then use the short instruction.
             warning = ["Context budget exceeded; query current/profile/Memory owners on demand."]
-            for header, context in (
-                    (header, {"scope": scope, "purpose_intent": {"status": "omitted", "query_required": True},
-                              "warnings": warning}),
-                    (self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n",
-                     {"scope": scope, "purpose_intent": context.get("purpose_intent", {}), "warnings": warning}),
-                    (self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n",
-                     {"scope": scope, "warnings": warning})):
+            short = self.short_instruction(state) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+            intent = context.get("purpose_intent", {})
+            full = {"operator_key_preferences": key_preferences(prefs)} if prefs else {}
+            options = [(header, {"scope": scope, **full, "purpose_intent": {"status": "omitted", "query_required": True},
+                                 "warnings": warning}),
+                       (short, {"scope": scope, **full, "purpose_intent": intent, "warnings": warning}),
+                       (short, {"scope": scope, **full, "warnings": warning})]
+            # The operator's own rules shrink last, by whole items, before being dropped.
+            options += [(short, {"scope": scope, "operator_key_preferences": key_preferences(prefs, size),
+                                 "warnings": warning}) for size in (3000, 2000, 1400, 900, 500, 250)] if prefs else []
+            options.append((short, {"scope": scope, "warnings": warning}))
+            for header, context in options:
                 encoded = json.dumps(context, ensure_ascii=False)
                 if len((header + encoded).encode()) <= limit:
                     break

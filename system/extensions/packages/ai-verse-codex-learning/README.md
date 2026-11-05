@@ -73,3 +73,24 @@ The same bridge serves Claude Code as a second adapter (`--harness claude`). `in
 - Each turn has its own destinations (the folder the chat runs in plus projects the operator named in his own words, including aliases from `WORKSPACE.yaml`). Nothing carries over to the next turn.
 - Configuration: `reflection_enabled` (default true), `reflect_min_entries` (5), `reflect_max_age_hours` (6), `maintainer_feedback` (default false, kept on reinstall).
 - Ordinary web chat apps (chatgpt.com, claude.ai) have no local helpers and are not covered.
+
+## Portable chat archive batch checkpoint (slice 1B draft)
+
+`ChatArchive.append_batch(events)` is the recommended interface for a
+synthetic complete session catch-up. Events must be the full ordered visible
+source sequence starting at 1. Under one writer lock it parses and validates
+the canonical archive exactly once, then compares the complete existing prefix
+with current source records before writing **only** the new suffix. A
+`BatchReceipt` reports the verified committed sequence and final source
+record position/hash. The receipt is not a persisted cursor or proof of source
+authorization; the canonical private JSONL is always rechecked after restart.
+A changed/truncated old record or conflict anywhere in the supplied batch
+refuses writes. Crash recovery uses the committed JSONL prefix, and an
+unterminated archive tail is repaired only when there is a validated suffix
+to append.
+
+The wire format remains `ai-verse.chat-archive/v1`, including exact field
+names, content checksums, original source byte offsets, one header, newline
+terminated messages, and the existing private scope directory layout.
+Single-event `append()` remains for compatibility. No new sidecar, consumer
+index, configuration switch, installation or host capture is introduced.

@@ -94,3 +94,62 @@ names, content checksums, original source byte offsets, one header, newline
 terminated messages, and the existing private scope directory layout.
 Single-event `append()` remains for compatibility. No new sidecar, consumer
 index, configuration switch, installation or host capture is introduced.
+
+## Portable visible-chat capture (slice 1C draft, disabled)
+
+This is experimental source archiving, not the existing learning review. No new
+hooks are installed by this draft. The Claude Code bridge may call
+`claude_capture.py` on its existing lifecycle events only if
+`capture_enabled` is set. The default is `false`. A second configuration
+flag, `capture_coverage_verified`, also defaults to `false`; an independent
+code-level host-admission gate remains **false** until a separately reviewed,
+version-specific pilot proves actual Claude Code coverage. Changing user
+configuration alone cannot override that gate.
+
+The capture reader uses only the callback's explicitly supplied `session_id`,
+`cwd` and `transcript_path`, never a home-directory search. It requires a
+matching source record session, verified physical transcript and directory
+identities, the current OS-bound session and workspace, the OS context owner,
+and its canonical `chat.archive.append` action-permission decision. An
+unfinished JSONL line remains pending, with no durable source cursor ahead of
+the private archive. Under the archive's writer lock, a single batch validates
+the complete canonical prefix once, rejects changed or missing old rows, and
+commits only the new suffix with a durable fsync. Restart/replay always derives
+the verified checkpoint from existing private JSONL, not a saved sidecar.
+Source evidence is transient and raw tools/reasoning
+are excluded by the fixture filter. Only one physically bound scope may be
+captured; ambiguous or mixed-scope turn histories are refused.
+
+**Historical privacy, draft fail-closed gate:** The present `cwd`, current
+workspace or current-turn permission cannot grant access to older events in
+an existing/resumed transcript. Before creating or writing an archive, every
+newline-terminated source record, including excluded tool/sidechain rows,
+must match an OS-owned `capture_scope_provenance` ledger with the original
+session ID, exact source path, immutable byte offset/end, raw record SHA-256
+and **scope attested when the record was first observed**. One missing,
+changed or differently scoped historical record blocks the entire snapshot
+with zero archive writes. Unfinished final lines stay provisional.
+
+No production at-record provenance issuer exists in slice 1C; the code NEVER
+creates an attestation by rereading old text or applying today's scope.
+An independent code-level `_HISTORY_PROVENANCE_ISSUER_ADMITTED = False`
+gate also prevents a retroactively fabricated session-state ledger from
+authorizing any source. It stays closed independently of the Claude host
+coverage gate. Thus existing or resumed transcripts remain refused even if
+capture flags were changed. Synthetic tests mock both gates and create a
+fixture-only ledger solely to exercise the verification contract. A future
+real issuer must be independently reviewed for at-time authenticity and
+historical scope binding before either gate may be admitted.
+
+**Unverified boundaries:** The 1A parser is a synthetic fixture contract, not
+proof of the host's visible UI, event ordering, prompt formatting or tool
+exclusions. The custom `capture_opt_out` flag is a fail-closed input but has
+not been verified as a native Claude Code private-session control. Credential
+recognition is heuristic and cannot establish that arbitrary visible text is
+secret-free. The new per-record historical-scope check blocks unproven
+history but does not itself issue or cryptographically authenticate the
+underlying OS provenance. No local or real host pilot, verified host version,
+reviewed consent/secret policy, cross-tool read,
+or member distribution approval has occurred. Filesystem identity checks
+reduce replacement races but do not constitute isolation against a privileged
+local adversary. Keep capture OFF for all members and installations.

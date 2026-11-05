@@ -261,6 +261,23 @@ class ArchiveFixtureTests(unittest.TestCase):
         self.scope_grants["workspace:film"] = True
         self.assertEqual(len(chat.read().messages), 1)
 
+    def test_revocation_during_read_never_releases_private_messages(self):
+        self.workspace("film")
+        chat = self.archive(scope="workspace:film")
+        chat.append(event(text="private workspace message"))
+        actual_scan = a._scan
+
+        def revoke_before_return(data, expected):
+            result = actual_scan(data, expected)
+            self.scope_grants["workspace:film"] = False
+            return result
+
+        with mock.patch.object(a, "_scan", side_effect=revoke_before_return):
+            with self.assertRaises(a.ArchiveBlocked):
+                chat.read()
+        self.scope_grants["workspace:film"] = True
+        self.assertEqual(len(chat.read().messages), 1)
+
     def test_manifest_change_after_open_denies_every_operation(self):
         self.workspace("film")
         chat = self.archive(scope="workspace:film")

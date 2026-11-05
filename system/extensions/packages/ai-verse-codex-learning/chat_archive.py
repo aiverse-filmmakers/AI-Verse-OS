@@ -318,8 +318,9 @@ class ChatArchive:
                 messages, torn, _, has_header = _scan(stream.read(), self.header)
         except OSError as exc:
             raise ArchiveBlocked("cannot read archive") from exc
-        if not has_header and torn == 0:
-            raise ArchiveBlocked("archive has no committed header")
+        if not has_header:
+            # A zero-byte file can be left behind by a failed initial write.
+            return ReadResult("partial", self.archive_id, (), torn)
         return ReadResult("partial" if torn else "saved", self.archive_id, messages, torn)
 
     def append(self, event: ArchiveEvent) -> AppendReceipt:
@@ -375,8 +376,7 @@ class ChatArchive:
                     pass
                 try:
                     messages, torn, boundary, has_header = _scan(data, self.header)
-                    if not has_header and not torn:
-                        raise ArchiveBlocked("archive has no committed header")
+                    # An empty file has no committed header and is recoverable.
                 except BaseException:
                     os.close(fd)
                     raise

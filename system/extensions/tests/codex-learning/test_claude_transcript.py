@@ -59,6 +59,7 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
         self.assertEqual([b.record_uuid for b in result.text_blocks], ["u1", "a1", "a1"])
         self.assertIsNone(result.trailing_partial)
         self.assertFalse(result.complete_unterminated_record)
+        self.assertEqual(result.resume_offset, len(data))
 
     def test_raw_tool_results_and_nonvisible_records_are_excluded(self):
         records = [
@@ -68,6 +69,7 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
                 {"type": "tool_result", "content": "RAW_TOOL"},
             ]),
             message("user", "Hidden tool response", toolUseResult={"stdout": "RAW_TOOL"}),
+            message("user", "Hidden tool response with null envelope", toolUseResult=None),
             message("assistant", [{"type": "thinking", "thinking": "SECRET_PRIVATE_REASONING"}]),
             message("assistant", [{"type": "tool_use", "name": "Read", "input": {"path": "/private"}}]),
             message("user", "META", isMeta=True),
@@ -96,6 +98,26 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
         )
         self.assertEqual(appended.text_blocks[0].byte_offset, 0)
         self.assertEqual(appended.text_blocks[1].byte_offset, len(first))
+        self.assertEqual(appended.resume_offset, len(first + first))
+
+    def test_utf8_byte_offsets_after_multibyte_records(self):
+        prefix = row(message("user", "👩‍🚀 café 中文\\n", uuid="unicode"), b"\r\n")
+        following = row(message("assistant", "follow-up", uuid="next"))
+        parsed = self.parse(prefix + following)
+        self.assertGreater(len(prefix), len(prefix.decode("utf-8")))
+        self.assertEqual(parsed.text_blocks[1].byte_offset, len(prefix))
+        self.assertEqual(parsed.text_blocks[1].line_number, 2)
+        self.assertEqual(parsed.resume_offset, len(prefix + following))
+
+    def test_identical_text_blocks_in_one_record_remain_distinct(self):
+        parsed = self.parse(row(message("assistant", [
+            {"type": "text", "text": "repeat"},
+            {"type": "thinking", "thinking": "SECRET"},
+            {"type": "text", "text": "repeat"},
+        ])))
+        self.assertEqual([block.text for block in parsed.text_blocks], ["repeat", "repeat"])
+        self.assertEqual([block.block_index for block in parsed.text_blocks], [0, 2])
+        self.assertNotEqual(parsed.text_blocks[0].source_identity, parsed.text_blocks[1].source_identity)
 
     def test_partial_trailing_json_is_reported_not_emitted_and_recovers_after_append(self):
         complete = row(message("user", "Before"))
@@ -107,11 +129,13 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
         self.assertEqual(len(partial.trailing_partial.sha256), 64)
         self.assertFalse(hasattr(partial.trailing_partial, "raw"))
         self.assertFalse(partial.complete_unterminated_record)
+        self.assertEqual(partial.resume_offset, len(complete))
 
         restored = self.parse(complete + pending + row(message("assistant", "After"))[-4:])
         self.assertEqual([block.text for block in restored.text_blocks], ["Before", "After"])
         self.assertIsNone(restored.trailing_partial)
         self.assertEqual(partial.text_blocks[0].source_identity, restored.text_blocks[0].source_identity)
+        self.assertEqual(restored.resume_offset, len(complete + pending + row(message("assistant", "After"))[-4:]))
 
     def test_complete_json_without_terminal_newline_is_included_and_flagged(self):
         data = row(message("assistant", "No newline"), b"")
@@ -119,6 +143,11 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
         self.assertEqual([b.text for b in result.text_blocks], ["No newline"])
         self.assertTrue(result.complete_unterminated_record)
         self.assertIsNone(result.trailing_partial)
+        # A valid but unterminated final record is provisional for checkpointing.
+        self.assertEqual(result.resume_offset, 0)
+        appended_newline = self.parse(data + b"\n")
+        self.assertEqual(appended_newline.text_blocks[0].source_identity, result.text_blocks[0].source_identity)
+        self.assertEqual(appended_newline.resume_offset, len(data) + 1)
 
     def test_invalid_complete_line_fails_closed_without_echoing_source(self):
         invalid = b'{"type":"user","private":"DO_NOT_ECHO",}\n'
@@ -132,6 +161,7 @@ class ClaudeJsonlFixtureTests(unittest.TestCase):
         result = self.parse(row(message("user", "Good")) + broken_tail)
         self.assertEqual(len(result.text_blocks), 1)
         self.assertEqual(result.trailing_partial.byte_length, len(broken_tail))
+        self.assertEqual(result.resume_offset, len(row(message("user", "Good"))))
         with self.assertRaises(module.TranscriptFormatError):
             self.parse(broken_tail + b"\n")
 

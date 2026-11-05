@@ -518,6 +518,31 @@ class ArchiveFixtureTests(unittest.TestCase):
         self.assertEqual(len(restored.read().messages), 3)
         self.assertEqual(restored.append_batch(events).replayed, 3)
 
+    def test_batch_partial_write_commits_only_complete_prefix_after_restart(self):
+        original = self.archive()
+        events = self._batch_events(3)
+
+        def interrupted_batch(fd, data):
+            # Preserve the header and two complete message lines, followed
+            # by only part of the third. No fsync acknowledgement occurs.
+            boundaries = [i for i, byte in enumerate(data) if byte == 10]
+            self.assertGreaterEqual(len(boundaries), 4)
+            os.write(fd, data[:boundaries[2] + 14])
+            raise OSError("synthetic interrupted batch write")
+
+        with mock.patch.object(a, "_write_all", side_effect=interrupted_batch):
+            with self.assertRaises(a.ArchiveBlocked):
+                original.append_batch(events)
+        restored = self.archive()
+        partial = restored.read()
+        self.assertEqual(partial.status, "partial")
+        self.assertEqual(len(partial.messages), 2)
+        reply = restored.append_batch(events)
+        self.assertEqual((reply.saved, reply.replayed), (1, 2))
+        self.assertTrue(reply.recovered_torn_tail)
+        self.assertEqual([row["sequence"] for row in restored.read().messages],
+                         [1, 2, 3])
+
     def test_batch_lost_fsync_ack_replays_exactly_after_new_instance(self):
         archive = self.archive()
         events = self._batch_events(3)

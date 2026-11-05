@@ -29,10 +29,13 @@ def digest(data=b"source-jsonl-complete-with-newline\n"):
 
 def event(event_id="u-1", *, sequence=1, offset=0, end=100,
           text="  Hello 👩‍🚀\n\ttail  ", message_id="m-1", terminated=True,
-          source_hash=None, block_index=0, **extra):
+          raw=None, block_index=0, **extra):
+    # Default source bytes are synthetic fixtures with a terminating newline.
+    raw = raw if raw is not None else b"x" * (end - offset - 1) + b"\n"
     return a.ArchiveEvent(
         source_event_id=event_id, source_byte_offset=offset,
-        source_end_offset=end, source_record_sha256=source_hash or digest(),
+        source_end_offset=end, source_record_sha256=digest(raw),
+        source_record_bytes=raw,
         block_index=block_index, message_id=message_id, sequence=sequence,
         role="user" if sequence == 1 else "assistant", text=text,
         record_terminated=terminated, **extra,
@@ -129,14 +132,15 @@ class ArchiveFixtureTests(unittest.TestCase):
 
     def test_changed_payload_same_immutable_event_id_fails_closed(self):
         chat = self.archive()
-        first = event(source_hash=digest(b"record v1\n"))
+        original_bytes = b"record v1\n"
+        first = event(end=len(original_bytes), raw=original_bytes)
         chat.append(first)
         alterations = [
-            event(text="new text", source_hash=first.source_record_sha256),
-            event(source_hash=digest(b"record v2\n")),
-            event(offset=1),
-            event(end=101),
-            event(message_id="changed"),
+            event(end=len(original_bytes), raw=original_bytes, text="new text"),
+            event(end=len(original_bytes), raw=b"record v2\n"),
+            event(offset=1, end=1 + len(original_bytes), raw=original_bytes),
+            event(end=len(b"record v1!\n"), raw=b"record v1!\n"),
+            event(end=len(original_bytes), raw=original_bytes, message_id="changed"),
         ]
         for changed in alterations:
             with self.subTest(changed=changed), self.assertRaises(a.ArchiveConflict):
@@ -150,10 +154,10 @@ class ArchiveFixtureTests(unittest.TestCase):
         row_one = '{"type":"user","message":{"content":"🌍 中文"}}\n'.encode("utf-8")
         self.assertGreater(len(row_one), len(row_one.decode("utf-8")))
         first = event("record-1:block:0", offset=0, end=len(row_one),
-                      source_hash=digest(row_one))
+                      raw=row_one)
         second_row = '{"type":"assistant","message":{"content":"a"}}\n'.encode("utf-8")
         second = event("record-2:block:0", sequence=2, offset=len(row_one),
-                       end=len(row_one) + len(second_row), source_hash=digest(second_row),
+                       end=len(row_one) + len(second_row), raw=second_row,
                        text="a", message_id="m-2")
         chat.append(first)
         resumed = self.archive()
@@ -166,11 +170,31 @@ class ArchiveFixtureTests(unittest.TestCase):
                          len(row_one) + len(second_row))
         self.assertEqual(chat.append(first).status, "replayed")
 
+    def test_missing_or_conflicting_raw_source_proof_blocks_commit(self):
+        chat = self.archive()
+        # The raw source bytes are checked against the *absolute* byte span.
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.append(event(raw=b"short\n", end=100))
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.append(a.ArchiveEvent(
+                source_event_id="u-1", source_byte_offset=0, source_end_offset=5,
+                source_record_sha256=digest(b"other"), source_record_bytes=b"good\n",
+                block_index=0, message_id="m-1", sequence=1, role="user",
+                text="visible", record_terminated=True,
+            ))
+        self.assertFalse(self.path(chat).exists())
+
     def test_incomplete_source_record_is_pending_without_even_creating_archive(self):
         chat = self.archive()
         pending = event(terminated=False)
         result = chat.append(pending)
         self.assertEqual(result.status, "pending")
+        self.assertFalse(self.path(chat).exists())
+        # A valid JSON value without its newline is provisional even if a
+        # future adapter incorrectly claims it is already terminated.
+        provisional_bytes = b'{"type":"user","message":{"content":"hello"}}'
+        no_newline = event(raw=provisional_bytes, end=len(provisional_bytes))
+        self.assertEqual(chat.append(no_newline).status, "pending")
         self.assertFalse(self.path(chat).exists())
         committed = event()
         self.assertEqual(chat.append(committed).status, "saved")
@@ -279,7 +303,7 @@ class ArchiveFixtureTests(unittest.TestCase):
             chat.append(event("third", sequence=3, offset=105, end=120))
         with self.assertRaises(a.ArchiveConflict):
             chat.append(event("same-offset-changed", sequence=2,
-                              offset=0, end=100, source_hash=digest(b"another record\n")))
+                              offset=0, end=100, raw=b"y" * 99 + b"\n"))
         with self.assertRaises(a.ArchiveBlocked):
             chat.append(event("backwards", sequence=2, offset=0, end=100))
         self.assertEqual(len(chat.read().messages), 1)

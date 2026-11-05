@@ -13,7 +13,7 @@ import contextlib
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import stat
@@ -41,7 +41,8 @@ class ArchiveEvent:
     source_event_id: str
     source_byte_offset: int           # Absolute byte offset, never relative to a resumed chunk.
     source_end_offset: int            # Exclusive end AFTER a completed source JSONL newline.
-    source_record_sha256: str         # Integrity of the original complete source record.
+    source_record_sha256: str         # SHA-256 of raw source record INCLUDING newline.
+    source_record_bytes: bytes = field(repr=False)  # Transient verification only; never persisted.
     block_index: int
     message_id: str
     sequence: int                     # Monotone per-chat sequence, starting at 1.
@@ -242,6 +243,7 @@ def _scan(data: bytes, expected: dict) -> tuple:
         raise ArchiveBlocked("archive scope or identity does not match")
     by_event = {}
     by_offset = {}
+    by_block = set()
     messages = []
     for line in lines[1:]:
         record = _strict_json(line)
@@ -256,6 +258,10 @@ def _scan(data: bytes, expected: dict) -> tuple:
             raise ArchiveBlocked("duplicate immutable source event ID in archive")
         by_event[event_id] = record
         origin_position = record["source_byte_offset"]
+        block_position = (origin_position, record["block_index"])
+        if block_position in by_block:
+            raise ArchiveBlocked("duplicate block at the same source byte position")
+        by_block.add(block_position)
         fingerprint = record["source_record_sha256"]
         if origin_position in by_offset and by_offset[origin_position] != fingerprint:
             raise ArchiveBlocked("conflicting source record bytes at the same offset")
@@ -335,11 +341,18 @@ class ChatArchive:
             raise ArchiveBlocked("invalid source completion or sequence")
         if not isinstance(event.record_terminated, bool):
             raise ArchiveBlocked("source termination must be explicit")
-        if not event.record_terminated:
+        if not isinstance(event.source_record_bytes, bytes):
+            raise ArchiveBlocked("source record evidence must be bytes")
+        # A provisional JSON value may be parseable without a newline. It is
+        # still uncommitted and cannot advance the source checkpoint.
+        if not event.record_terminated or not event.source_record_bytes.endswith(b"\n"):
             return AppendReceipt("pending", self.archive_id, event.source_event_id)
+        if len(event.source_record_bytes) != event.source_end_offset - event.source_byte_offset:
+            raise ArchiveBlocked("source end offset does not match UTF-8 byte evidence")
         if (not isinstance(event.source_record_sha256, str)
-                or not SHA.fullmatch(event.source_record_sha256)):
-            raise ArchiveBlocked("complete source record requires SHA-256")
+                or not SHA.fullmatch(event.source_record_sha256)
+                or event.source_record_sha256 != _sha256(event.source_record_bytes)):
+            raise ArchiveBlocked("source record SHA-256 does not match bytes")
         if event.role not in ("user", "assistant") or not isinstance(event.text, str):
             raise ArchiveBlocked("only visible user/assistant text can be archived")
         if event.attachment_availability not in ATTACHMENTS:
@@ -402,6 +415,8 @@ class ChatArchive:
                     for item in same_origin
                 ):
                     raise ArchiveConflict("source record changed at its original byte offset")
+                if any(item["block_index"] == event.block_index for item in same_origin):
+                    raise ArchiveConflict("distinct events cannot reuse the same source block")
                 if messages and event.source_byte_offset < messages[-1]["source_byte_offset"]:
                     raise ArchiveBlocked("source offsets are out of order")
                 if torn:

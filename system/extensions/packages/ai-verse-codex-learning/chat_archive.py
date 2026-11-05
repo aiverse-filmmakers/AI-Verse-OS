@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import stat
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 SCHEMA = "ai-verse.chat-archive/v1"
 STORE_PARTS = ("archives", "private-chat-history", "v1")
@@ -119,6 +119,16 @@ def _no_symlink(path: Path, *, kind: str) -> None:
         raise ArchiveBlocked("archive path is not a directory")
     if kind == "file" and not stat.S_ISREG(info.st_mode):
         raise ArchiveBlocked("archive path is not a regular file")
+
+
+def _check_path_ancestors(path: Path) -> None:
+    """Refuse symlink components from the filesystem root to the selected OS."""
+    cursor = path.absolute()
+    while True:
+        _no_symlink(cursor, kind="directory")
+        if cursor == cursor.parent:
+            break
+        cursor = cursor.parent
 
 
 def _private_dir(root: Path, parts: Tuple[str, ...], *, create: bool) -> Optional[Path]:
@@ -274,29 +284,14 @@ class ChatArchive:
     """One authorized chat, scoped to one OS folder, without any provider IO."""
 
     def __init__(self, os_root: Path, *, scope: str, authorized_scope: str,
-                 archive_id: str, chat_id: str, origin: str, session_id: str):
+                 archive_id: str, chat_id: str, origin: str, session_id: str,
+                 authorization_check: Callable[[str], bool]):
         self.root = Path(os_root).absolute()
-        _no_symlink(self.root, kind="directory")
-        marker = self.root / "AI-VERSE.yaml"
-        _no_symlink(marker, kind="file")
         if not SCOPE.fullmatch(scope) or scope != authorized_scope:
             raise ArchiveBlocked("caller is not bound to the requested scope")
-        if scope.startswith("workspace:"):
-            ws = scope.partition(":")[2]
-            workspace_root = self.root / "workspaces"
-            _no_symlink(workspace_root, kind="directory")
-            workspace_dir = workspace_root / ws
-            _no_symlink(workspace_dir, kind="directory")
-            manifest = workspace_dir / "WORKSPACE.yaml"
-            _no_symlink(manifest, kind="file")
-            # This is only a narrow binding check, not a general YAML parser.
-            ids = []
-            for line in manifest.read_text(encoding="utf-8").splitlines():
-                match = re.fullmatch(r"id:\s*['\"]?([a-z0-9][a-z0-9-]{0,127})['\"]?\s*(?:#.*)?", line)
-                if match:
-                    ids.append(match.group(1))
-            if ids != [ws]:
-                raise ArchiveBlocked("workspace manifest ID does not match scope")
+        if not callable(authorization_check):
+            raise ArchiveBlocked("live scope authorization checker is required")
+        self.authorization_check = authorization_check
         self.scope = scope
         self.archive_id = _assert_id(archive_id, "archive ID")
         self.origin = _assert_id(origin, "origin")
@@ -310,11 +305,45 @@ class ChatArchive:
             "scope": scope,
         }
 
+    def _check_authorization(self) -> None:
+        # The caller supplies an OS-authoritative live checker, not a static
+        # constructor approval. No provider or private OS state is discovered.
+        # The host must bind this checker to its authenticated session.
+        _check_path_ancestors(self.root)
+        _no_symlink(self.root / "AI-VERSE.yaml", kind="file")
+        try:
+            authorized = self.authorization_check(self.scope) is True
+        except Exception:
+            authorized = False
+        if not authorized:
+            raise ArchiveBlocked("current scope authorization denied")
+        if self.scope.startswith("workspace:"):
+            ws = self.scope.partition(":")[2]
+            workspace_root = self.root / "workspaces"
+            _no_symlink(workspace_root, kind="directory")
+            workspace_dir = workspace_root / ws
+            _no_symlink(workspace_dir, kind="directory")
+            manifest = workspace_dir / "WORKSPACE.yaml"
+            _no_symlink(manifest, kind="file")
+            ids = []
+            try:
+                for line in manifest.read_text(encoding="utf-8").splitlines():
+                    match = re.fullmatch(
+                        r"id:\s*['\"]?([a-z0-9][a-z0-9-]{0,127})['\"]?\s*(?:#.*)?", line
+                    )
+                    if match:
+                        ids.append(match.group(1))
+            except (OSError, UnicodeError):
+                raise ArchiveBlocked("workspace manifest is unreadable") from None
+            if ids != [ws]:
+                raise ArchiveBlocked("current workspace manifest ID does not match scope")
+
     def _path(self, *, create: bool) -> Optional[Path]:
         folder = _private_dir(self.root, self.parts, create=create)
         return None if folder is None else folder / (self.archive_id + ".jsonl")
 
     def read(self) -> ReadResult:
+        self._check_authorization()
         path = self._path(create=False)
         if path is None or (not path.exists() and not path.is_symlink()):
             return ReadResult("missing", self.archive_id, ())
@@ -330,6 +359,7 @@ class ChatArchive:
         return ReadResult("partial" if torn else "saved", self.archive_id, messages, torn)
 
     def append(self, event: ArchiveEvent) -> AppendReceipt:
+        self._check_authorization()
         if not isinstance(event, ArchiveEvent):
             raise ArchiveBlocked("expected a normalized ArchiveEvent")
         _assert_id(event.source_event_id, "source event ID")
@@ -379,6 +409,9 @@ class ChatArchive:
         payload["archive_record_sha256"] = _sha256(_json_bytes(payload))
         path = self._path(create=True)
         with _writer_lock(path.with_suffix(".lock")):
+            # A queued writer cannot use stale authorization after waiting
+            # for another writer. Recheck before any bytes are changed.
+            self._check_authorization()
             if path.exists() or path.is_symlink():
                 fd = _regular_open(path, os.O_RDWR)
                 try:

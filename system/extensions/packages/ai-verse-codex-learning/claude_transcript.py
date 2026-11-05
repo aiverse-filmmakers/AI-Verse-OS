@@ -51,6 +51,7 @@ class ParseResult:
     text_blocks: Tuple[VisibleTextBlock, ...]
     trailing_partial: Optional[PartialTrailingRecord]
     complete_unterminated_record: bool
+    resume_offset: int
 
 
 def _visible_blocks(record: object) -> Tuple[Tuple[int, str], ...]:
@@ -65,7 +66,7 @@ def _visible_blocks(record: object) -> Tuple[Tuple[int, str], ...]:
         return ()
     # Claude may encode tool results as a user-role message. Never classify
     # such records as a human user message, even if mixed with text blocks.
-    if record.get("toolUseResult") is not None:
+    if "toolUseResult" in record:
         return ()
 
     message = record.get("message")
@@ -103,6 +104,9 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
     trailing_partial without emitting that record. A valid final JSON record
     without a newline is included and flagged as complete_unterminated_record.
     A later append must supply a newline before the next JSON record.
+    resume_offset is the byte boundary after the last newline-terminated
+    record. It never advances beyond an incomplete or unterminated final line,
+    even when the last JSON value was parseable and tentatively emitted.
     """
     if not isinstance(data, bytes):
         raise TypeError("data must be bytes")
@@ -114,6 +118,7 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
     line_number = 1
     trailing_partial = None
     complete_unterminated_record = False
+    resume_offset = 0
     while cursor < len(data):
         newline = data.find(b"\n", cursor)
         terminated = newline != -1
@@ -122,6 +127,8 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
         if terminated and raw.endswith(b"\r"):
             raw = raw[:-1]
         if not raw.strip():
+            if terminated:
+                resume_offset = end
             cursor = end
             line_number += 1
             continue
@@ -138,7 +145,7 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
                 break
             raise TranscriptFormatError(
                 f"invalid newline-terminated JSONL at line {line_number}, byte {cursor}"
-            ) from exc
+            ) from None
 
         if not terminated:
             complete_unterminated_record = True
@@ -164,6 +171,8 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
                 session_id=session_id,
                 record_uuid=record_uuid,
             ))
+        if terminated:
+            resume_offset = end
         cursor = end
         line_number += 1
 
@@ -171,4 +180,5 @@ def parse_claude_jsonl(data: bytes, *, source_id: str) -> ParseResult:
         text_blocks=tuple(output),
         trailing_partial=trailing_partial,
         complete_unterminated_record=complete_unterminated_record,
+        resume_offset=resume_offset,
     )

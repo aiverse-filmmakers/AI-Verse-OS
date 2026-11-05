@@ -355,6 +355,9 @@ class ChatArchive:
                 messages, torn, _, has_header = _scan(stream.read(), self.header)
         except OSError as exc:
             raise ArchiveBlocked("cannot read archive") from exc
+        # Recheck after reading and before returning any private content.
+        # This closes the ordinary revoke-during-read window.
+        self._check_authorization()
         if not has_header:
             # A zero-byte file can be left behind by a failed initial write.
             return ReadResult("partial", self.archive_id, (), torn)

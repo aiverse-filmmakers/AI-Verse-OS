@@ -48,6 +48,7 @@ class ArchiveFixtureTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / "os"
         self.root.mkdir()
+        self.scope_grants = {}
         (self.root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n", encoding="utf-8")
 
     def workspace(self, name="film", *, manifest_id=None):
@@ -65,6 +66,7 @@ class ArchiveFixtureTests(unittest.TestCase):
             authorized_scope=authorized or scope,
             archive_id=archive_id, chat_id=chat_id,
             origin=origin, session_id=session_id,
+            authorization_check=lambda selected: self.scope_grants.get(selected, True),
         )
 
     def path(self, archive):
@@ -244,6 +246,104 @@ class ArchiveFixtureTests(unittest.TestCase):
         operator = self.archive()
         self.assertEqual(operator.read().status, "missing")
         self.assertEqual(len(film.read().messages), 1)
+
+    def test_authorization_revocation_checked_on_every_read_and_append(self):
+        self.workspace("film")
+        chat = self.archive(scope="workspace:film")
+        chat.append(event())
+        self.assertEqual(chat.read().status, "saved")
+        # Existing archive objects must not retain an old permit.
+        self.scope_grants["workspace:film"] = False
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.read()
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.append(event("second", sequence=2, offset=100, end=200))
+        self.scope_grants["workspace:film"] = True
+        self.assertEqual(len(chat.read().messages), 1)
+
+    def test_manifest_change_after_open_denies_every_operation(self):
+        self.workspace("film")
+        chat = self.archive(scope="workspace:film")
+        chat.append(event())
+        (self.root / "workspaces" / "film" / "WORKSPACE.yaml").write_text(
+            "id: 'other'\n", encoding="utf-8"
+        )
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.read()
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.append(event("second", sequence=2, offset=100, end=200))
+
+    def test_os_parent_symlink_is_refused_even_if_root_is_real(self):
+        outer = Path(self.tmp.name) / "shadow-parent"
+        outer.mkdir()
+        safe_root = outer / "os"
+        shutil.copytree(self.root, safe_root)
+        alias = Path(self.tmp.name) / "shadow-alias"
+        try:
+            alias.symlink_to(outer, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink support unavailable")
+        with self.assertRaises(a.ArchiveBlocked):
+            self.archive(root=alias / "os").read()
+
+    def test_private_permissions_rechecked_on_existing_archive(self):
+        if os.name == "nt":
+            self.skipTest("POSIX mode validation fixture")
+        chat = self.archive()
+        chat.append(event())
+        path = self.path(chat)
+        os.chmod(path, 0o644)
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.read()
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.append(event("second", sequence=2, offset=100, end=200))
+        os.chmod(path, 0o600)
+        os.chmod(path.parent, 0o755)
+        with self.assertRaises(a.ArchiveBlocked):
+            chat.read()
+
+    def test_ack_lost_after_complete_append_replays_without_duplicates(self):
+        chat = self.archive()
+        first = event()
+        actual_fsync = a.os.fsync
+        seen = [0]
+
+        def fail_after_write(fd):
+            seen[0] += 1
+            if seen[0] == 1:
+                raise OSError("synthetic crash before durable acknowledgement")
+            return actual_fsync(fd)
+
+        with mock.patch.object(a.os, "fsync", side_effect=fail_after_write):
+            with self.assertRaises(a.ArchiveBlocked):
+                chat.append(first)
+        # Bytes may have reached durable storage despite lost acknowledgement.
+        # Never use a separate checkpoint that skips/duplicates this event.
+        self.assertEqual(chat.read().status, "saved")
+        self.assertEqual(chat.append(first).status, "replayed")
+        self.assertEqual([m["source_event_id"] for m in chat.read().messages], ["u-1"])
+        self.assertEqual(chat.append(event("second", sequence=2, offset=100, end=200)).status,
+                         "saved")
+
+    def test_partial_payload_write_recovers_then_replays_committed_only(self):
+        chat = self.archive()
+        first = event()
+        chat.append(first)
+        real_write = a._write_all
+
+        def partial_then_fail(fd, data):
+            a.os.write(fd, data[:9])
+            raise OSError("synthetic interrupted data write")
+
+        with mock.patch.object(a, "_write_all", side_effect=partial_then_fail):
+            with self.assertRaises(a.ArchiveBlocked):
+                chat.append(event("second", sequence=2, offset=100, end=200))
+        self.assertEqual(chat.read().status, "partial")
+        self.assertEqual(len(chat.read().messages), 1)
+        self.assertEqual(chat.append(first).status, "replayed")
+        # Re-ingestion uses the same immutable event and truncates the tail.
+        self.assertTrue(chat.append(event("second", sequence=2, offset=100, end=200)).recovered_torn_tail)
+        self.assertEqual(len(chat.read().messages), 2)
 
     def test_copy_two_workspace_chat_archives_never_cross_visibility(self):
         self.workspace("film")

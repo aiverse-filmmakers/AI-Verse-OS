@@ -71,6 +71,76 @@ class ReadResult:
     torn_tail_bytes: int = 0
 
 
+MAX_BATCH_EVENTS = 25_000
+
+
+@dataclass(frozen=True)
+class BatchReceipt:
+    """A durable checkpoint derived only from verified canonical archive rows.
+
+    The receipt is informational. On restart the archive, never this receipt,
+    determines the committed prefix and replay decision.
+    """
+    status: str
+    archive_id: str
+    saved: int
+    replayed: int
+    checkpoint_sequence: int
+    checkpoint_source_end_offset: int
+    checkpoint_source_record_sha256: str
+    recovered_torn_tail: bool = False
+
+
+def _batch_payload(event: ArchiveEvent) -> dict:
+    """Build the SAME v1 wire record as append(), with complete raw-source proof."""
+    if not isinstance(event, ArchiveEvent):
+        raise ArchiveBlocked("expected a normalized ArchiveEvent")
+    _assert_id(event.source_event_id, "source event ID")
+    _assert_id(event.message_id, "message ID")
+    for value in (event.source_byte_offset, event.source_end_offset,
+                  event.block_index, event.sequence):
+        if type(value) is not int or value < 0:
+            raise ArchiveBlocked("invalid source coordinate")
+    if event.sequence < 1 or event.source_end_offset <= event.source_byte_offset:
+        raise ArchiveBlocked("invalid source completion or sequence")
+    if event.record_terminated is not True or type(event.source_record_bytes) is not bytes:
+        raise ArchiveBlocked("batch contains incomplete source evidence")
+    if not event.source_record_bytes.endswith(b"\n"):
+        raise ArchiveBlocked("batch contains unterminated source record")
+    if len(event.source_record_bytes) != event.source_end_offset - event.source_byte_offset:
+        raise ArchiveBlocked("source byte span does not match evidence")
+    if (not isinstance(event.source_record_sha256, str)
+            or not SHA.fullmatch(event.source_record_sha256)
+            or event.source_record_sha256 != _sha256(event.source_record_bytes)):
+        raise ArchiveBlocked("source record digest does not match bytes")
+    if not isinstance(event.role, str) or event.role not in ("user", "assistant"):
+        raise ArchiveBlocked("only visible user/assistant text can be archived")
+    if not isinstance(event.text, str):
+        raise ArchiveBlocked("source text must be verbatim string")
+    if (not isinstance(event.attachment_availability, str)
+            or event.attachment_availability not in ATTACHMENTS):
+        raise ArchiveBlocked("invalid attachment availability")
+    for key in OPTIONAL:
+        value = getattr(event, key)
+        if value is not None and (not isinstance(value, str) or len(value) > 256):
+            raise ArchiveBlocked("invalid metadata")
+    payload = {
+        "kind": "message", "schema": SCHEMA,
+        "archive_id": None, "scope": None, "origin": None, "session_id": None,
+        "source_event_id": event.source_event_id,
+        "source_byte_offset": event.source_byte_offset,
+        "source_end_offset": event.source_end_offset,
+        "source_record_sha256": event.source_record_sha256,
+        "block_index": event.block_index, "message_id": event.message_id,
+        "sequence": event.sequence, "role": event.role, "text": event.text,
+        "attachment_availability": event.attachment_availability,
+        "text_sha256": _sha256(event.text.encode("utf-8")),
+        "timestamp": event.timestamp, "revision": event.revision,
+        "branch": event.branch,
+    }
+    return payload
+
+
 def _assert_id(value: str, name: str) -> str:
     if not isinstance(value, str) or not ID.fullmatch(value):
         raise ArchiveBlocked(f"invalid {name}")
@@ -362,6 +432,112 @@ class ChatArchive:
             # A zero-byte file can be left behind by a failed initial write.
             return ReadResult("partial", self.archive_id, (), torn)
         return ReadResult("partial" if torn else "saved", self.archive_id, messages, torn)
+
+    def append_batch(self, events) -> BatchReceipt:
+        """Verify the complete source prefix once, then durably append its suffix.
+
+        A fresh invocation (including a restart) derives its checkpoint from
+        the canonical JSONL itself, not a client cursor or sidecar. All rows
+        are checked before any new rows are written. This turns catch-up from
+        repeated quadratic full-file scans into one linear scan and fsync per
+        callback. The archive remains byte-compatible v1 JSONL.
+        """
+        self._check_authorization()
+        if not isinstance(events, (tuple, list)) or len(events) > MAX_BATCH_EVENTS:
+            raise ArchiveBlocked("invalid or oversized batch")
+        payloads = []
+        event_ids = set()
+        seen_blocks = set()
+        by_offset = {}
+        previous_offset = -1
+        for sequence, event in enumerate(events, 1):
+            payload = _batch_payload(event)
+            payload.update({
+                "archive_id": self.archive_id, "scope": self.scope,
+                "origin": self.origin, "session_id": self.session_id,
+            })
+            payload["archive_record_sha256"] = _sha256(_json_bytes(payload))
+            _validate_record(payload)
+            if payload["sequence"] != sequence:
+                raise ArchiveBlocked("batch source sequence is not continuous from one")
+            event_id = payload["source_event_id"]
+            if event_id in event_ids:
+                raise ArchiveConflict("batch duplicates immutable source event ID")
+            event_ids.add(event_id)
+            offset = payload["source_byte_offset"]
+            block = (offset, payload["block_index"])
+            if block in seen_blocks:
+                raise ArchiveConflict("batch reuses source record block")
+            seen_blocks.add(block)
+            fingerprint = payload["source_record_sha256"]
+            if offset in by_offset and by_offset[offset] != fingerprint:
+                raise ArchiveConflict("batch changes source record at same position")
+            by_offset[offset] = fingerprint
+            if offset < previous_offset:
+                raise ArchiveBlocked("batch source offsets move backwards")
+            previous_offset = offset
+            payloads.append(payload)
+
+        if not payloads:
+            # A zero-message catch-up must not create an empty archive.
+            # If the archive exists, however, it must not silently lose history.
+            path = self._path(create=False)
+            if path is None or (not path.exists() and not path.is_symlink()):
+                return BatchReceipt("saved", self.archive_id, 0, 0, 0, 0, "")
+        path = self._path(create=True)
+        with _writer_lock(path.with_suffix(".lock")):
+            self._check_authorization()
+            if path.exists() or path.is_symlink():
+                fd = _regular_open(path, os.O_RDWR)
+                try:
+                    with os.fdopen(fd, "rb", closefd=False) as stream:
+                        messages, torn, boundary, has_header = _scan(
+                            stream.read(), self.header
+                        )
+                except BaseException:
+                    os.close(fd)
+                    raise
+            else:
+                fd = _regular_open(path, os.O_RDWR, create=True)
+                messages, torn, boundary, has_header = (), 0, 0, False
+            try:
+                # This is a *verified* prefix checkpoint. Compare complete
+                # rows, not just the last offset, because any earlier source
+                # mutation must fail even when the tail looks unchanged.
+                if len(messages) > len(payloads):
+                    raise ArchiveBlocked("source replay omits committed history")
+                for index, committed in enumerate(messages):
+                    if committed != payloads[index]:
+                        raise ArchiveConflict("source replay changed committed history")
+                count = len(messages)
+                new_records = payloads[count:]
+                recovered = False
+                if new_records:
+                    # A validation conflict anywhere in the new suffix was
+                    # refused above, before the first write or tail recovery.
+                    self._check_authorization()
+                    if torn:
+                        os.ftruncate(fd, boundary)
+                        os.fsync(fd)
+                        recovered = True
+                    os.lseek(fd, 0, os.SEEK_END)
+                    wire = (b"" if has_header else _json_bytes(self.header) + b"\n")
+                    wire += b"".join(_json_bytes(p) + b"\n" for p in new_records)
+                    _write_all(fd, wire)
+                    os.fsync(fd)
+                self._check_authorization()
+            except OSError as exc:
+                raise ArchiveBlocked("archive batch write or checkpoint failed") from exc
+            finally:
+                os.close(fd)
+        final = payloads[-1] if payloads else None
+        return BatchReceipt(
+            "saved", self.archive_id, len(payloads) - count, count,
+            len(payloads),
+            final["source_end_offset"] if final else 0,
+            final["source_record_sha256"] if final else "",
+            recovered_torn_tail=recovered,
+        )
 
     def append(self, event: ArchiveEvent) -> AppendReceipt:
         self._check_authorization()

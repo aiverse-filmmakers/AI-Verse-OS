@@ -425,6 +425,143 @@ class ArchiveFixtureTests(unittest.TestCase):
             chat.append(event("backwards", sequence=2, offset=0, end=100))
         self.assertEqual(len(chat.read().messages), 1)
 
+    def _batch_events(self, count):
+        return [
+            event(f"batch-record-{index}", sequence=index,
+                  offset=(index - 1) * 100, end=index * 100,
+                  message_id=f"provider-record-{index}",
+                  text=f"Batch visible text {index} 🧪 中文")
+            for index in range(1, count + 1)
+        ]
+
+    def test_batch_wire_format_is_identical_to_legacy_v1_writer(self):
+        events = self._batch_events(3)
+        batched = self.archive()
+        response = batched.append_batch(events)
+        self.assertEqual((response.saved, response.replayed), (3, 0))
+        self.assertEqual(response.checkpoint_sequence, 3)
+        self.assertEqual(response.checkpoint_source_end_offset, 300)
+        self.assertEqual(response.checkpoint_source_record_sha256,
+                         events[-1].source_record_sha256)
+        v1 = self.path(batched).read_bytes()
+        self.assertEqual(len(v1.splitlines()), 4)
+        legacy_root = Path(self.tmp.name) / "legacy-os"
+        legacy_root.mkdir()
+        (legacy_root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n")
+        legacy = self.archive(root=legacy_root)
+        for e in events:
+            self.assertEqual(legacy.append(e).status, "saved")
+        legacy_path = legacy_root / "archives/private-chat-history/v1/operator/portable-chat-a.jsonl"
+        self.assertEqual(v1, legacy_path.read_bytes())
+
+    def test_batch_verifies_committed_checkpoint_once_and_writes_only_suffix(self):
+        archive = self.archive()
+        full = self._batch_events(120)
+        first = archive.append_batch(full[:90])
+        self.assertEqual(first.saved, 90)
+        before = self.path(archive).read_bytes()
+        with (mock.patch.object(a, "_scan", wraps=a._scan) as scan,
+              mock.patch.object(a, "_write_all", wraps=a._write_all) as write,
+              mock.patch.object(a.os, "fsync", wraps=a.os.fsync) as fsync):
+            receipt = archive.append_batch(full)
+        self.assertEqual((receipt.saved, receipt.replayed), (30, 90))
+        self.assertEqual(receipt.checkpoint_sequence, 120)
+        self.assertEqual(scan.call_count, 1, "batch must not rescan per message")
+        self.assertEqual(write.call_count, 1, "only suffix is written in one call")
+        self.assertEqual(fsync.call_count, 1, "durable batch commits once")
+        self.assertTrue(self.path(archive).read_bytes().startswith(before))
+        restored = self.archive()
+        with mock.patch.object(a, "_scan", wraps=a._scan) as scan:
+            again = restored.append_batch(full)
+        self.assertEqual(scan.call_count, 1)
+        self.assertEqual((again.saved, again.replayed), (0, 120))
+        self.assertEqual(len(restored.read().messages), 120)
+
+    def test_batch_rejects_truncated_or_changed_prefix_before_writes(self):
+        archive = self.archive()
+        old = self._batch_events(4)
+        archive.append_batch(old)
+        path = self.path(archive)
+        before = path.read_bytes()
+        with mock.patch.object(a, "_write_all", wraps=a._write_all) as write:
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch(old[:3])
+            altered = list(old)
+            altered[1] = event(
+                "batch-record-2", sequence=2, offset=100, end=200,
+                message_id="provider-record-2", text="changed historical text"
+            )
+            with self.assertRaises(a.ArchiveConflict):
+                archive.append_batch(altered)
+            invalid_suffix = old + [
+                event("batch-record-5", sequence=5, offset=400, end=500,
+                      message_id="provider-record-5"),
+                event("batch-record-5", sequence=6, offset=500, end=600,
+                      message_id="provider-record-6"),
+            ]
+            with self.assertRaises(a.ArchiveConflict):
+                archive.append_batch(invalid_suffix)
+        self.assertEqual(write.call_count, 0)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_batch_recovers_torn_tail_after_restart_without_duplication(self):
+        archive = self.archive()
+        events = self._batch_events(3)
+        archive.append_batch(events[:2])
+        path = self.path(archive)
+        with path.open("ab") as stream:
+            stream.write(b'{"kind":"message","half-written":')
+        restored = self.archive()
+        receipt = restored.append_batch(events)
+        self.assertTrue(receipt.recovered_torn_tail)
+        self.assertEqual((receipt.saved, receipt.replayed), (1, 2))
+        self.assertEqual(len(restored.read().messages), 3)
+        self.assertEqual(restored.append_batch(events).replayed, 3)
+
+    def test_batch_lost_fsync_ack_replays_exactly_after_new_instance(self):
+        archive = self.archive()
+        events = self._batch_events(3)
+        true_fsync = a.os.fsync
+        once = []
+
+        def fail_first_ack(fd):
+            if not once:
+                once.append(True)
+                raise OSError("synthetic fsync acknowledgement lost")
+            return true_fsync(fd)
+
+        with mock.patch.object(a.os, "fsync", side_effect=fail_first_ack):
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch(events)
+        restored = self.archive()
+        receipt = restored.append_batch(events)
+        self.assertEqual((receipt.saved, receipt.replayed), (0, 3))
+        self.assertEqual(len(restored.read().messages), 3)
+        changed = list(events)
+        changed[1] = event("batch-record-2", sequence=2, offset=100,
+                           end=200, message_id="provider-record-2",
+                           text="unverified changed source")
+        with self.assertRaises(a.ArchiveConflict):
+            restored.append_batch(changed)
+
+    def test_batch_revocation_during_validation_refuses_durable_write(self):
+        self.workspace("film")
+        archive = self.archive(scope="workspace:film")
+        events = self._batch_events(2)
+        archive.append_batch(events[:1])
+        before = self.path(archive).read_bytes()
+        original_scan = a._scan
+
+        def revoke_after_scan(data, header):
+            value = original_scan(data, header)
+            self.scope_grants["workspace:film"] = False
+            return value
+
+        with mock.patch.object(a, "_scan", side_effect=revoke_after_scan):
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch(events)
+        self.assertEqual(self.path(archive).read_bytes(), before)
+
     def test_same_event_concurrent_replay_is_serialized(self):
         chat = self.archive()
         original = event()

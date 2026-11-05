@@ -304,6 +304,8 @@ class ChatArchive:
             "chat_id": chat_id, "origin": origin, "session_id": session_id,
             "scope": scope,
         }
+        # Refuse invalid initial bindings as well as later revocations.
+        self._check_authorization()
 
     def _check_authorization(self) -> None:
         # The caller supplies an OS-authoritative live checker, not a static

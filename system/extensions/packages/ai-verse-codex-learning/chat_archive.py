@@ -26,6 +26,11 @@ SCOPE = re.compile(r"^(operator|workspace:[a-z0-9][a-z0-9-]{0,127})$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
 ATTACHMENTS = {"none", "not_embedded", "unknown"}
 OPTIONAL = ("timestamp", "revision", "branch")
+# Shared OS writer / Memory v1 reader capacity contract. Every writer entry
+# point enforces these bounds so it never creates a valid archive that Memory
+# refuses solely because of an incompatible file-size or message-count limit.
+MAX_ARCHIVE_BYTES = 64_000_000
+MAX_ARCHIVE_MESSAGES = 40_000
 
 
 class ArchiveBlocked(ValueError):
@@ -310,12 +315,16 @@ def _validate_record(record: dict) -> None:
 
 
 def _scan(data: bytes, expected: dict) -> tuple:
+    if len(data) > MAX_ARCHIVE_BYTES:
+        raise ArchiveBlocked("archive exceeds shared v1 size budget")
     boundary = data.rfind(b"\n") + 1
     tail_size = len(data) - boundary
     completed = data[:boundary]
     if not completed:
         return (), tail_size, boundary, False
     lines = completed.split(b"\n")[:-1]
+    if len(lines) - 1 > MAX_ARCHIVE_MESSAGES:
+        raise ArchiveBlocked("archive exceeds shared v1 message budget")
     if any(not line for line in lines):
         raise ArchiveBlocked("empty archive record")
     header = _strict_json(lines[0])
@@ -422,7 +431,9 @@ class ChatArchive:
         fd = _regular_open(path, os.O_RDONLY)
         try:
             with os.fdopen(fd, "rb") as stream:
-                messages, torn, _, has_header = _scan(stream.read(), self.header)
+                messages, torn, _, has_header = _scan(
+                    stream.read(MAX_ARCHIVE_BYTES + 1), self.header
+                )
         except OSError as exc:
             raise ArchiveBlocked("cannot read archive") from exc
         # Recheck after reading and before returning any private content.
@@ -492,7 +503,7 @@ class ChatArchive:
                 try:
                     with os.fdopen(fd, "rb", closefd=False) as stream:
                         messages, torn, boundary, has_header = _scan(
-                            stream.read(), self.header
+                            stream.read(MAX_ARCHIVE_BYTES + 1), self.header
                         )
                 except BaseException:
                     os.close(fd)
@@ -511,6 +522,8 @@ class ChatArchive:
                         raise ArchiveConflict("source replay changed committed history")
                 count = len(messages)
                 new_records = payloads[count:]
+                if len(payloads) > MAX_ARCHIVE_MESSAGES:
+                    raise ArchiveBlocked("archive would exceed shared v1 message budget")
                 recovered = False
                 if new_records:
                     # A validation conflict anywhere in the new suffix was
@@ -523,6 +536,8 @@ class ChatArchive:
                     os.lseek(fd, 0, os.SEEK_END)
                     wire = (b"" if has_header else _json_bytes(self.header) + b"\n")
                     wire += b"".join(_json_bytes(p) + b"\n" for p in new_records)
+                    if (boundary if torn else os.fstat(fd).st_size) + len(wire) > MAX_ARCHIVE_BYTES:
+                        raise ArchiveBlocked("archive would exceed shared v1 size budget")
                     _write_all(fd, wire)
                     os.fsync(fd)
                 self._check_authorization()
@@ -597,7 +612,7 @@ class ChatArchive:
                 fd = _regular_open(path, os.O_RDWR)
                 try:
                     with os.fdopen(fd, "rb", closefd=False) as stream:
-                        data = stream.read()
+                        data = stream.read(MAX_ARCHIVE_BYTES + 1)
                 finally:
                     # Keep fd open for recovery and append, including on Windows.
                     pass
@@ -620,6 +635,8 @@ class ChatArchive:
                     raise ArchiveConflict("immutable source event changed on replay")
                 if event.sequence != len(messages) + 1:
                     raise ArchiveBlocked("out-of-order or missing source sequence")
+                if len(messages) + 1 > MAX_ARCHIVE_MESSAGES:
+                    raise ArchiveBlocked("archive would exceed shared v1 message budget")
                 same_origin = [
                     item for item in messages
                     if item["source_byte_offset"] == event.source_byte_offset
@@ -633,13 +650,18 @@ class ChatArchive:
                     raise ArchiveConflict("distinct events cannot reuse the same source block")
                 if messages and event.source_byte_offset < messages[-1]["source_byte_offset"]:
                     raise ArchiveBlocked("source offsets are out of order")
+                header_wire = b"" if has_header else _json_bytes(self.header) + b"\n"
+                message_wire = _json_bytes(payload) + b"\n"
+                if ((boundary if torn else os.fstat(fd).st_size)
+                        + len(header_wire) + len(message_wire) > MAX_ARCHIVE_BYTES):
+                    raise ArchiveBlocked("archive would exceed shared v1 size budget")
                 if torn:
                     os.ftruncate(fd, boundary)
                     os.fsync(fd)
                 os.lseek(fd, 0, os.SEEK_END)
-                if not has_header:
-                    _write_all(fd, _json_bytes(self.header) + b"\n")
-                _write_all(fd, _json_bytes(payload) + b"\n")
+                if header_wire:
+                    _write_all(fd, header_wire)
+                _write_all(fd, message_wire)
                 os.fsync(fd)
             except OSError as exc:
                 raise ArchiveBlocked("archive write or durable checkpoint failed") from exc

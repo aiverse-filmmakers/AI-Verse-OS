@@ -75,11 +75,15 @@ def _cwd(value) -> str:
     if not isinstance(value, str) or "\x00" in value:
         raise CodexObservationBlocked("invalid physical cwd")
     path = Path(value)
-    if not path.is_absolute() or ".." in path.parts or "." in path.parts:
+    # pathlib normalizes "/./" and repeated separators, so inspect the raw
+    # components BEFORE that normalization. A changed physical binding must
+    # never be hidden by a lexical rewrite.
+    if (not path.is_absolute() or str(path) != value
+            or any(part in (".", "..") for part in re.split(r"[\\/]", value))):
         raise CodexObservationBlocked("invalid physical cwd")
     # Lexical validation only. Host/OS authority must establish the physical
     # workspace and reject symlinks separately at event observation time.
-    return str(path)
+    return value
 
 
 def _text(value, field: str) -> Tuple[str, str]:

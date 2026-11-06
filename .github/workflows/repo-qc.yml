@@ -35,6 +35,9 @@ jobs:
       - name: Test prospective-only Codex hook-field observer (synthetic, capture disabled)
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_capture.py' -v
 
+      - name: Test Codex App Server v2 source coverage candidate (pure synthetic, no host IO)
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_candidate.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

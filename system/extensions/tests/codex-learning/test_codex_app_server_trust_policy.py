@@ -300,6 +300,11 @@ class SyntheticOwnerConsentTests(unittest.TestCase):
         limit = replace(lease, checked_events=policy.MAX_EVENTS)
         self.blocked(lambda: self.check(limit))
 
+    def test_switch_from_fresh_to_resume_purpose_invalidates_lease(self):
+        lease = self.begin()
+        self.intent = replace(self.intent, purpose="resume_old_thread")
+        self.blocked(lambda: self.check(lease))
+
     def test_completed_turn_closes_same_lease_to_replay(self):
         lease = self.begin()
         lease, _ = self.check(lease, self.event("turn/completed"))

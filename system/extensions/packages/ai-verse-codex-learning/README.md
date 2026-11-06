@@ -92,5 +92,14 @@ to append.
 The wire format remains `ai-verse.chat-archive/v1`, including exact field
 names, content checksums, original source byte offsets, one header, newline
 terminated messages, and the existing private scope directory layout.
+
+**Shared reader/writer capacity contract:** Each canonical archive contains
+at most 40,000 committed messages and 64,000,000 total UTF-8 JSONL bytes.
+Both `append()` and `append_batch()` reject a write that would breach
+either limit before modifying committed data or repairing a torn tail;
+`read()` rejects any existing file outside the bounds. The native Memory
+portable-chat reader uses the same per-file limits, retaining its separate
+40,000-message aggregate discovery budget. Oversized legacy files are
+not silently truncated, imported, or declared compatible.
 Single-event `append()` remains for compatibility. No new sidecar, consumer
 index, configuration switch, installation or host capture is introduced.

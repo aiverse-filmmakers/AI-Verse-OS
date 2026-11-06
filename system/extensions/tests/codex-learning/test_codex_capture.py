@@ -156,6 +156,15 @@ class CodexProspectiveFixtureTests(unittest.TestCase):
         with self.assertRaises(c.CodexObservationBlocked):
             c.observe(state, self.prompt())
 
+    def test_bridge_generated_review_continuation_is_not_human_text(self):
+        state = self.start()
+        with self.assertRaises(c.CodexObservationBlocked) as caught:
+            c.observe(state, self.prompt(
+                value="AI_VERSE_REVIEW_CONTINUATION token=synthetic_only"
+            ))
+        self.assertEqual(str(caught.exception),
+                         "internal continuation is not visible user text")
+
     def test_changed_prompt_and_overlapping_turn_refuse(self):
         state, _, _ = c.observe(self.start(), self.prompt())
         with self.assertRaises(c.CodexObservationBlocked):

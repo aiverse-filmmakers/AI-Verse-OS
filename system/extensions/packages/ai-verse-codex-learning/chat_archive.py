@@ -529,15 +529,16 @@ class ChatArchive:
                     # A validation conflict anywhere in the new suffix was
                     # refused above, before the first write or tail recovery.
                     self._check_authorization()
+                    wire = (b"" if has_header else _json_bytes(self.header) + b"\n")
+                    wire += b"".join(_json_bytes(p) + b"\n" for p in new_records)
+                    # Budget failure must not truncate even a torn tail.
+                    if (boundary if torn else os.fstat(fd).st_size) + len(wire) > MAX_ARCHIVE_BYTES:
+                        raise ArchiveBlocked("archive would exceed shared v1 size budget")
                     if torn:
                         os.ftruncate(fd, boundary)
                         os.fsync(fd)
                         recovered = True
                     os.lseek(fd, 0, os.SEEK_END)
-                    wire = (b"" if has_header else _json_bytes(self.header) + b"\n")
-                    wire += b"".join(_json_bytes(p) + b"\n" for p in new_records)
-                    if (boundary if torn else os.fstat(fd).st_size) + len(wire) > MAX_ARCHIVE_BYTES:
-                        raise ArchiveBlocked("archive would exceed shared v1 size budget")
                     _write_all(fd, wire)
                     os.fsync(fd)
                 self._check_authorization()

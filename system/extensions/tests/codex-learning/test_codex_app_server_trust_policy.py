@@ -286,6 +286,8 @@ class SyntheticOwnerConsentTests(unittest.TestCase):
             self.event("request/approval"),
             {"id": 3, "method": "turn/started",
              "params": {"threadId": "fixture-thread-1"}},
+            {"jsonrpc": "1.0", "method": "turn/started",
+             "params": {"threadId": "fixture-thread-1"}},
         ):
             with self.subTest(bad=bad["method"]):
                 self.blocked(lambda: self.check(lease, bad))

@@ -17,8 +17,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import math
 from pathlib import Path
 import re
+import stat
+import time
 from typing import Mapping, Optional, Tuple
 
 # Not a config switch. This module has NO admitted writer/issuer or installer.
@@ -216,6 +219,156 @@ def observe(
     # Neither arbitrary host fields nor tool/subagent/model payloads are
     # eligible visible conversation observations.
     return state, None, "ignored_unverified_event"
+
+
+
+@dataclass(frozen=True)
+class OSCorrelation:
+    """Read-only scope match, NOT authenticated host event provenance.
+
+    No capability/authorization token is present or minted. This object
+    cannot be used as proof for canonical archive writes.
+    """
+
+    session_id: str
+    turn_id: str
+    scope: str
+    source_event_id: str
+    status: str = "correlated_untrusted_hook_not_authorized"
+
+
+def correlate_current_os_turn(
+    bridge, event: Mapping, state: ProspectiveState,
+    observation: HookTextObservation,
+) -> OSCorrelation:
+    """Cross-check a synthetic Codex hook field against *current* OS state.
+
+    The existing Bridge is the source of physical-workspace and current-turn
+    checks, not the event's claimed scope. A forged JSON hook can still pass
+    these checks when executed by the same local user. NO historical/session
+    issuer, consent proof, or full conversation coverage is created here.
+    This function is NOT dispatched from Bridge.hook, nor wired to any writer.
+
+    The bridge's per-session lock is held through all state and cancellation
+    checks, and workspace status is read again on every invocation. A caller
+    must discard an earlier correlation if any later operation takes place.
+    """
+    try:
+        if (not isinstance(event, Mapping)
+                or not isinstance(state, ProspectiveState)
+                or not isinstance(observation, HookTextObservation)):
+            raise CodexObservationBlocked("invalid binding input")
+        if getattr(bridge, "harness", None) != "codex" or not bridge.registered():
+            raise CodexObservationBlocked("OS Codex connection not active")
+        session = _identity(event.get("session_id"), "session")
+        cwd = _cwd(event.get("cwd"))
+        turn_id = _identity(event.get("turn_id"), "turn")
+        if (session != state.session_id or cwd != state.cwd
+                or observation.session_id != session
+                or observation.turn_id != turn_id):
+            raise CodexObservationBlocked("session or turn identity mismatch")
+        if (observation.sequence != state.next_sequence - 1
+                or observation.source_event_id != _source_id(
+                    session, turn_id, observation.source_field)):
+            raise CodexObservationBlocked("observation identity is unbound")
+        if observation.role == "user":
+            if (event.get("hook_event_name") != "UserPromptSubmit"
+                    or observation.source_field != "prompt"
+                    or state.phase != "pending"
+                    or state.pending_turn != turn_id):
+                raise CodexObservationBlocked("prompt observation is not current")
+        elif observation.role == "assistant":
+            if (event.get("hook_event_name") != "Stop"
+                    or observation.source_field != "last_assistant_message"
+                    or event.get("stop_hook_active") is not False
+                    or state.phase != "ready"
+                    or state.previous_turn != turn_id):
+                raise CodexObservationBlocked("assistant observation is not current")
+        else:
+            raise CodexObservationBlocked("unsupported observed role")
+
+        text, text_sha = _text(event.get(observation.source_field),
+                               observation.source_field)
+        if (text != observation.text or text_sha != observation.text_sha256
+                or event.get("permission_mode") not in
+                ("default", "acceptEdits")):
+            raise CodexObservationBlocked("event text or permission is unbound")
+
+        # Resolve physical folder before the OS state lookup. No symlinks or
+        # implicit cwd/manifest binding are allowed in this candidate path.
+        root = Path(bridge.root).resolve(strict=True)
+        physical = Path(cwd)
+        if physical.resolve(strict=True) != physical:
+            raise CodexObservationBlocked("physical working directory ambiguous")
+        relative = physical.relative_to(root).parts
+        current = root
+        for part in relative:
+            current = current / part
+            mode = current.lstat().st_mode
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+                raise CodexObservationBlocked("unsafe physical working directory")
+        if relative and relative[0] == "workspaces":
+            if len(relative) < 2:
+                raise CodexObservationBlocked("workspace root has no bound owner")
+            workspace_id = relative[1]
+            if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", workspace_id):
+                raise CodexObservationBlocked("workspace owner invalid")
+            selected = "workspace:" + workspace_id
+        else:
+            selected = "operator"
+
+        with bridge.lock(session):
+            bound = bridge.state(session)
+            turn = bound.get("turn")
+            if (bound.get("session_id") != session
+                    or bound.get("scope") != selected
+                    or not isinstance(turn, dict)
+                    or turn.get("id") != turn_id
+                    or turn.get("scope") != selected
+                    or turn.get("allowed") != [selected]
+                    or turn.get("ambiguous") != []
+                    or turn.get("state") not in ("active", "review_requested")):
+                raise CodexObservationBlocked("OS turn or scope does not match")
+            created = turn.get("created")
+            ttl = bridge.config.get("state_ttl_seconds")
+            if (isinstance(created, bool)
+                    or not isinstance(created, (int, float))
+                    or not math.isfinite(created)
+                    or type(ttl) is not int
+                    or not 0 <= time.time() - created <= ttl):
+                raise CodexObservationBlocked("OS turn freshness expired")
+            if (turn.get("permission_mode") != event.get("permission_mode")
+                    or turn.get("permission_mode") not in
+                    ("default", "acceptEdits")
+                    or bridge.cancelled(session, turn_id)):
+                raise CodexObservationBlocked("OS turn permission or cancellation")
+            if selected != "operator":
+                details = bridge.manifest(selected.partition(":")[2])
+                if details.get("status") != "active":
+                    raise CodexObservationBlocked("workspace not active")
+            if observation.role == "user":
+                # Prompt is the only hook field for which the existing OS
+                # bridge independently stored a same-turn field digest.
+                if turn.get("prompt_hash") != text_sha:
+                    raise CodexObservationBlocked("OS prompt does not match")
+                sources = turn.get("sources")
+                if (not isinstance(sources, dict)
+                        or not isinstance(sources.get("user"), dict)
+                        or sources["user"].get("sha256") != text_sha):
+                    raise CodexObservationBlocked("OS user source not matched")
+            else:
+                # The current OS bridge has no authoritative assistant text
+                # digest. This is correlation ONLY, never source attestation.
+                if not isinstance(turn.get("prompt_hash"), str):
+                    raise CodexObservationBlocked("OS original turn missing")
+        return OSCorrelation(
+            session_id=session, turn_id=turn_id, scope=selected,
+            source_event_id=observation.source_event_id,
+        )
+    except Exception:
+        # All failures are static: never leak user text, filesystem paths,
+        # OS error messages, hook JSON, or private session identifiers.
+        raise CodexObservationBlocked("OS hook correlation unavailable") from None
 
 
 def capture_hook(_bridge, _event: Mapping) -> dict:

@@ -203,6 +203,7 @@ def check_synthetic_event(
                 or Path(bridge.root) != lease.root
                 or intent.cwd != lease.cwd or intent.scope != lease.scope
                 or intent.expected_thread != lease.thread_id
+                or intent.purpose != "new_text_only_thread"
                 or intent.mode != "preview_only"
                 or intent.private_session is not False
                 or intent.historical_import is not False

@@ -221,6 +221,8 @@ class CodexProspectiveFixtureTests(unittest.TestCase):
             {"session_id": "../malicious"},
             {"cwd": "relative/workspace"},
             {"cwd": "/workspace/../escape"},
+            {"cwd": "/workspace/./subfolder"},
+            {"cwd": "/workspace//subfolder"},
             {"cwd": "/workspace\x00bad"},
             {"turn_id": ".."},
             {"permission_mode": "bypassPermissions"},

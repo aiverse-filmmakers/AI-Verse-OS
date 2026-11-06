@@ -108,19 +108,19 @@ index, configuration switch, installation or host capture is introduced.
 ## Portable Codex hook observation (slice 3A.1 draft, disabled)
 
 This slice introduces **only** a pure, synthetic-tested, prospective
-\`codex_capture.py\` hook-field observer. The documented Codex hook JSON
-provides \`UserPromptSubmit.prompt\` and
-\`Stop.last_assistant_message\`. Those are *individual host-supplied fields*,
+`codex_capture.py` hook-field observer. The documented Codex hook JSON
+provides `UserPromptSubmit.prompt` and
+`Stop.last_assistant_message`. Those are *individual host-supplied fields*,
 **not a full rendered conversation**. Codex can also supply a
-\`transcript_path\`, but its private file format is expressly not a stable
+`transcript_path`, but its private file format is expressly not a stable
 hook API, so this adapter never opens that path or guesses its location.
 
-The observer accepts a candidate \`SessionStart(source="startup")\`
+The observer accepts a candidate `SessionStart(source="startup")`
 boundary, then ordered matching user-prompt/assistant-stop pairs. It
 preserves each string exactly in transient observations, with field-specific
 hashes and stable IDs. It refuses resume, fork, compact, clear, changed
 replays, overlapping turns, uncertain Stop continuations, scope/path/session
-changes, interrupt and invalid sizes. \`PostToolUse\`, reasoning,
+changes, interrupt and invalid sizes. `PostToolUse`, reasoning,
 subagents, model events and arbitrary JSON fields never become visible-chat
 records. Transient state retains only identifiers and hashes, not message
 bodies.
@@ -130,7 +130,7 @@ bodies.
 - Neither a supplied hook JSON object nor a startup source proves that
   the event came from a trusted physical Codex host. No authenticated
   at-event scope issuer has been established. The code gates
-  \`_HOST_EVENTS_ADMITTED\` and \`_AT_TIME_SCOPE_ISSUER_ADMITTED\` both
+  `_HOST_EVENTS_ADMITTED` and `_AT_TIME_SCOPE_ISSUER_ADMITTED` both
   remain false, cannot be enabled through config, and even a test-patched
   gate does not reach an archive writer.
 - Source field observation does **not** establish complete assistant

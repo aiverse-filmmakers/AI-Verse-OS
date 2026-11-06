@@ -485,6 +485,20 @@ class CurrentOSTurnCorrelationTests(unittest.TestCase):
             state, observation,
         )
 
+    def test_physical_symlink_rejected_even_when_transient_cwd_matches(self):
+        # A superficial mismatch test never reaches the physical path
+        # validator. Construct a consistent synthetic prospective sequence
+        # that uses the symlink at every event, then require OS refusal.
+        link = self.root / "workspaces/alpha-link"
+        try:
+            link.symlink_to(self.alpha, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable on runner")
+        self.cwd = str(link)
+        event, state, observation = self.observation()
+        self.assertEqual(state.cwd, self.cwd)
+        self.assert_blocked(event, state, observation)
+
     def test_textual_project_mention_from_operator_root_is_not_physical_scope(self):
         self.cwd = str(self.root)
         self.scope = "workspace:alpha"

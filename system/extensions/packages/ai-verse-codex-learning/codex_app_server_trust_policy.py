@@ -210,7 +210,13 @@ def check_synthetic_event(
             _block()
         method = event.get("method")
         params = event.get("params")
-        if not isinstance(method, str) or not isinstance(params, Mapping):
+        # Notifications do not carry a JSON-RPC id. A child-origin
+        # request with a familiar method name must never be admitted as
+        # ordinary conversation traffic or trigger an implicit approval.
+        if ("id" in event or ("jsonrpc" in event
+                              and event["jsonrpc"] != "2.0")
+                or not isinstance(method, str)
+                or not isinstance(params, Mapping)):
             _block()
         # The thread ID originates from the parent-side new-thread plan,
         # not from a server-supplied thread/start or history listing.

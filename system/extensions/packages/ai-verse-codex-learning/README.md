@@ -150,3 +150,32 @@ bodies.
 Current Codex hook reference:
 https://learn.chatgpt.com/docs/hooks (Common input fields,
 UserPromptSubmit, Stop, SessionStart).
+
+
+### 3A.2 Current OS turn correlation (draft, read-only)
+
+`correlate_current_os_turn()` checks a transient prospective hook-field
+observation against the **existing OS Bridge** session and turn state.
+It uses the Bridge's session lock, validates physical cwd under the
+OS root without symlink components, and requires the one and only
+workspace to match its active manifest (or the operator root). It
+requires a single nonambiguous allowed destination, and rejects
+cancelled, stale, mismatched-turn, plan/bypass, and inactive-workspace
+events. For user prompts it checks the independently stored OS prompt
+and user source SHA-256. Scope is rechecked on every invocation.
+
+The return status is deliberately
+`correlated_untrusted_hook_not_authorized`. **This is NOT host
+authentication, at-time source provenance, private-session consent,
+assistant-text attestation, a durable checkpoint, or permission for an
+archive write.** A local process can forge hook JSON; the OS Bridge
+does not retain authoritative assistant source bytes.
+
+Neither `bridge.hook` nor the installer calls this correlation function,
+and Codex capture admission gates remain hard-disabled. CI uses only
+disposable synthetic workspaces and OS state.
+
+Before any archive writer is staged, prove the host event origin,
+immutable at-event authority/consent and source coverage through a
+separately reviewed host contract. A transient correlation result
+must never become a retrospective issuer or authorization token.

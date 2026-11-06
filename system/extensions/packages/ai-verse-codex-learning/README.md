@@ -282,3 +282,47 @@ or migrate Codex desktop history. No user installation or live pilot.
 Upstream protocol references:
 https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
 https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
+
+### 3A.5 Synthetic host trust and recording-consent policy
+
+The **parent OS**, not an App Server event, must choose a new thread,
+physical cwd, unique workspace scope and capture consent. Host-provided
+`scope`, `signed`, `trusted`, `authenticated`, `consent_verified` and
+`private` fields are NOT permission. Existing desktop and resumed
+threads must not be imported under the current workspace.
+
+The new `codex_app_server_trust_policy.py` exercises this decision
+boundary with a **synthetic-only** owner choice and mutable consent
+fixture. No actual owner UI, user credential, token, consent receipt,
+authenticated host issuer or production session is implemented.
+
+The synthetic evaluator rejects absent/withdrawn opt-in, private
+sessions, historical imports, unexpected capture modes, changed
+threads, unsupported events, process replacement, expired lease,
+ambiguous or inactive workspace, symlink cwd, wrong harness, and
+mismatched OS folder. Every synthetic stream event independently
+rechecks parent-owned consent generation, child identity, physical
+cwd and current workspace manifest. An opt-out or subsequent opt-in
+invalidates the prior lease. The result never contains source text,
+and all provenance/consent/writer-admission booleans remain false.
+
+`capture_admission()` always returns blocked. `connect_real_codex()`
+also stays blocked when test code patches both development gates.
+There is no connection from this module to the existing Bridge
+hook dispatcher, installation manifest or private chat archive.
+
+**Remaining host trust work:** independently verify an actual pinned
+Codex App Server binary and child/pipe lifetime, design authenticated
+and revocable OS UI consent, bind the original parent-side thread/start
+and turn/start request/response to fresh physical scope and project
+identity at the event boundary, and prove full user-visible message
+coverage for a pinned host version. At-event state and a complete
+source format cannot be inferred from a current cwd or JSON flags.
+The result is still synthetic policy matching, NOT verified real-host
+authentication or permission to store conversations.
+
+Security limitations: the prior child binary SHA read is not atomic
+attestation; command execution remains potentially privileged; an
+in-memory consent flag is not a reviewed UI permission; and no
+filesystem precheck alone guarantees protection against concurrent
+privileged local changes. Pilot and independent review remain gates.

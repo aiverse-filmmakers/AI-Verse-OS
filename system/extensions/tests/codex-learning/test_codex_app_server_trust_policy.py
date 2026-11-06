@@ -326,6 +326,12 @@ class SyntheticOwnerConsentTests(unittest.TestCase):
             # harness must not be able to initiate a new one.
             self.blocked(self.begin)
 
+    def test_wrong_harness_during_stream_cannot_use_old_lease(self):
+        lease = self.begin()
+        with mock.patch.object(self.bridge, "harness", "claude"):
+            self.blocked(lambda: self.check(lease))
+        self.assertEqual(policy.capture_admission(lease)["status"], "blocked")
+
     def test_transport_event_sequence_and_app_server_candidate_still_untrusted(self):
         lease = self.begin()
         state = None

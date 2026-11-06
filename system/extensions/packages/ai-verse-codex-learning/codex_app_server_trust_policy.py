@@ -199,6 +199,7 @@ def check_synthetic_event(
                 or consent.generation != lease.consent_generation
                 or _fixture_child_identity(connection) != lease.process_identity
                 or not bridge.registered()
+                or getattr(bridge, "harness", None) != "codex"
                 or Path(bridge.root) != lease.root
                 or intent.cwd != lease.cwd or intent.scope != lease.scope
                 or intent.expected_thread != lease.thread_id

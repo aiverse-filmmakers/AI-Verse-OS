@@ -3,9 +3,13 @@
 Never run against a user's Codex storage, hooks or actual transcript. No
 runtime/host installation or canonical archive write occurs in this module.
 """
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import sys
+import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -265,6 +269,259 @@ class CodexProspectiveFixtureTests(unittest.TestCase):
             state2, observation, status = c.observe(state, event)
             self.assertEqual((state2, observation, status),
                              (state, None, "ignored_unverified_event"))
+
+
+
+
+class CurrentOSTurnCorrelationTests(unittest.TestCase):
+    """Real OS Bridge implementation, but only disposable synthetic OS state."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="aiverse-codex-3a-bound-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve() / "os"
+        self.root.mkdir()
+        (self.root / "AI-VERSE.yaml").write_text(
+            'schema_version: "2.0"\narchitecture: unified-workspace\n',
+            encoding="utf-8",
+        )
+        self.ext = self.root / ".aiverse/extensions/ai-verse-codex-learning"
+        self.ext.mkdir(parents=True)
+        registry = {"schema_version": "1.0", "extensions": {
+            "ai-verse-codex-learning": {
+                "id": "ai-verse-codex-learning", "supported": True,
+                "installed": True, "enabled": True,
+            }
+        }}
+        (self.ext.parent / "registry.json").write_text(json.dumps(registry))
+        self.alpha = self.root / "workspaces/alpha"
+        self.beta = self.root / "workspaces/beta"
+        for w in (self.alpha, self.beta):
+            w.mkdir(parents=True)
+            self.manifest(w, status="active")
+        spec = importlib.util.spec_from_file_location(
+            "_real_os_codex_bridge_3a_fixture",
+            MODULE_PATH.with_name("bridge.py"),
+        )
+        self.os_bridge_module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = self.os_bridge_module
+        spec.loader.exec_module(self.os_bridge_module)
+        self.bridge = self.os_bridge_module.Bridge(self.root)
+        self.session = "fixture-os-session"
+        self.turn = "fixture-original-turn"
+        self.prompt = "Exact workspace-bound prompt 🧪 中文"
+        self.cwd = str(self.alpha)
+        self.scope = "workspace:alpha"
+        self.seed_turn()
+
+    def manifest(self, folder, status="active"):
+        (folder / "WORKSPACE.yaml").write_text(
+            f'schema_version: "2.0"\nid: "{folder.name}"\nstatus: {status}\n',
+            encoding="utf-8",
+        )
+
+    def seed_turn(self, *, scope=None, allowed=None, ambiguous=None,
+                  prompt=None, turn=None, age_seconds=0,
+                  permission="default", state="active"):
+        prompt = self.prompt if prompt is None else prompt
+        scope = self.scope if scope is None else scope
+        turn = self.turn if turn is None else turn
+        sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        self.bridge.save({
+            "schema_version": 1, "session_id": self.session, "scope": scope,
+            "turn": {
+                "id": turn, "scope": scope, "allowed": (
+                    [scope] if allowed is None else allowed
+                ),
+                "ambiguous": [] if ambiguous is None else ambiguous,
+                "state": state, "created": time.time() - age_seconds,
+                "prompt_hash": sha, "permission_mode": permission,
+                "sources": {"user": {"sha256": sha}},
+            },
+        })
+
+    def event(self, kind="UserPromptSubmit", **extra):
+        defaults = {
+            "session_id": self.session, "cwd": self.cwd,
+            "turn_id": self.turn, "hook_event_name": kind,
+            "permission_mode": "default",
+        }
+        if kind == "SessionStart":
+            defaults["source"] = "startup"
+        elif kind == "UserPromptSubmit":
+            defaults["prompt"] = self.prompt
+        elif kind == "Stop":
+            defaults["stop_hook_active"] = False
+            defaults["last_assistant_message"] = "Completed answer (not host proven)"
+        return {**defaults, **extra}
+
+    def observation(self, kind="UserPromptSubmit"):
+        start = self.event("SessionStart")
+        state, _, _ = c.observe(None, start)
+        event = self.event()
+        state, user, _ = c.observe(state, event)
+        if kind == "UserPromptSubmit":
+            return event, state, user
+        event = self.event("Stop")
+        state, assistant, _ = c.observe(state, event)
+        return event, state, assistant
+
+    def check(self, kind="UserPromptSubmit"):
+        event, state, observation = self.observation(kind)
+        return c.correlate_current_os_turn(
+            self.bridge, event, state, observation
+        )
+
+    def assert_blocked(self, event, state, observation):
+        with self.assertRaises(c.CodexObservationBlocked) as caught:
+            c.correlate_current_os_turn(
+                self.bridge, event, state, observation
+            )
+        self.assertEqual(str(caught.exception),
+                         "OS hook correlation unavailable")
+        self.assertNotIn(self.prompt, str(caught.exception))
+
+    def test_current_original_prompt_matches_existing_os_bound_turn(self):
+        result = self.check()
+        self.assertEqual(result.scope, "workspace:alpha")
+        self.assertEqual(result.session_id, self.session)
+        self.assertEqual(result.turn_id, self.turn)
+        self.assertEqual(result.status,
+                         "correlated_untrusted_hook_not_authorized")
+        self.assertFalse(hasattr(result, "authorization_token"))
+        self.assertFalse(hasattr(result, "issuer"))
+        self.assertFalse(
+            (self.root / "archives/private-chat-history").exists()
+        )
+
+    def test_stop_is_only_correlated_not_attested_as_host_text(self):
+        result = self.check("Stop")
+        self.assertEqual(result.status,
+                         "correlated_untrusted_hook_not_authorized")
+        self.assertEqual(result.scope, "workspace:alpha")
+        # The OS bridge did not store a digest of the original assistant
+        # message. Correlation must NOT imply a signed text witness.
+        _, state, observation = self.observation("Stop")
+        fake = self.event("Stop", last_assistant_message="Forged answer")
+        self.assertNotEqual(fake["last_assistant_message"],
+                            observation.text)
+        self.assert_blocked(fake, state, observation)
+
+    def test_original_prompt_hash_and_existing_source_must_both_match(self):
+        event, state, observation = self.observation()
+        self.seed_turn(prompt="different original prompt")
+        self.assert_blocked(event, state, observation)
+        self.seed_turn()
+        saved = self.bridge.state(self.session)
+        saved["turn"]["sources"]["user"]["sha256"] = "0" * 64
+        self.bridge.save(saved)
+        self.assert_blocked(event, state, observation)
+
+    def test_other_session_turn_cwd_and_identity_cannot_rebind(self):
+        event, state, observation = self.observation()
+        for delta in (
+            {"session_id": "other-session"},
+            {"turn_id": "foreign-turn"},
+            {"cwd": str(self.beta)},
+            {"permission_mode": "plan"},
+        ):
+            with self.subTest(delta=delta):
+                self.assert_blocked({**event, **delta}, state, observation)
+        self.seed_turn(turn="another-current-turn")
+        self.assert_blocked(event, state, observation)
+
+    def test_multi_scope_or_ambiguous_destination_rejected(self):
+        event, state, observation = self.observation()
+        for allowed, ambiguous in (
+            (["workspace:alpha", "workspace:beta"], []),
+            (["workspace:alpha", "operator"], []),
+            (["workspace:alpha"], [{"name": "beta", "could_mean": []}]),
+        ):
+            self.seed_turn(allowed=allowed, ambiguous=ambiguous)
+            self.assert_blocked(event, state, observation)
+
+    def test_revoked_workspace_is_rechecked_per_correlation(self):
+        event, state, observation = self.observation()
+        self.assertEqual(
+            c.correlate_current_os_turn(
+                self.bridge, event, state, observation
+            ).scope, "workspace:alpha"
+        )
+        self.manifest(self.alpha, status="paused")
+        self.assert_blocked(event, state, observation)
+        self.manifest(self.alpha, status="active")
+        self.assertEqual(self.check().scope, "workspace:alpha")
+
+    def test_stale_cancelled_plan_and_reviewed_turn_refuse(self):
+        event, state, observation = self.observation()
+        self.seed_turn(age_seconds=100000)
+        self.assert_blocked(event, state, observation)
+        self.seed_turn(state="reviewed")
+        self.assert_blocked(event, state, observation)
+        self.seed_turn(permission="plan")
+        self.assert_blocked(event, state, observation)
+        self.seed_turn()
+        cancellation = self.bridge.session_path(self.session).with_suffix(
+            ".cancel"
+        )
+        cancellation.write_text(json.dumps({
+            "schema_version": 1, "session_id": self.session,
+            "original_turn_id": self.turn,
+        }))
+        self.assert_blocked(event, state, observation)
+
+    def test_symlink_or_missing_cwd_never_claims_workspace(self):
+        event, state, observation = self.observation()
+        other = self.root / "workspaces/link-to-alpha"
+        try:
+            other.symlink_to(self.alpha, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable on runner")
+        self.assert_blocked(
+            {**event, "cwd": str(other)}, state, observation
+        )
+        self.assert_blocked(
+            {**event, "cwd": str(self.root / "absent")},
+            state, observation,
+        )
+
+    def test_textual_project_mention_from_operator_root_is_not_physical_scope(self):
+        self.cwd = str(self.root)
+        self.scope = "workspace:alpha"
+        self.seed_turn()
+        event, state, observation = self.observation()
+        self.assert_blocked(event, state, observation)
+
+    def test_operator_only_bound_turn_can_be_correlated(self):
+        self.cwd = str(self.root)
+        self.scope = "operator"
+        self.seed_turn()
+        result = self.check()
+        self.assertEqual(result.scope, "operator")
+        self.assertEqual(result.status,
+                         "correlated_untrusted_hook_not_authorized")
+
+    def test_not_enabled_connection_and_wrong_harness_refuse(self):
+        event, state, observation = self.observation()
+        with mock.patch.object(self.bridge, "registered", return_value=False):
+            self.assert_blocked(event, state, observation)
+        self.bridge.harness = "claude"
+        self.assert_blocked(event, state, observation)
+
+    def test_no_persisted_archive_or_host_issuer_even_with_valid_os_match(self):
+        response = self.check()
+        self.assertFalse(c._HOST_EVENTS_ADMITTED)
+        self.assertFalse(c._AT_TIME_SCOPE_ISSUER_ADMITTED)
+        self.assertEqual(
+            c.capture_hook(self.bridge, self.event()),
+            {"status": "blocked", "reason": "codex host capture unadmitted"}
+        )
+        self.assertEqual(response.status,
+                         "correlated_untrusted_hook_not_authorized")
+        self.assertFalse(
+            (self.root / "archives/private-chat-history").exists()
+        )
+
 
 
 if __name__ == "__main__":

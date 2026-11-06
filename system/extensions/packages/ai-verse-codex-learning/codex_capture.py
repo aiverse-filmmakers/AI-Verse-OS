@@ -169,6 +169,12 @@ def observe(
             raise CodexObservationBlocked("unverified permission mode")
         turn = _identity(event.get("turn_id"), "turn")
         value, digest = _text(event.get("prompt"), "prompt")
+        # The existing AI-Verse learning bridge can generate an artificial
+        # Stop continuation that looks like UserPromptSubmit. It is NOT an
+        # original human message, even if the hook delivers a prompt string.
+        # Refuse the full prospective sequence instead of misattributing it.
+        if "AI_VERSE_REVIEW_CONTINUATION" in value:
+            raise CodexObservationBlocked("internal continuation is not visible user text")
         if state.phase == "pending":
             if turn == state.pending_turn and digest == state.pending_prompt_sha256:
                 return state, None, "replayed_prompt"

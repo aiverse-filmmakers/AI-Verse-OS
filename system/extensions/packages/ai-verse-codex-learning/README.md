@@ -237,3 +237,48 @@ personal file is opened by this module.
 Codex sources (reviewed for this synthetic checkpoint):
 https://learn.chatgpt.com/docs/hooks and
 https://learn.chatgpt.com/docs/app-server
+
+### 3A.4 Disposable OS-owned App Server stdio boundary
+
+The next slice adds `codex_app_server_transport.py` as a **test-only,
+locally owned process and framing prototype**. It does not launch Codex.
+Tests spawn a disposable pinned Python fixture in a private temporary
+directory, using a process handle returned directly by `Popen`, a
+restricted environment with no inherited HOME, PYTHONPATH or API
+tokens, `shell=False`, no inherited nonstdio file descriptors, and
+private stdin/stdout pipes with discarded stderr. The module:
+
+- Verifies that the test executable is the current Python interpreter,
+  compares SHA-256 hashes of both the interpreter and fixture script,
+  and rejects symlinked or group/world-writable fixture files and
+  nonprivate fixture working directories.
+- Performs the documented JSONL `initialize` / `initialized` exchange,
+  checks the response ID, and rejects unsolicited requests. It never
+  automatically approves a server action or sends a turn request.
+- Enforces bounded strict UTF-8 JSONL frames, duplicate-key rejection,
+  a frame-count limit, timeouts even for incomplete lines, and
+  child-termination/cleanup on failures. Only the owning process handle
+  can be used; caller-provided PID and external sockets are not accepted.
+- Exercises JSONL v2 candidate events in the existing synthetic parser.
+  Even a completed candidate remains `untrusted_v2_candidate_not_archivable`.
+- Keeps `connect_codex_app_server()` blocked under two hard-disabled
+  production admission gates. Even patching both for a test does not
+  start Codex or create a permission/capture issuer.
+
+**Scope of evidence:** A SHA-256 check before `exec` is not atomic
+attestation of the executable that actually ran, and a parent-owned
+subprocess is not a privilege sandbox. This POSIX fixture prototype
+does not establish user consent, authenticated at-event workspace
+ownership, a signed original source or exact visible output coverage.
+Real App Server may execute commands and access the user's files;
+**do not turn on the production launcher without an independent
+security review, a pinned host contract and explicit consent.**
+
+The prototype does not modify `bridge.py`, `install.py`, hook definitions,
+Memory, canonical archives, or any installed OS copy. It does not
+open a real Codex App Server, contact a provider, read personal chats,
+or migrate Codex desktop history. No user installation or live pilot.
+
+Upstream protocol references:
+https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server
+https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md

@@ -179,3 +179,61 @@ Before any archive writer is staged, prove the host event origin,
 immutable at-event authority/consent and source coverage through a
 separately reviewed host contract. A transient correlation result
 must never become a retrospective issuer or authorization token.
+
+### 3A.3 Host source coverage: two noninterchangeable transports
+
+**Existing Codex desktop command hooks:** The released hook contract
+provides individual `UserPromptSubmit.prompt` and
+`Stop.last_assistant_message` fields, but no verified host origin,
+complete visible-message stream, or durable at-event scope/consent
+attestation in this adapter. Command hooks may run concurrently;
+background completions can be delivered out of order or cancelled.
+`transcript_path` is not a stable hook wire format. None of these
+fields is allowed to promote a live chat capture or retroactive import.
+
+**Potential alternative for OS-owned sessions:** The documented Codex
+App Server v2 uses JSON-RPC over an OS-owned `codex app-server` stdio
+child process. A client can observe `turn/started`, `item/completed`
+and `turn/completed`, including final `userMessage` and `agentMessage`
+items. An OS-owned process/pipe could provide a stronger *transport*
+trust boundary than an arbitrary command-hook JSON payload. It would
+cover sessions the OS launches and manages, **not automatically existing
+Codex desktop conversations**. This is a candidate architecture only.
+
+New `codex_app_server_candidate.py` parses *synthetic in-memory v2
+notification dictionaries only*. It requires one prospective turn
+boundary, matching thread/turn IDs, one text-only user item, one final
+assistant item (`phase=final_answer`), unique item IDs, bounded text,
+and successful turn completion. It excludes tool output, reasoning,
+plan items and streamed deltas and rejects unknown/ambiguous items,
+media, multiple user blocks, missing source items, interrupted/failed
+turns, inconsistent identities and unusual lifecycle transitions.
+Even a valid candidate always reports
+`untrusted_v2_candidate_not_archivable`, with all authenticity, scope,
+consent, complete-UI-coverage and writer-admission fields false.
+Forged JSON flags such as `authenticated`, `signed`, `scope` or
+`consent_verified` cannot change that decision. No app-server
+process, socket, transcript, CLI, GitHub provider, external API or
+personal file is opened by this module.
+
+**Remaining release gates** before any archive writer integration:
+
+1. OS must own and verify a pinned App Server executable/process and
+   private connection lifetime, with explicit trust on the *transport*,
+   not JSON attributes. This is not implemented.
+2. OS must bind physical scope and user consent/private-session state at
+   every event, including workspace changes and turn interruption.
+3. Verify all visible message kinds and completeness against the exact
+   pinned host release; text-only final-item candidates are insufficient
+   to claim a complete chat backup.
+4. Define stable source byte provenance/checkpoint recovery or a new
+   versioned writer format. Do not populate OS v1 raw-source SHA/offset
+   fields from reconstructed JSON or invented records.
+5. Independent review and an isolated consented pilot are required
+   before hook or App Server capture admission. Both Codex capture
+   code gates remain false, and the original bridge/installer is
+   unchanged.
+
+Codex sources (reviewed for this synthetic checkpoint):
+https://learn.chatgpt.com/docs/hooks and
+https://learn.chatgpt.com/docs/app-server

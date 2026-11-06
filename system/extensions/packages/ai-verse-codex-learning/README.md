@@ -103,3 +103,50 @@ portable-chat reader uses the same per-file limits, retaining its separate
 not silently truncated, imported, or declared compatible.
 Single-event `append()` remains for compatibility. No new sidecar, consumer
 index, configuration switch, installation or host capture is introduced.
+
+
+## Portable Codex hook observation (slice 3A.1 draft, disabled)
+
+This slice introduces **only** a pure, synthetic-tested, prospective
+\`codex_capture.py\` hook-field observer. The documented Codex hook JSON
+provides \`UserPromptSubmit.prompt\` and
+\`Stop.last_assistant_message\`. Those are *individual host-supplied fields*,
+**not a full rendered conversation**. Codex can also supply a
+\`transcript_path\`, but its private file format is expressly not a stable
+hook API, so this adapter never opens that path or guesses its location.
+
+The observer accepts a candidate \`SessionStart(source="startup")\`
+boundary, then ordered matching user-prompt/assistant-stop pairs. It
+preserves each string exactly in transient observations, with field-specific
+hashes and stable IDs. It refuses resume, fork, compact, clear, changed
+replays, overlapping turns, uncertain Stop continuations, scope/path/session
+changes, interrupt and invalid sizes. \`PostToolUse\`, reasoning,
+subagents, model events and arbitrary JSON fields never become visible-chat
+records. Transient state retains only identifiers and hashes, not message
+bodies.
+
+**Security and completeness gates:**
+
+- Neither a supplied hook JSON object nor a startup source proves that
+  the event came from a trusted physical Codex host. No authenticated
+  at-event scope issuer has been established. The code gates
+  \`_HOST_EVENTS_ADMITTED\` and \`_AT_TIME_SCOPE_ISSUER_ADMITTED\` both
+  remain false, cannot be enabled through config, and even a test-patched
+  gate does not reach an archive writer.
+- Source field observation does **not** establish complete assistant
+  output, interim messages, attachments, private-session consent or
+  unobserved hooks. The existing learning bridge can short-circuit some
+  lifecycle events. No claim of full conversation retention is made.
+- No hook registration, bridge dispatch, installer/package manifest edit,
+  OS JSONL archive write, Memory mutation, transcript scanning, live
+  probing, merge or release occurs in slice 3A.1. Unit tests call only
+  the pure observer against artificial hook payloads.
+- The next checkpoint must prove host event delivery and per-event
+  authenticated physical-scope attribution, including consent/privacy
+  semantics, *before* a prospective OS-authorized writer may be staged.
+  Old/resumed conversation records cannot be attributed using present
+  cwd/scope or a fabricated historical ledger.
+
+Current Codex hook reference:
+https://learn.chatgpt.com/docs/hooks (Common input fields,
+UserPromptSubmit, Stop, SessionStart).

@@ -44,6 +44,9 @@ jobs:
       - name: Test OS-owned App Server synthetic consent and scope policy, production blocked
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_trust_policy.py' -v
 
+      - name: Test OS-originated thread and turn request binding with private synthetic child only
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_thread_binding.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

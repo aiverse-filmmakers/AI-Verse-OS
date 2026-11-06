@@ -587,6 +587,58 @@ class ArchiveFixtureTests(unittest.TestCase):
                 archive.append_batch(events)
         self.assertEqual(self.path(archive).read_bytes(), before)
 
+    def test_shared_v1_capacity_contract_refuses_oversize_without_mutating_committed_data(self):
+        # Small synthetic thresholds exercise the real check at the boundary
+        # without allocating 64 MB in every CI matrix job.
+        self.assertEqual(a.MAX_ARCHIVE_MESSAGES, 40_000)
+        self.assertEqual(a.MAX_ARCHIVE_BYTES, 64_000_000)
+        archive = self.archive()
+        first, second = self._batch_events(2)
+        archive.append_batch((first,))
+        path = self.path(archive)
+        committed = path.read_bytes()
+        with mock.patch.object(a, "MAX_ARCHIVE_MESSAGES", 1):
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append(second)
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch((first, second))
+        self.assertEqual(path.read_bytes(), committed)
+
+        # An exactly full file is replayable but never grows past the cap.
+        with mock.patch.object(a, "MAX_ARCHIVE_BYTES", len(committed)):
+            replay = archive.append_batch((first,))
+            self.assertEqual((replay.saved, replay.replayed), (0, 1))
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append(second)
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch((first, second))
+        self.assertEqual(path.read_bytes(), committed)
+
+        # Torn-tail repair must not happen before rejecting a batch that
+        # cannot fit. The failed attempt leaves even partial bytes unchanged.
+        torn = b'{"not_committed":'
+        with path.open("ab") as output:
+            output.write(torn)
+        partial = path.read_bytes()
+        with mock.patch.object(a, "MAX_ARCHIVE_BYTES", len(partial) + 1):
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append_batch((first, second))
+        self.assertEqual(path.read_bytes(), partial)
+        self.assertEqual(archive.append_batch((first, second)).saved, 1)
+        self.assertEqual(len(archive.read().messages), 2)
+
+    def test_legacy_writer_refuses_oversize_replay_read_and_append(self):
+        archive = self.archive()
+        first = self._batch_events(1)[0]
+        self.assertEqual(archive.append(first).status, "saved")
+        original = self.path(archive).read_bytes()
+        with mock.patch.object(a, "MAX_ARCHIVE_BYTES", len(original) - 1):
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.read()
+            with self.assertRaises(a.ArchiveBlocked):
+                archive.append(first)
+        self.assertEqual(self.path(archive).read_bytes(), original)
+
     def test_same_event_concurrent_replay_is_serialized(self):
         chat = self.archive()
         original = event()

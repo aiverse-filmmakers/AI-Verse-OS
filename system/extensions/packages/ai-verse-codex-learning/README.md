@@ -326,3 +326,52 @@ attestation; command execution remains potentially privileged; an
 in-memory consent flag is not a reviewed UI permission; and no
 filesystem precheck alone guarantees protection against concurrent
 privileged local changes. Pilot and independent review remain gates.
+
+### 3A.6 Synthetic parent-owned thread and turn request binding
+
+New `codex_app_server_thread_binding.py` models a single prospective
+OS-selected conversation across `thread/start` and `turn/start`
+requests and corresponding App Server v2 responses. It uses fixed
+client-originated JSON-RPC request IDs **only on a single already-owned,
+disposable synthetic pipe**. The returned server-assigned `thread.id`
+is bound to a matching `thread/started` notice before the client may
+construct its one text-only `turn/start` request. That request's
+`turn.id` must then match the `turn/started`, item and completion events.
+
+The parent specifies physical `cwd`, initial `ephemeral` thread choice,
+read-only sandbox policy, one original text input and no automatic
+approval. These fixtures never contact a real model or host. Source
+text exists only transiently in an outbound test request; the binding
+state stores its SHA-256 only, not raw messages. Streamed item contents
+are NOT treated as provenance, and the separate candidate parser
+still reports untrusted coverage.
+
+Strict failure cases include wrong, duplicate, unsolicited or reversed
+request IDs, a server request masquerading as a notification, mixed
+thread/turn IDs, history/fork responses, extra pending items,
+failed/interrupted completion, overlapping starts, expired lease,
+consent withdrawal, scope pause, changed child connection, and
+unsupported/oversized input. A cancellation immediately abandons
+the local state before any `turn/interrupt` acknowledgement. A broken
+connection can ONLY restart with a fresh `thread/start` request:
+it never resumes or imports older conversations under present scope.
+
+**Security boundary:** Request/response correlation on a controlled
+stdio pipe is not cryptographic host attestation. The implementation
+only accepts a fixture-owned connection and rechecks the synthetic
+3A.5 consent/workspace policy on every transition. JSON attributes
+still cannot issue authentic scope, user consent or source completeness.
+`capture_admission()` and `connect_real_host()` always block, even
+when code gates are patched in tests. The existing OS Bridge runtime,
+installer, hook wiring, production executable, Memory and OS archive
+writer have not changed.
+
+The first strict parser deliberately refuses unsupported notification
+orderings rather than retroactively attributing them. A future
+pinned real-host pilot and independent review must establish actual
+event ordering, source completeness, consent UI and authenticated
+transport authority. This prototype cannot backfill Codex desktop
+history and must not be treated as a usable chat backup.
+
+Official v2 request examples:
+https://learn.chatgpt.com/docs/app-server

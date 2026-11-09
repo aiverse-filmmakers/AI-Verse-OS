@@ -232,6 +232,8 @@ def read_isolated_config(proc: subprocess.Popen[bytes], pending: bytearray,
                          *, request_id: int,
                          require_owned: Callable[[], None] | None = None) -> None:
     """Exercise real owned request ID routing with a sterile read-only RPC."""
+    if require_owned is not None:
+        require_owned()
     send(proc, {
         "id": request_id, "method": "config/read",
         "params": {"includeLayers": False},

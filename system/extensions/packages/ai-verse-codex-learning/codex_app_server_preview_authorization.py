@@ -136,6 +136,9 @@ class SyntheticPreviewOwner:
         self._consented = False
         self._generation = 1
         self._allowed: set[str] = set()
+        # Physical identities are recorded at parent-side registry admission.
+        # Replacing a directory without re-admission cannot mint a new lease.
+        self._registered_identity: dict[str, tuple] = {}
         self._active: _Record | None = None
 
     def _invalidate(self) -> None:
@@ -149,7 +152,7 @@ class SyntheticPreviewOwner:
         scope = _scope(scope)
         if type(active) is not bool:
             _deny()
-        _directory_identity(
+        identity = _directory_identity(
             self._root, scope,
             self._root if scope == "operator"
             else self._root / "workspaces" / scope.removeprefix("workspace:")
@@ -157,8 +160,10 @@ class SyntheticPreviewOwner:
         self._invalidate()
         if active:
             self._allowed.add(scope)
+            self._registered_identity[scope] = identity
         else:
             self._allowed.discard(scope)
+            self._registered_identity.pop(scope, None)
 
     def select_scope(self, scope: str) -> None:
         scope = _scope(scope)
@@ -200,6 +205,8 @@ class SyntheticPreviewOwner:
             _deny()
         tid, turn = _ident(thread_id), _ident(turn_id)
         identity = _directory_identity(self._root, scope, cwd)
+        if identity != self._registered_identity.get(scope):
+            _deny()
         if self._active is not None:
             self._active.closed = True
         lease = PreviewLease(object())
@@ -224,7 +231,8 @@ class SyntheticPreviewOwner:
                 or time.monotonic() >= record.expires_at
                 or record.checked_events >= MAX_EVENTS):
             _deny()
-        if _directory_identity(self._root, record.scope, record.cwd) != record.path_identity:
+        if (_directory_identity(self._root, record.scope, record.cwd) != record.path_identity
+                or record.path_identity != self._registered_identity.get(record.scope)):
             _deny()
         return record
 

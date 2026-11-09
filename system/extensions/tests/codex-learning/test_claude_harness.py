@@ -953,6 +953,10 @@ class ProfileCorrectionTests(ClaudeFixture):
         sentence = "Notice durable things in what the user says: identity facts, communication preferences and pet peeves"
         self.assertIn(sentence, self.bridge.instruction({"session_id": "s", "turn": None}))
         self.assertIn(sentence, Bridge(self.root).instruction({"session_id": "s", "turn": None}))
+        lasting = "stated while giving a task is lasting if it would apply to future work, even when phrased as a command"
+        for text in (self.bridge.instruction({"session_id": "s", "turn": None}), Bridge(self.root).instruction({"session_id": "s", "turn": None})):
+            self.assertIn(lasting, text)
+            self.assertIn("Ignore truly one time edits", text)
 
     def test_correction_replaces_the_earlier_preference_and_keeps_the_quote(self):
         self.seed_bullets()

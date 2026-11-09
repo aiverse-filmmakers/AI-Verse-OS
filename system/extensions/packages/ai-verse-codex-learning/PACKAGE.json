@@ -3,18 +3,18 @@
   "id": "ai-verse-codex-learning",
   "version": "0.3.0-local",
   "files": {
-    "bridge.py": "3e9daaea44f483c26431ceaa155424016a64218c9bd9284ca0d11ccd62c49ead",
+    "bridge.py": "8a916658eb88f4aa19a0ff3b267122853a0224bbe9e53b70b71e3fc745341c19",
     "lifecycle.py": "f3c4bf7096b780aadfa50992c8db19f2828b9ce71c840e658196476982974281",
     "install.py": "cde0d9c3799905f3af125a874aade691bba793150aa3fe675d218b84ebde01e4",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",
     "inspect_runtime.py": "1b5810e3e323e0432fb1f9f7db8fe6b31e3c16c3fc11dcd9a6edc0d2ac357538",
-    "INSTRUCTIONS.md": "d6a6605ea146c73ceb9c08252bc41c2d3576281427dc8dcd8d80e83c950b35d9",
-    "README.md": "c13f41d84ecfdd648d8d5a502a2d29d07912c853615d43c4dbe0de1c7fd0eb15",
-    "REVIEW-SCHEMA.md": "b8263e8d7af9bc1ef314324eb840289a2e5e6bb2ba8cd20ab0a513d52e17d2dc",
+    "INSTRUCTIONS.md": "0f11dd545d99bc86513f6e3c3c9244ad42e62b399cdcbe61a776554950826b55",
+    "README.md": "b7e91aca7633357c4a10e565f91b173b2c6f3a6c401ecd6487a565892c4d8eb3",
+    "REVIEW-SCHEMA.md": "8933dd36fe176c281fe64ea119a985ebbd4478bf8f02b8e7452e1258e4f7cda5",
     "SETUP.md": "7a36a23952d32fd9d138d2b8ca1fe81cc9274ffbb130b998aaab19be6a8bf785",
     "intent.py": "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49",
     "brain_read.py": "be53f0eebbb312570079d474e8b8156375ede0c68ee2ca0301378b2a2a8cead1",
     "INTENT.md": "661cdd1983800d8eb389380d3c4943b56c5f25adff0a7ffde9a8068fa0d4702d",
-    "reflect.py": "4f5aaa76b5574f8a1153d24e4ba7ddc16fdca157f63ec69ae8e8a61d5d6c427a"
+    "reflect.py": "b3a6538ceef78cef9f754ce3175ebebbc4c44176329b7ba120b9d80223137bde"
   }
 }

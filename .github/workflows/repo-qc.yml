@@ -62,6 +62,9 @@ jobs:
       - name: Test parent-owned Codex RPC correlation, no live process
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_rpc_boundary.py' -v
 
+      - name: Reject revoked actual parent pipe leases and process reuse in disposable Linux fixture
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_process_epoch.py' -v
+
       - name: Test empty ephemeral Codex thread IDs and workspace binding, synthetic-only
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_ephemeral_boundary.py' -v
 

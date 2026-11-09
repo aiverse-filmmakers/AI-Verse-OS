@@ -8,6 +8,7 @@ on:
       - system/extensions/tests/codex-learning/test_codex_app_server_rpc_boundary.py
       - system/extensions/tests/codex-learning/test_codex_app_server_ephemeral_boundary.py
       - system/extensions/tests/codex-learning/test_codex_app_server_preview_authorization.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_preview_replay.py
       - system/extensions/packages/ai-verse-codex-learning/**
   workflow_dispatch:
 
@@ -42,6 +43,9 @@ jobs:
 
       - name: Deny stale synthetic owner grants after consent or workspace changes
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_authorization.py' -v
+
+      - name: Reject synthetic repeated items and cross-turn lifecycle without launching Codex
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_replay.py' -v
 
       - name: Fetch only the immutable official stable release archive and verify exact digest
         shell: bash

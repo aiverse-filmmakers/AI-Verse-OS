@@ -65,6 +65,9 @@ jobs:
       - name: Test empty ephemeral Codex thread IDs and workspace binding, synthetic-only
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_ephemeral_boundary.py' -v
 
+      - name: Test disposable v2 fixture atomic disk write, restart and tamper refusal
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_v2_fixture_disk.py' -v
+
       - name: Test synthetic item replay, lifecycle and stale event refusal
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_replay.py' -v
 

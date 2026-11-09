@@ -10,6 +10,7 @@ not archive records. The SHA-256 receipt does NOT attest event provenance.
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass
 import hashlib
 import json
@@ -113,7 +114,7 @@ def _validate_envelope(blob: bytes, archive_id: str) -> None:
             _deny()
         try:
             wire = base64.b64decode(entry["wire_b64"], validate=True)
-        except (ValueError, TypeError, KeyError):
+        except (ValueError, TypeError, KeyError, binascii.Error):
             _deny()
         if (not 1 <= len(wire) <= MAX_FRAME_BYTES
                 or len(wire) != entry["wire_byte_length"]
@@ -195,6 +196,8 @@ def _read_at(fd: int, filename: str) -> bytes:
              again.st_mode, again.st_nlink)):
             _deny()
         return b"".join(chunks)
+    except (OSError, ValueError, TypeError):
+        _deny()
     finally:
         os.close(handle)
 

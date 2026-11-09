@@ -380,3 +380,57 @@ history and must not be treated as a usable chat backup.
 
 Official v2 request examples:
 https://learn.chatgpt.com/docs/app-server
+
+### 3A.7 Exact wire source evidence candidate (not an archive)
+
+The existing private chat archive v1 requires completed **original
+source record bytes**, a verified SHA-256 digest, genuine source byte
+offsets, source event IDs, authenticated physical workspace scope and
+authorization checked at the time of persistence. A decoded App
+Server JSON notification or reconstructed `json.dumps()` output
+cannot meet these requirements, and source offsets from a separate
+provider's transcript format must NOT be invented.
+
+New `codex_app_server_source_evidence.py` defines a strictly bounded
+**synthetic-only** `ai-verse.codex-app-server-source-candidate/v1`
+envelope. Its input is exact caller-supplied UTF-8 JSONL wire bytes,
+including the newline, not decoded dictionaries. It validates unique
+JSON fields, strict UTF-8, one prospective text-only user and final
+assistant item, thread/turn IDs, the successful completion event,
+unique item IDs, and bounded ordered frames. Unfinished items,
+unrecognized notification kinds, interruptions, media, duplicate
+or nonfinal assistant records and partial evidence fail closed.
+
+For each eligible item the in-memory witness records the **unaltered
+received wire bytes**, their SHA-256, byte length, frame ordinal and
+exact text hash. A stream fingerprint covers the ordered exact frames.
+These are fingerprints of SUPPLIED frames, not verified original
+provider/host bytes or cryptographic event attestations. Native
+source byte offsets remain explicitly absent (`None`), and all
+trust, consent, full-UI coverage and writer-admission flags remain
+false. Item witness text and raw bytes are excluded from debug repr.
+
+The disposable Python fixture transport now exposes
+`next_notification_with_raw()` while preserving its existing
+parsed-only API. This lets synthetic tests compare wire bytes
+directly with their checksums, even when equivalent JSON uses
+different whitespace. No real Codex transcript or host is touched.
+
+`convert_to_v1_archive()` and `source_admission()` unconditionally
+return blocked, including when the source evidence development flag
+is patched in tests. This new wire candidate is NOT compatible
+with the existing v1 archive reader, nor is it a migration or a
+production record schema. No v1 source offsets, scope issuer or
+authenticated host version is generated.
+
+**Requirements before any archive integration:** verify a pinned
+real App Server version and independently controlled OS child
+transport, capture exact received frame bytes before parsing,
+prove origin/physical scope/consent per event, verify complete
+rendered output including media/continuations, and design a
+reviewed storage format with exact provenance. Only then can
+OS and Memory agree on a new versioned reader/writer contract.
+Passing synthetic source tests never enables capture.
+
+Sources: https://learn.chatgpt.com/docs/app-server
+and https://openai.com/index/unlocking-the-codex-harness/

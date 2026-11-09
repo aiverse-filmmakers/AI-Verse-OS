@@ -148,8 +148,9 @@ class SchemaPreflightSyntheticTests(unittest.TestCase):
 
     def test_documented_pinned_source_variants_are_not_complete_chat_coverage(self):
         self.assertEqual(gate.UPSTREAM_ITEM_VARIANTS, 19)
-        self.assertEqual(len(gate.SCHEMA_BLOBS), 6)
+        self.assertEqual(len(gate.SCHEMA_BLOBS), 7)
         self.assertEqual(len(gate.USER_INPUT_KINDS), 7)
+        self.assertIn("startedAtMs", gate.CURRENT_REQUIRED_ITEM_STARTED)
         self.assertIn("completedAtMs", gate.CURRENT_REQUIRED_ITEM_COMPLETION)
 
 
@@ -169,6 +170,7 @@ class ImmutableUpstreamSchemaCheckoutTests(unittest.TestCase):
         )
         self.assertEqual(len(report.item_variants), 19)
         self.assertEqual(len(report.user_input_variants), 7)
+        self.assertIn("startedAtMs", report.required_item_started)
         self.assertIn("completedAtMs", report.required_item_completion)
         self.assertFalse(report.runtime_executable_attested)
         self.assertFalse(report.source_stream_authenticated)

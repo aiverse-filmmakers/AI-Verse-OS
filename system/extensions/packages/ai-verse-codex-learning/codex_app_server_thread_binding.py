@@ -282,6 +282,11 @@ def receive(state: ParentBinding, bridge, connection, consent, policy,
                         or params.get("turnId") != state.turn_id
                         or state.item_notifications >= MAX_ITEM_NOTIFICATIONS):
                     _deny()
+                if method in ("item/started", "item/completed"):
+                    name = "startedAtMs" if method == "item/started" else "completedAtMs"
+                    stamp = params.get(name)
+                    if type(stamp) is not int or not 0 <= stamp <= (1 << 63) - 1:
+                        _deny()
                 return replace(
                     state, item_notifications=state.item_notifications + 1
                 ), "untrusted_item_event"

@@ -318,6 +318,7 @@ jobs:
             codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json
             codex-rs/app-server-protocol/schema/json/v2/TurnStartParams.json
             codex-rs/app-server-protocol/schema/json/v2/TurnStartResponse.json
+            codex-rs/app-server-protocol/schema/json/v2/ItemStartedNotification.json
             codex-rs/app-server-protocol/schema/json/v2/ItemCompletedNotification.json
             codex-rs/app-server-protocol/schema/json/v2/TurnCompletedNotification.json
           sparse-checkout-cone-mode: false

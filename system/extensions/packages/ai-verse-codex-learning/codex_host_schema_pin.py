@@ -28,10 +28,14 @@ SCHEMA_BLOBS = {
     "ThreadStartResponse": "7d24279f2d160c7edb4a0fbabb61e0c484b449f1",
     "TurnStartParams": "d299d318ded151f436f19eb6445f47fedeae2867",
     "TurnStartResponse": "896122af667ecc0179c645682f7d5ded3018764b",
+    "ItemStartedNotification": "03fd67148d64ad5eb142230bda5c4041e0604c96",
     "ItemCompletedNotification": "18590c6053667f251c19ad333c8a54ac57d6066a",
     "TurnCompletedNotification": "081f54cbb69d2759b0f7bb2f12394e2869533aeb",
 }
 UPSTREAM_ITEM_VARIANTS = 19
+CURRENT_REQUIRED_ITEM_STARTED = frozenset(
+    ("startedAtMs", "item", "threadId", "turnId")
+)
 CURRENT_REQUIRED_ITEM_COMPLETION = frozenset(
     ("completedAtMs", "item", "threadId", "turnId")
 )
@@ -67,6 +71,7 @@ class HostSchemaSnapshot:
     schema_blob_ids: tuple[tuple[str, str], ...]
     item_variants: tuple[str, ...]
     user_input_variants: tuple[str, ...]
+    required_item_started: tuple[str, ...]
     required_item_completion: tuple[str, ...]
     status: str = "upstream_source_schemas_pinned_runtime_unverified"
     runtime_executable_attested: bool = False
@@ -146,6 +151,7 @@ def verify_upstream_schema_checkout(schema_dir: Path) -> HostSchemaSnapshot:
     thread_reply = schemas["ThreadStartResponse"]
     turn_request = schemas["TurnStartParams"]
     turn_reply = schemas["TurnStartResponse"]
+    started = schemas["ItemStartedNotification"]
     complete = schemas["ItemCompletedNotification"]
     turn_complete = schemas["TurnCompletedNotification"]
     items = _variants(complete, "ThreadItem")
@@ -158,6 +164,7 @@ def verify_upstream_schema_checkout(schema_dir: Path) -> HostSchemaSnapshot:
             or not {"thread", "cwd"} <= set(thread_reply.get("properties", {}))
             or not {"threadId", "input"} <= set(turn_request.get("required", []))
             or "turn" not in turn_reply.get("required", [])
+            or not CURRENT_REQUIRED_ITEM_STARTED <= set(started.get("required", []))
             or not CURRENT_REQUIRED_ITEM_COMPLETION <= set(complete.get("required", []))
             or not {"threadId", "turn"} <= set(turn_complete.get("required", []))
             or len(items) != UPSTREAM_ITEM_VARIANTS
@@ -170,6 +177,7 @@ def verify_upstream_schema_checkout(schema_dir: Path) -> HostSchemaSnapshot:
         schema_blob_ids=tuple(sorted(SCHEMA_BLOBS.items())),
         item_variants=tuple(items),
         user_input_variants=tuple(inputs),
+        required_item_started=tuple(sorted(CURRENT_REQUIRED_ITEM_STARTED)),
         required_item_completion=tuple(sorted(CURRENT_REQUIRED_ITEM_COMPLETION)),
     )
 

@@ -195,6 +195,17 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(Refused, "outside content alone"):
             self.review(self.payload([self.outside_candidate("WebSearch", route="current")]))
 
+    def test_memory_search_hook_tags_are_saved_and_searchable(self):
+        self.start()
+        candidate = self.candidate()
+        candidate["parameters"]["tags"] = "topic,~zorblaxhook"
+        capture = self.review(self.payload([candidate]))["effects"][0]["result"]["result"]["memory_capture"]
+        self.assertEqual(capture["state"], "captured")
+        rows = self.bridge.owner("retrieve_history_progressive", {
+            "version": "memory.progressive-recall.v1", "scope": "operator", "depth": "detail",
+            "query": "zorblaxhook", "max_bytes": 8192, "limit": 4})
+        self.assertIn("filter", json.dumps(rows))
+
     def test_memory_capture_recall_and_retry(self):
         self.start()
         payload = self.payload([self.candidate()], persist=True)

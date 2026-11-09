@@ -16,11 +16,14 @@ At most four candidates. Example:
      "parameters": {
        "type": "lesson", "text": "A verified lesson with future value.",
        "confidence": 0.95,
+       "tags": "topic,~related,~words,~someone,~might,~search",
        "admission": {
          "durable": true, "historical": true, "current_truth": false,
          "contains_secret": false, "strategic": false, "permission_expansion": false,
          "privacy_ambiguous": false, "external_authority": false}},
      "evidence": [{"source_id": "user", "quote": "At least three exact words from the actual user prompt"}]}
+
+Every new memory must carry `tags`. Plain tags are real topics and appear in the Memory catalog. Tags that start with `~` are search hooks only: 6 to 12 everyday words or synonyms someone might use when asking about this memory later and that the text does not already contain (for a note about drones: `~aerial,~camera,~gear`; for a food reaction: `~diet,~eating,~allergy`). Think about who will ask and how, not about any current question. Hooks help search find the memory, never assert a new fact, and stay under 300 characters in total.
 
 Run bridge.py sources --session SESSION to get observed source identifiers and types. Tool sources need quotations from actual tool results. JSON envelopes and punctuation are normalized before contiguous word matching; this is not a claim of byte-exact transcript access. The adapter stores only salted token hashes and verifies those word sequences. It never retains source bodies or quotes in diagnostics. Assistant text alone cannot authorize a durable fact. These checks establish observed evidence, not semantic proof that the candidate follows from it: the model must justify relevance/truth and the canonical owner makes final admission.
 

@@ -1394,9 +1394,11 @@ class Bridge:
                 if outside_only and route in {"current", "skills"}:
                     raise Refused("outside content alone cannot change current state or create a skill")
                 if route == "memory":
-                    if set(parameters) - {"type", "text", "confidence", "admission", "supersedes"}:
+                    if set(parameters) - {"type", "text", "confidence", "admission", "supersedes", "tags"}:
                         raise Refused("unbounded Memory parameters")
                     bounded_text(parameters.get("text"), 4000)
+                    if "tags" in parameters:
+                        bounded_text(parameters.get("tags"), 300)
                     if outside_only:
                         parameters = {**parameters, "text": OUTSIDE_LABEL + parameters["text"]}
                         candidate = {**candidate, "parameters": parameters}

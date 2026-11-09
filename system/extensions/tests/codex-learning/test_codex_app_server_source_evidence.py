@@ -327,11 +327,16 @@ class SourceWireContractTests(unittest.TestCase):
                                    "command":"echo synthetic", "commandActions":[],
                                    "cwd":"/synthetic", "status":"completed",
                                    "aggregatedOutput":self.secret})
+        assistant_start = self.event("item/started",
+                                     threadId=self.thread, turnId=self.turn,
+                                     startedAtMs=999,
+                                     item={"id": "a-7", "type": "agentMessage"})
         delta = self.event("item/agentMessage/delta",
                            threadId=self.thread, turnId=self.turn,
-                           delta="UNTRUSTED_PARTIAL")
+                           itemId="a-7", delta="UNTRUSTED_PARTIAL")
         rows.insert(2, self.wire(nonchat))
-        rows.insert(3, self.wire(delta))
+        rows.insert(3, self.wire(assistant_start))
+        rows.insert(4, self.wire(delta))
         report = self.evaluate(rows)
         self.assertEqual(report.ignored_nonchat_items, 1)
         self.assertEqual(report.ignored_delta_frames, 1)
@@ -339,6 +344,92 @@ class SourceWireContractTests(unittest.TestCase):
         self.assertNotIn(self.secret, repr(report))
         self.assertEqual([m.role for m in report.messages],
                          ["user", "assistant"])
+
+    def test_pinned_deltas_require_started_matching_item_and_valid_indices(self):
+        def start(kind="agentMessage", ident="a-7", clock=999):
+            return self.event("item/started", threadId=self.thread,
+                              turnId=self.turn, startedAtMs=clock,
+                              item={"id": ident, "type": kind})
+
+        def delta(method="item/agentMessage/delta", **kwargs):
+            params = {"threadId": self.thread, "turnId": self.turn,
+                      "itemId": "a-7", "delta": "synthetic partial"}
+            params.update(kwargs)
+            return self.event(method, **params)
+
+        valid = self.rows()
+        valid.insert(2, self.wire(start()))
+        valid.insert(3, self.wire(delta()))
+        self.assertEqual(self.evaluate(valid).ignored_delta_frames, 1)
+
+        cases = [
+            (None, delta()),  # missing item/started
+            (start(), delta(itemId="foreign-item")),
+            (start("plan"), delta()),  # kind mismatch
+            (start(), delta(itemId=None)),
+            (start(), delta(itemId="../bad")),
+            (start(), delta(delta=None)),
+            (start(), delta(delta=1)),
+            (start(), delta("item/reasoning/summaryTextDelta")),
+            (start(), delta("item/reasoning/textDelta")),
+            (start(), delta("item/plan/delta")),
+        ]
+        for began, emitted in cases:
+            with self.subTest(begin=began is not None,
+                              method=emitted["method"]):
+                bad = self.rows()
+                if began is not None:
+                    bad.insert(2, self.wire(began))
+                    bad.insert(3, self.wire(emitted))
+                else:
+                    bad.insert(2, self.wire(emitted))
+                self.blocked(lambda frames=bad: self.evaluate(frames))
+
+    def test_pinned_item_start_and_completion_kind_and_clock_match(self):
+        for started, completed in (
+            ("plan", "agentMessage"),
+            ("agentMessage", "plan"),
+        ):
+            with self.subTest(start=started, complete=completed):
+                rows = self.rows()
+                rows.insert(2, self.wire(self.event(
+                    "item/started", threadId=self.thread,
+                    turnId=self.turn, startedAtMs=1000,
+                    item={"id": "a-7", "type": started})))
+                row = self.assistant()
+                row["params"]["item"]["type"] = completed
+                rows[-2] = self.wire(row)
+                self.blocked(lambda frames=rows: self.evaluate(frames))
+
+        rows = self.rows()
+        rows.insert(2, self.wire(self.event(
+            "item/started", threadId=self.thread,
+            turnId=self.turn, startedAtMs=2000,
+            item={"id": "a-7", "type": "agentMessage"})))
+        self.blocked(lambda: self.evaluate(rows))
+
+    def test_reasoning_deltas_require_index_and_matching_started_kind(self):
+        for method, key in (
+            ("item/reasoning/summaryTextDelta", "summaryIndex"),
+            ("item/reasoning/textDelta", "contentIndex"),
+        ):
+            for bad_index in (None, True, -1, "0", 1001):
+                rows = self.rows()
+                rows.insert(2, self.wire(self.event(
+                    "item/started", threadId=self.thread,
+                    turnId=self.turn, startedAtMs=900,
+                    item={"id": "r-7", "type": "reasoning"})))
+                params = {"threadId": self.thread, "turnId": self.turn,
+                          "itemId": "r-7", "delta": "partial"}
+                if bad_index is not None:
+                    params[key] = bad_index
+                rows.insert(3, self.wire(self.event(method, **params)))
+                rows.insert(4, self.wire(self.event(
+                    "item/completed", threadId=self.thread,
+                    turnId=self.turn, completedAtMs=950,
+                    item={"id": "r-7", "type": "reasoning"})))
+                with self.subTest(method=method, bad_index=bad_index):
+                    self.blocked(lambda frames=rows: self.evaluate(frames))
 
     def test_source_wire_budget_and_frame_count_fail_closed(self):
         frames = self.rows()

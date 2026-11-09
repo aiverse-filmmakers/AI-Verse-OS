@@ -12,7 +12,7 @@ untrusted JSON and may only establish provisional IDs for this fixture.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import hashlib
 from pathlib import Path
 import re
@@ -33,6 +33,16 @@ class BindingBlocked(ValueError):
     """Error messages must not contain prompts, source IDs or paths."""
 
 
+@dataclass
+class _SharedClose:
+    """A single local cancellation flag shared by immutable snapshots.
+
+    This is synthetic in-process invalidation, not a production transport
+    lock, a tamperproof capability, or durable revocation.
+    """
+    revoked: bool = False
+
+
 @dataclass(frozen=True)
 class ParentBinding:
     """Transient synthetic correlation, NOT host or archive attestation."""
@@ -49,6 +59,9 @@ class ParentBinding:
     turn_id: Optional[str] = None
     prompt_sha256: Optional[str] = None
     item_notifications: int = 0
+    _shared_close: _SharedClose = field(
+        default_factory=_SharedClose, compare=False, repr=False
+    )
     transport_authenticated: bool = False
     event_origin_authenticated: bool = False
     scope_authority_issued: bool = False
@@ -74,6 +87,7 @@ def _guard(state, bridge, connection, consent, policy):
     """
     try:
         if (not isinstance(state, ParentBinding)
+                or state._shared_close.revoked
                 or state.phase in ("abandoned", "completed")
                 or id(bridge) != state.bridge_identity
                 or id(connection) != state.connection_identity
@@ -285,9 +299,13 @@ def cancel(state: ParentBinding) -> Tuple[ParentBinding, Optional[dict]]:
     Returning a synthetic request does not mean remote cancellation succeeded.
     A connection loss, restart, or late reply never restores this state.
     """
-    if not isinstance(state, ParentBinding) or state.phase in (
-        "completed", "abandoned"):
+    if (not isinstance(state, ParentBinding)
+            or state._shared_close.revoked
+            or state.phase in ("completed", "abandoned")):
         _deny()
+    # All snapshots produced through dataclasses.replace() share this
+    # reference. Closing one permanently closes every older snapshot.
+    state._shared_close.revoked = True
     request = None
     if state.thread_id and state.turn_id:
         request = {
@@ -302,6 +320,7 @@ def disconnect(state: ParentBinding) -> ParentBinding:
     """All old IDs are permanently closed on a transport disconnect."""
     if not isinstance(state, ParentBinding):
         _deny()
+    state._shared_close.revoked = True
     return replace(state, phase="abandoned")
 
 

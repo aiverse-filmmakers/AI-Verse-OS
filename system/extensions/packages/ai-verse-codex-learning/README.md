@@ -558,3 +558,31 @@ References:
 https://github.com/openai/codex/commit/e54a5713caf331f42a6eef0166186df5f7563c29
 https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
 https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
+
+### 3A.10 Pinned item lifecycle timestamps, synthetic-only compatibility
+
+**Source:** original generated Codex App Server v2 JSON schemas at immutable
+`openai/codex@e54a5713caf331f42a6eef0166186df5f7563c29`.
+In addition to `item/completed.params.completedAtMs`, the pinned
+`ItemStartedNotification` requires `params.startedAtMs`. Both are
+64-bit signed millisecond integer fields in their respective notification
+payloads, not authentication timestamps or owner-granted consent.
+The schema preflight now verifies seven original pinned schema Git blobs,
+including `ItemStartedNotification`, without executing upstream code.
+
+OS fixture consumers now refuse missing, boolean, fractional, negative,
+non-integer or out-of-range lifecycle times for `item/started` and
+`item/completed`. Synthetic JSONL fixtures, fixture-child notification
+streams and v2 received-wire examples use those exact fields. The
+separately maintained Memory fixture reader must also independently
+validate these timestamps after decoding exact original wire bytes,
+even if an attacker recomputes every unkeyed SHA-256/chain digest.
+
+This checkpoint does not convert a schema-matched notification into
+a complete UI transcript, a trusted host event, consent, owner/scope
+authorization, a v1 source byte offset, or a production archive.
+`admit_real_capture()`, v2 fixture archive persistence, existing
+hook capture and Memory live discovery remain blocked. No real Codex
+binary launch, personal conversation access, production wiring,
+installer changes or merge. Separate real-host evidence, consent,
+coverage, review and isolated pilot are future release gates.

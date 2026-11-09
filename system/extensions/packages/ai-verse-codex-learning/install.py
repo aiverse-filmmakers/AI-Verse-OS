@@ -15,7 +15,7 @@ import sys
 import tempfile
 import zipfile
 
-from bridge import Bridge, DEFAULT_ROOT, ID, VERSION, atomic_json, read_json, safe, utc
+from bridge import Bridge, DEFAULT_ROOT, ID, Refused, VERSION, atomic_json, read_json, safe, utc
 from lifecycle import claude_build, claude_definition, definition, is_ours_claude, merge
 
 SOURCE = Path(__file__).resolve().parent
@@ -181,8 +181,27 @@ def install(root, options):
                 file.write_bytes(data)
         raise
     return {"state": "setup-required", "installed": True, "version": VERSION,
-            "trust_modified": False, "next_step": "Open Codex Settings → Hooks, review this project's six hooks, then say Done in the setup chat.",
+            "claude_hooks": _refresh_claude_hooks(root, options), "trust_modified": False, "next_step": "Open Codex Settings → Hooks, review this project's six hooks, then say Done in the setup chat.",
             "review_mode": config["review_mode"], "canonical_user_state_modified": False}
+
+
+def _refresh_claude_hooks(root, options):
+    """Claude hooks carry the bridge's hash, and the bridge refuses to run under an old one.
+
+    A changed bridge therefore needs its hooks rewritten, or Claude Code loses the helpers.
+    Never fails the install: a problem is reported, and claude-doctor explains it.
+    """
+    record_file = root / ".aiverse/extensions" / ID / "claude-adapter.json"
+    if not record_file.exists():
+        return "not-installed"
+    try:
+        record = read_json(record_file, root)
+        if record.get("build") == sha(root / f".aiverse/extensions/{ID}/bridge.py"):
+            return "current"
+        claude_install(root, options)
+    except (ValueError, OSError, RuntimeError, Refused) as error:
+        return "needs-attention: " + str(error)
+    return "refreshed"
 
 
 def _restore_bytes(path, payload):

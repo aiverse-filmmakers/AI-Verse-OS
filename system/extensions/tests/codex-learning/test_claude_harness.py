@@ -579,6 +579,35 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertEqual(timeouts["UserPromptSubmit"], [30])
         self.assertEqual(self.state(), before)  # Codex hooks, registry, config and receipt untouched.
 
+    def mark_hooks_as_older_build(self):
+        record = json.loads(self.record.read_text())
+        record["build"] = "older-build"
+        self.record.write_text(json.dumps(record))
+        return self.sha(self.extension / "bridge.py")
+
+    def test_install_refreshes_claude_hooks_when_the_bridge_changes(self):
+        self.cmd("claude-install")
+        build = self.mark_hooks_as_older_build()
+        status = self.install_module()._refresh_claude_hooks(self.root, {})
+        self.assertEqual(status, "refreshed")
+        self.assertEqual(json.loads(self.record.read_text())["build"], build)
+        self.assertTrue(all(build in hook["command"] for hook in self.bridge_hooks()))
+        self.assertEqual(self.install_module()._refresh_claude_hooks(self.root, {}), "current")
+
+    def test_install_leaves_claude_alone_when_it_was_never_set_up(self):
+        self.assertEqual(self.install_module()._refresh_claude_hooks(self.root, {}), "not-installed")
+        self.assertFalse(self.settings.exists())
+
+    def test_install_reports_but_survives_edited_claude_hooks(self):
+        self.cmd("claude-install")
+        settings = self.load()
+        hook = settings["hooks"]["Stop"][0]["hooks"][0]
+        hook["timeout"] = hook["timeout"] + 1
+        self.settings.write_text(json.dumps(settings, indent=2))
+        self.mark_hooks_as_older_build()
+        status = self.install_module()._refresh_claude_hooks(self.root, {})
+        self.assertTrue(status.startswith("needs-attention"), status)
+
     def test_repeat_install_has_no_duplicates_and_keeps_the_baseline(self):
         self.settings.parent.mkdir()
         original = json.dumps(self.OTHER, indent=2)

@@ -311,6 +311,51 @@ class SyntheticRequestBindingTests(unittest.TestCase):
         }))
         self.assertEqual(binding.capture_admission(cancelled)["status"], "blocked")
 
+    def test_cancel_revokes_all_older_immutable_snapshots(self):
+        state = self.stream_ready()
+        older = replace(state)
+        closed, interrupt = binding.cancel(state)
+        self.assertEqual(closed.phase, "abandoned")
+        self.assertEqual(interrupt["method"], "turn/interrupt")
+        for prior in (older, state):
+            with self.subTest(phase=prior.phase):
+                self.blocked(lambda: self.receive(prior, {
+                    "method": "item/completed",
+                    "params": {
+                        "threadId": prior.thread_id,
+                        "turnId": prior.turn_id,
+                        "item": {"id": "late", "type": "agentMessage",
+                                 "phase": "final_answer", "text": "late"}
+                    },
+                }))
+        self.blocked(lambda: binding.cancel(older))
+
+    def test_disconnect_revokes_unmodified_old_thread_ready_snapshot(self):
+        state = self.thread_ready()
+        old_snapshot = replace(state)
+        closed = binding.disconnect(state)
+        self.assertEqual(closed.phase, "abandoned")
+        # Still-alive child cannot reauthorize stale request objects.
+        self.assertIsNone(self.connection._process.poll())
+        for prior in (state, old_snapshot):
+            self.blocked(lambda: binding.begin_turn(
+                prior, self.bridge, self.connection, self.consent, policy,
+                "SYNTHETIC_ONLY_PROMPT"
+            ))
+
+    def test_cancel_after_turn_request_revokes_prior_thread_ready_snapshot(self):
+        ready = self.thread_ready()
+        ready_snapshot = replace(ready)
+        pending, _ = binding.begin_turn(
+            ready, self.bridge, self.connection, self.consent, policy,
+            "SYNTHETIC_ONLY_PROMPT"
+        )
+        self.assertEqual(binding.cancel(pending)[0].phase, "abandoned")
+        self.blocked(lambda: binding.begin_turn(
+            ready_snapshot, self.bridge, self.connection, self.consent, policy,
+            "SYNTHETIC_ONLY_PROMPT"
+        ))
+
     def test_disconnect_and_reconnect_do_not_inherit_ids(self):
         state = self.thread_ready()
         stale = binding.disconnect(state)

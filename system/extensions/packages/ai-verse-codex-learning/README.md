@@ -710,3 +710,44 @@ Memory discovery or installed host integration is permitted.
 Production admission remains unconditionally blocked, and the PR
 must stay draft until later security review and local acceptance.
 
+### 3A.14: two real empty ephemeral roots, CI-only
+
+Official current protocol documentation:
+https://learn.chatgpt.com/docs/app-server
+Official release-pinned generated v2 schemas:
+https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ThreadStartParams.json
+https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json
+https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ThreadStartedNotification.json
+
+The official protocol distinguishes thread, turn and item. A freshly started
+ephemeral root thread has its own UUIDv7 \`thread.id\`, matching
+\`thread.sessionId\`, no fork parent, an empty turn history and an exact
+effective \`cwd\`. A client must not interpret these server-provided fields
+as a signed proof of consent, host origin or authorized workspace membership.
+They are response/notification consistency checks ONLY.
+
+The offline GitHub runtime test now sends exactly TWO sterile
+\`thread/start\` requests after handshake and read-only RPC checks. Both use
+\`ephemeral: true\`, \`approvalPolicy: never\`, \`sandbox: read-only\`,
+and distinct **newly created, empty** CI-only working directories
+\`/scratch/workspace-alpha\` and \`/scratch/workspace-beta\`. They do not
+include text, files, a model name, user IDs, existing thread IDs or prompts.
+The test correlates each request ID with the paired \`thread/started\`
+notification and rejects foreign cwd, reused thread IDs, non-ephemeral
+responses, forked history, mismatched session roots, invalid UUIDv7 values,
+duplicate events, mixed response/notification envelopes and unexpected
+turn/item/server-request events.
+
+Additional synthetic negative tests run in Repository QC and before the
+real-runtime test; the latter still runs without network, inherited secrets
+or OS checkout access. No \`turn/start\`, model generation, authentication,
+personal transcript, durable recording, real app-server reuse, installed
+hook, Memory disclosure or production path is permitted.
+
+**Proof boundary:** Two clean test workspace identities on one OS-owned
+process demonstrate a narrow runtime protocol correlation. They do NOT
+establish per-record authorization for a real project or the existence
+of an OS-issued consent and revocation service. A future local integration
+must explicitly establish those boundaries before capture or merge. The
+real-host and archive admission functions remain hard-blocked.
+

@@ -207,7 +207,7 @@ def evaluate_exact_fixture_frames(
                     or _id(turn.get("id")) != turn_id
                     or params.get("turnId", turn_id) != turn_id
                     or turn.get("status") != "completed"
-                    or started_items - completed_items
+                    or started_items.keys() - completed_items
                     or len(messages) != 2
                     or [x.role for x in messages] != ["user", "assistant"]):
                 _deny()

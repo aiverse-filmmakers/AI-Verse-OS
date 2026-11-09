@@ -26,6 +26,8 @@ MAX_JSONL = 65_536
 # Generated v2 JSON schema source blobs from the SAME official release tag.
 # Git object IDs of generated JSON schemas, not release signatures.
 EXPECTED_BLOBS = {
+    "ConfigReadParams": "db38089a5d2d1927b0dc0ea580ee009964ff45a1",
+    "ConfigReadResponse": "66a190dfe6761eca2b3453262320db07f3f85ea4",
     "ThreadStartParams": "5164caf6a208e4e0aa1d21baff108df8430c9d54",
     "ThreadStartResponse": "4dd9cb7744d7528e72eaf0bef273678ab40b2f43",
     "TurnStartParams": "d299d318ded151f436f19eb6445f47fedeae2867",
@@ -89,6 +91,12 @@ def verify_schemas(schema_root: Path) -> None:
             loaded[name] = json.loads(data.decode("utf-8"))
         except (UnicodeError, ValueError):
             deny("stable runtime schema cannot be parsed")
+    if "includeLayers" not in loaded["ConfigReadParams"].get("properties", {}):
+        deny("stable runtime read-only configuration request changed")
+    if not {"config", "origins"} <= set(
+        loaded["ConfigReadResponse"].get("required", ())
+    ):
+        deny("stable runtime read-only configuration response changed")
     for name, clock in (
         ("ItemStartedNotification", "startedAtMs"),
         ("ItemCompletedNotification", "completedAtMs"),
@@ -292,7 +300,7 @@ def main() -> None:
                "--out", str(schema_root)], env, timeout=25)
     verify_schemas(schema_root)
     handshake(binary, env)
-    print("PASS: official stable Codex runtime, 7 matching release schemas, "
+    print("PASS: official stable Codex runtime, 9 matching release schemas, "
           "no-token stdio initialization, duplicate refusal, two owner-correlated read-only RPCs, clean teardown")
     print("BLOCKED: thread/turn execution, user data, archive writes, consent "
           "and real-host production admission")

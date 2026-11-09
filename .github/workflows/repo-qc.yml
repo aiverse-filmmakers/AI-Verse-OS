@@ -71,6 +71,23 @@ jobs:
       - name: Test synthetic item replay, lifecycle and stale event refusal
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_replay.py' -v
 
+      - name: Verify native Dashboard host session and canonical OS workspace are not chat capture issuers
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          # Read-only pinned existing Dashboard source, never runtime auth.
+          DASHBOARD_SESSION_SOURCE="$RUNNER_TEMP/aiverse-dashboard-local-session-pinned.ts"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            --retry 3 --connect-timeout 15 --max-time 90 \
+            "https://raw.githubusercontent.com/aiverse-filmmakers/AI-Verse-Dashboard/91aad66592ab43dfe2acaeff314ade93c63a7cef/apps/gateway/src/local-app-session.ts" \
+            -o "$DASHBOARD_SESSION_SOURCE"
+          AIVERSE_PINNED_DASHBOARD_SESSION_SOURCE="$DASHBOARD_SESSION_SOURCE" \
+            python3 -m unittest discover \
+              -s system/extensions/tests/codex-learning \
+              -p 'test_codex_app_server_host_boundary.py' -v
+
       - name: Test synthetic per-event owner scope, consent revocation and process replacement
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_authorization.py' -v
 

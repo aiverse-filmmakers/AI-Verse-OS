@@ -41,6 +41,9 @@ jobs:
       - name: Prove strict parent-owned request and reply ownership using synthetic frames
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_rpc_boundary.py' -v
 
+      - name: Refuse stale parent-owned pipes, wrong physical cwd and live process reuse
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_process_epoch.py' -v
+
       - name: Reject cross-workspace and forged empty ephemeral thread events
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_ephemeral_boundary.py' -v
 

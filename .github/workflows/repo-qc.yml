@@ -56,6 +56,9 @@ jobs:
       - name: Test pinned-schema shape and hard-disabled Codex capture (synthetic only)
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_host_schema_pin.py' -v
 
+      - name: Test nonlaunching Codex runtime candidate file preflight (synthetic-only)
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_runtime_preflight.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

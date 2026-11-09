@@ -7,6 +7,7 @@ on:
       - system/extensions/tests/codex-learning/test_codex_real_app_server_ci.py
       - system/extensions/tests/codex-learning/test_codex_app_server_rpc_boundary.py
       - system/extensions/tests/codex-learning/test_codex_app_server_ephemeral_boundary.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_preview_authorization.py
       - system/extensions/packages/ai-verse-codex-learning/**
   workflow_dispatch:
 
@@ -38,6 +39,9 @@ jobs:
 
       - name: Reject cross-workspace and forged empty ephemeral thread events
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_ephemeral_boundary.py' -v
+
+      - name: Deny stale synthetic owner grants after consent or workspace changes
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_authorization.py' -v
 
       - name: Fetch only the immutable official stable release archive and verify exact digest
         shell: bash

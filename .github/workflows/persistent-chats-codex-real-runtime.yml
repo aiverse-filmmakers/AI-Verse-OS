@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/persistent-chats-codex-real-runtime.yml
       - system/extensions/tests/codex-learning/test_codex_real_app_server_ci.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_rpc_boundary.py
       - system/extensions/packages/ai-verse-codex-learning/**
   workflow_dispatch:
 
@@ -30,6 +31,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Prove strict parent-owned request and reply ownership using synthetic frames
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_rpc_boundary.py' -v
 
       - name: Fetch only the immutable official stable release archive and verify exact digest
         shell: bash

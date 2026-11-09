@@ -12,15 +12,18 @@ grant OS consent, or prove a complete/authorized archived conversation.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
 import select
 import signal
+import stat
 import subprocess
 import sys
 import time
 import uuid
+from typing import Callable
 
 VERSION = "0.167.0"
 TAG = "rust-v0.167.0"
@@ -166,11 +169,14 @@ def classify_rpc_frame(message: object, request_id: int, *,
 
 def read_matching(proc: subprocess.Popen[bytes], request_id: int,
                   pending: bytearray, *, timeout: float = 12.0,
-                  allow_startup_notifications: bool = False) -> dict:
+                  allow_startup_notifications: bool = False,
+                  require_owned: Callable[[], None] | None = None) -> dict:
     end = time.monotonic() + timeout
     count = 0
     skipped = 0
     while time.monotonic() < end:
+        if require_owned is not None:
+            require_owned()
         if b"\n" in pending:
             frame, _, trailing = pending.partition(b"\n")
             pending[:] = trailing
@@ -184,6 +190,8 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
                 message, request_id,
                 allow_startup_notifications=allow_startup_notifications,
             )
+            if require_owned is not None:
+                require_owned()
             if classification == "response":
                 return message
             skipped += 1
@@ -196,10 +204,19 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
         if remain <= 0:
             break
         try:
-            ready, _, _ = select.select([proc.stdout], [], [], remain)
+            ready, _, _ = select.select(
+                [proc.stdout], [], [],
+                min(remain, 0.2) if require_owned is not None else remain,
+            )
+            if require_owned is not None:
+                require_owned()
             if not ready:
+                if require_owned is not None:
+                    continue
                 break
             chunk = os.read(proc.stdout.fileno(), 4096)
+            if require_owned is not None:
+                require_owned()
         except (OSError, ValueError):
             deny("real App Server stdout unavailable")
         if not chunk:
@@ -212,7 +229,8 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
 
 
 def read_isolated_config(proc: subprocess.Popen[bytes], pending: bytearray,
-                         *, request_id: int) -> None:
+                         *, request_id: int,
+                         require_owned: Callable[[], None] | None = None) -> None:
     """Exercise real owned request ID routing with a sterile read-only RPC."""
     send(proc, {
         "id": request_id, "method": "config/read",
@@ -220,6 +238,7 @@ def read_isolated_config(proc: subprocess.Popen[bytes], pending: bytearray,
     })
     reply = read_matching(
         proc, request_id, pending, allow_startup_notifications=True,
+        require_owned=require_owned,
     )
     if ("error" in reply or not isinstance(reply.get("result"), dict)
             or not isinstance(reply["result"].get("config"), dict)

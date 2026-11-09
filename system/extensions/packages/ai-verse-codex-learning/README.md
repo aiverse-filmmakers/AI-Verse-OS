@@ -814,3 +814,44 @@ The new `codex_app_server_preview_replay.py` is an entirely disconnected, in-mem
 
 Both Repository QC and the real-runtime workflow run dedicated synthetic negative tests for this ledger. The real runtime lane still has no model turn or user input. **No durable storage, real session consent, host-origin attestation, callback wiring, live Memory discovery or production writer is added.** All real archive admission remains unconditionally blocked. This does not resolve the separate broad Four Repo Acceptance fixture executable/packaging failure.
 
+### 3A.16 CI infrastructure incident and safe recheck (2026-11-09)
+
+**Do not weaken code checks or treat jobless workflow failures as test results.**
+Every one of 15 unrelated workflows triggered by commit
+\`31cde8a9abcb804cafefc3c68a6adf4417004437\`
+failed **without creating a single job**. GitHub's **own run page** shows
+\`Internal server error. Correlation ID: ...\` as a workflow-level annotation:
+- Repository QC #585, run 42672270002:
+  \`e8980793-9f20-4b1b-a571-56baad450c25\`.
+- Persistent Chats real runtime #20, run 42672270237:
+  \`50eace1d-b76d-42e7-b2d6-c28213cf74d0\`.
+- Unrelated Direction Ownership, run 42672270186:
+  \`5c493290-7691-4d99-b1d8-3576aa4eeb92\`.
+- Four Repo Acceptance #570, run 42672269938:
+  \`79bdbe65-07c4-4b25-941d-5b56bca6f7f7\`.
+
+Official GitHub status reported a 2026-11-09 Actions/Webhooks
+degradation and delays to Actions start:
+https://www.githubstatus.com/
+The status event is corroborating context, NOT proof of the exact root cause
+of these individual run failures.
+
+GitHub's failed-jobs rerun REST endpoint returned HTTP 403
+\`This workflow run cannot be retried\`, consistent with zero failed jobs
+in a jobless workflow. GitHub docs:
+https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
+
+**Recovery checklist:**
+1. Check for an actual runner/job in fresh Repository QC and Persistent
+   Chats real-runtime runs, then require passing **all** relevant steps,
+   including the 3A.16 replay regression. A successful workflow summary
+   alone without job evidence is insufficient.
+2. Keep separate previously evidenced Four Repo Acceptance blockers visible:
+   Python synthetic fixture executable was rejected by strict writable-file /
+   size policy in CI, and the generated public package manifest hashes differed.
+   These were genuine runner-backed failures before the jobless incident.
+   Diagnose their fixture environment before changing any safety checks.
+3. Neither jobless failures nor one green focused test prove recording is safe.
+   Real OS-issued consent, per-event provenance, complete source coverage,
+   independently verified storage/retrieval, and local acceptance remain blocked.
+

@@ -672,3 +672,41 @@ protocol/version decision.
 No installer change, local Codex process, real conversation, archive write,
 Memory live discovery, PR merge or \`main\` activation is in this phase.
 
+### 3A.13: real read-only RPC ownership exercise, still no chats
+
+**Official source checked on 2026-11-09:**
+- https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ConfigReadParams.json
+- https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ConfigReadResponse.json
+- https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server/src/message_processor.rs
+- https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server/src/startup_warnings.rs
+
+The pinned 0.167.0 App Server supports \`config/read\` as a read-only
+JSONL request. \`ConfigReadResponse\` requires \`config\` and \`origins\`;
+the release-tag generated schemas are pinned by their exact Git blob IDs.
+The official message processor sends startup configuration warnings after
+initialization, and routes read-only \`config/read\` without creating a
+Codex thread or starting model work.
+
+GitHub-only verification now issues two parent-owned \`config/read\` calls
+with independent request IDs after \`initialize\` and explicit
+\`initialized\`. All requests run in a temporary, offline CI container,
+against the same verified stable CLI binary used for the 3A.12 handshake.
+The test validates each exact response ID and result shape and discards
+the temporary configuration data without printing or archiving it.
+
+\`classify_rpc_frame()\` rejects mismatched/ambiguous IDs, boolean or
+string IDs, server requests, invalid JSON-RPC versions, blended response
+and notification frames, unsolicited thread/turn/item events, and
+unexpected pre-initialization messages. The bounded post-initialization
+notification allowance is for CI startup notices only; it is never a
+trusted event source or a capture implementation. Dedicated synthetic
+negative tests run in both Repository QC and the offline runtime job.
+
+**Limitations:** This is not a proof of real thread/turn provenance or
+project-specific scope, OS UI consent, account identity, or a complete
+recording stream. No \`thread/start\`, \`thread/resume\`, \`turn/start\`,
+message capture, model call, credential access, archive file,
+Memory discovery or installed host integration is permitted.
+Production admission remains unconditionally blocked, and the PR
+must stay draft until later security review and local acceptance.
+

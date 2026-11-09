@@ -145,10 +145,16 @@ def observe(
         # Never combine streamed fragments or treat them as final text.
         return replace(state, event_count=state.event_count + 1), None, "ignored_delta"
     if method == "item/started":
-        _bound(event, state)
+        params = _bound(event, state)
+        stamp = params.get("startedAtMs")
+        if type(stamp) is not int or not 0 <= stamp <= (1 << 63) - 1:
+            raise CandidateBlocked("v2 item start timestamp incompatible with pinned schema")
         return replace(state, event_count=state.event_count + 1), None, "ignored_started"
     if method == "item/completed":
         params = _bound(event, state)
+        stamp = params.get("completedAtMs")
+        if type(stamp) is not int or not 0 <= stamp <= (1 << 63) - 1:
+            raise CandidateBlocked("v2 item completion timestamp incompatible with pinned schema")
         item = _mapping(params.get("item"))
         item_id = _id(item.get("id"))
         if item_id in state.seen_ids:

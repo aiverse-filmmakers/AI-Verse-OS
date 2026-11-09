@@ -114,9 +114,11 @@ def send(proc: subprocess.Popen[bytes], msg: dict) -> None:
 
 
 def read_matching(proc: subprocess.Popen[bytes], request_id: int,
-                  pending: bytearray, *, timeout: float = 12.0) -> dict:
+                  pending: bytearray, *, timeout: float = 12.0,
+                  allow_startup_notifications: bool = False) -> dict:
     end = time.monotonic() + timeout
     count = 0
+    skipped = 0
     while time.monotonic() < end:
         if b"\n" in pending:
             frame, _, trailing = pending.partition(b"\n")
@@ -131,9 +133,21 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
                 deny("real App Server returned nonobject protocol frame")
             if message.get("id") == request_id:
                 return message
-            # No other responses, requests or notifications should occur
-            # before a bare initialize handshake in a sterile environment.
-            deny("real App Server sent unexpected prehandshake message")
+            # The pinned Codex source emits configuration and other startup
+            # notifications after initialized. They are not RPC responses,
+            # a user conversation, or proof of recorded chat coverage.
+            # Never swallow thread, turn, item or server-request events.
+            method = message.get("method")
+            if (allow_startup_notifications and "id" not in message
+                    and isinstance(method, str) and len(method) <= 96
+                    and not method.startswith((
+                        "thread/", "turn/", "item/", "serverRequest/"
+                    )) and isinstance(message.get("params"), dict)):
+                skipped += 1
+                if skipped > 8:
+                    deny("real App Server sent too many unsolicited startup notifications")
+                continue
+            deny("real App Server sent unexpected protocol message")
         if proc.poll() is not None:
             deny("real App Server exited before responding")
         remain = end - time.monotonic()
@@ -185,7 +199,9 @@ def handshake(binary: str, env: dict[str, str]) -> None:
                            "title": "AI-Verse Persistent Chats isolated CI",
                            "version": "0.0.0-test"},
         }})
-        duplicate = read_matching(process, 2, pending)
+        duplicate = read_matching(
+            process, 2, pending, allow_startup_notifications=True
+        )
         if not isinstance(duplicate.get("error"), dict) or "result" in duplicate:
             deny("real App Server did not reject duplicate initialize")
     except RuntimeBlocked:

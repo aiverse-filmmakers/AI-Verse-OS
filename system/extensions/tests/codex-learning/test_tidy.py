@@ -67,9 +67,9 @@ class TidyTests(TidyBase):
         def body(sc):
             quiet = sc.prompt("Hello there, how are you?")
             self.assertNotIn("tidying is due", quiet)
-            self.ledger(sc, count=4)
+            self.ledger(sc, count=4, scope="operator")
             self.assertNotIn("tidying is due", sc.prompt("Still quiet please."))
-            self.ledger(sc, count=1)
+            self.ledger(sc, count=1, scope="operator")
             text = sc.prompt("Now it should be due.")
             turn = sc.turn()
             for action in ("plan", "apply", "done"):
@@ -78,7 +78,7 @@ class TidyTests(TidyBase):
 
     def test_the_review_and_tidy_commands_survive_every_supported_budget(self):
         def body(sc):
-            self.ledger(sc, count=5)
+            self.ledger(sc, count=5, scope="operator")
             for limit in (24000, 14000, 9000, 6000, 4096):
                 sc.bridge.config["context_max_bytes"] = limit
                 text = sc.prompt("Hello there, what is next today?")
@@ -91,7 +91,7 @@ class TidyTests(TidyBase):
 
     def test_an_old_single_entry_makes_it_due(self):
         def body(sc):
-            self.ledger(sc, count=1)
+            self.ledger(sc, count=1, scope="operator")
             state = sc.bridge.tidy().load()
             state["entries"][0]["at"] = time.time() - 7 * 3600
             sc.bridge.tidy().store(state)
@@ -403,18 +403,25 @@ if __name__ == "__main__":
 
 
 class TidyWholeTests(TidyBase):
-    """`reflect all`: what was saved lately (or everything), in bounded batches, only real defects, any chat, private across projects."""
+    """`reflect all`: the only change is removing a true repeat in the same place; any chat; private across projects."""
 
     DUP = "The studio invoices every client on the first of the month."
-    DUP2 = "The studio invoices every client, on the first of the month"  # same words, other punctuation
     KEY = "invoices every client"
+
+    @staticmethod
+    def twin(text):
+        return text.replace(" ", "  ", 1)  # the same words, spaced differently
+
+    def pair(self, sc, text, scope="operator", tags=""):
+        self.seed(sc, text, USER_REF, scope=scope, tags=tags)
+        self.seed(sc, self.twin(text), USER_REF, scope=scope, tags=tags)
 
     def all_pass(self, sc, mode="recent"):
         turn = sc.turn()
         return sc.bridge.tidy().all(sc.session, turn["id"], turn["token"], mode)
 
     def finish(self, sc, limit=3, mode="recent", cwd=None):
-        """Repeated passes until the store has been read once; returns each result."""
+        """Repeated passes until a pass finishes everything; returns each result."""
         results = []
         for _ in range(20):
             sc.prompt("Please look over everything you know.", cwd=cwd)
@@ -424,8 +431,15 @@ class TidyWholeTests(TidyBase):
                 return results
         self.fail("the cursor never finished")
 
-    def active_text(self, sc):
-        return "\n".join(p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md") if "status: active" in p.read_text())
+    def changed(self, results):
+        return sum(r["changed"] + r["changed_in_other_projects"] for r in results)
+
+    def active_text(self, sc, scope="operator"):
+        base = sc.root / ("operator" if scope == "operator" else "workspaces/" + scope) / "memory"
+        return "\n".join(p.read_text() for p in base.rglob("mem-*.md") if "status: active" in p.read_text())
+
+    def files(self, sc):
+        return {p: p.read_text() for p in sc.root.rglob("mem-*.md")}
 
     def age(self, sc, key, days):
         for path in sc.root.rglob("mem-*.md"):
@@ -433,31 +447,25 @@ class TidyWholeTests(TidyBase):
                 path.write_text(re.sub(r"(?m)^created_at: .*$", "created_at: " + time.strftime(
                     "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - days * 86400)), path.read_text()))
 
-    def test_exact_duplicates_are_removed_over_batches_and_unchanged_records_are_not_rechecked(self):
+    def test_true_repeats_are_removed_over_batches_and_nothing_is_hard_deleted(self):
         def body(sc):
-            self.seed(sc, self.DUP, USER_REF)
+            self.pair(sc, self.DUP)
             for n in range(6):
                 self.seed(sc, f"Unrelated saved note number {n} about the weekly rhythm.", USER_REF)
-            self.seed(sc, self.DUP2, USER_REF)
-            results = self.finish(sc)
-            self.assertGreater(len(results), 1)  # three at a time: several passes
-            self.assertEqual(sum(r["changed"] for r in results), 1)
+            self.assertEqual(self.changed(self.finish(sc)), 1)
             self.assertEqual(self.active_text(sc).count(self.KEY), 1)
-            all_text = "\n".join(p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md"))
-            self.assertEqual(all_text.count(self.KEY), 2, "nothing was hard deleted")
-            before = {p: p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md")}
-            again = self.finish(sc)
-            self.assertEqual(sum(r["changed"] for r in again), 0)
-            self.assertEqual(before, {p: p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md")}, "nothing changed")
-            seen = json.loads((sc.root / "runtime/codex-learning/reflect/whole.json").read_text())["seen"]
-            self.assertGreaterEqual(len(seen), 7)
+            self.assertEqual("\n".join(self.files(sc).values()).count(self.KEY), 2)
+            before = self.files(sc)
+            self.assertEqual(self.changed(self.finish(sc)), 0)
+            self.assertEqual(before, self.files(sc), "a second pass changes nothing")
         self.each(body)
 
-    def test_the_note_is_plain_says_removed_and_undo_brings_the_repeat_back(self):
+    def test_the_note_says_removed_and_undo_restores_tags_evidence_and_leaves_the_kept_copy_alone(self):
         def body(sc):
-            self.seed(sc, self.DUP, USER_REF)
-            self.seed(sc, self.DUP2, USER_REF)
+            self.pair(sc, self.DUP, tags="billing,monthly")
             self.finish(sc)
+            kept = [t for t in self.files(sc).values() if self.KEY in t and "status: active" in t]
+            self.assertEqual(len(kept), 1)
             text = sc.prompt("Thanks.")
             note = text.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0].strip()
             self.assertIn("**1. Something you saved twice was removed**", note)
@@ -470,88 +478,170 @@ class TidyWholeTests(TidyBase):
             turn = sc.turn()
             self.assertEqual(sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
             self.assertEqual(self.active_text(sc).count(self.KEY), 2)
+            restored = [t for t in self.files(sc).values() if "restored" in t and "status: active" in t]
+            self.assertEqual(len(restored), 1)
+            self.assertIn("billing", restored[0])
+            self.assertIn("was-fact", restored[0])
+            self.assertIn("source:" + digest("user")[:16], restored[0])  # the evidence came back
+            self.assertEqual([t for t in self.files(sc).values() if t in kept and "status: active" in t], kept)
+            self.assertEqual(self.changed(self.finish(sc)), 0, "an undone removal is not repeated")
         self.each(body)
 
     def test_the_same_thing_in_a_project_and_in_overall_memory_is_left_alone(self):
         def body(sc):
             self.seed(sc, self.DUP, USER_REF)
-            self.seed(sc, self.DUP2, USER_REF, scope="workspace:beta")
-            self.assertEqual(sum(r["changed"] for r in self.finish(sc)), 0)
+            self.seed(sc, self.twin(self.DUP), USER_REF, scope="workspace:beta")
+            self.assertEqual(self.changed(self.finish(sc)), 0)
             self.assertEqual(self.active_text(sc).count(self.KEY), 1)
-            self.assertIn(self.KEY, "\n".join(p.read_text() for p in (sc.root / "workspaces/beta").rglob("mem-*.md")))
-            self.seed(sc, self.DUP + "!", USER_REF, scope="workspace:beta")  # a repeat inside the project is consolidated
-            self.assertEqual(sum(r["changed"] for r in self.finish(sc, cwd=str(sc.root / "workspaces/beta"))), 1)
+            self.assertEqual(self.active_text(sc, "beta").count(self.KEY), 1)
+            self.seed(sc, self.DUP.replace(" ", "   ", 1), USER_REF, scope="workspace:beta")  # a true repeat inside the project
+            self.assertEqual(self.changed(self.finish(sc)), 1)
+            self.assertEqual(self.active_text(sc, "beta").count(self.KEY), 1)
+            self.assertEqual(self.active_text(sc).count(self.KEY), 1)
         self.each(body)
 
-    def test_nothing_to_fix_changes_nothing_and_says_nothing(self):
+    def test_different_things_are_not_repeats(self):
         def body(sc):
-            for n in range(4):
-                self.seed(sc, f"Prefers meetings on Tuesday mornings, variant {n} of the schedule.", USER_REF)
-            before = {p: p.read_text() for p in sc.root.rglob("mem-*.md")}
-            self.assertEqual(sum(r["changed"] for r in self.finish(sc)), 0)
-            self.assertEqual(before, {p: p.read_text() for p in sc.root.rglob("mem-*.md")})
-            self.assertNotIn("A tidy note is waiting", sc.prompt("Hello."))
+            for a, b in (("Prefers C++ for all of the rendering engine code.", "Prefers C# for all of the rendering engine code."),
+                         ("Moves the price of the new plan by +5% next quarter.", "Moves the price of the new plan by -5% next quarter."),
+                         ("Meetings with the board are held on the first Monday.", "Meetings with the board are held on the first Monday?")):
+                self.seed(sc, a, USER_REF)
+                self.seed(sc, b, USER_REF)
+            self.seed(sc, "A short saved note about the very long list " + "of details " * 70, USER_REF)  # shortened when scanned
+            self.seed(sc, "A short saved note about the very long list  " + "of details " * 70, USER_REF)
+            before = self.files(sc)
+            self.assertEqual(self.changed(self.finish(sc, mode="full")), 0)
+            self.assertEqual(before, self.files(sc))
         self.each(body)
 
-    def test_a_tidy_covers_seven_days_unless_it_is_a_full_tidy_and_auto_covers_since_the_last_tidy(self):
+    def test_whole_passes_never_move_refresh_or_guess_even_when_a_project_is_named(self):
         def body(sc):
-            self.seed(sc, "Prefers a short summary before the details.", USER_REF)
-            self.seed(sc, self.DUP, USER_REF)
-            self.seed(sc, self.DUP2, USER_REF)
-            self.age(sc, self.KEY, 40)
-            self.assertEqual(sum(r["changed"] for r in self.finish(sc, mode="recent")), 0)  # too old for a 7 day tidy
-            self.assertEqual(sum(r["changed"] for r in self.finish(sc, mode="full")), 1)
+            self.seed_world(sc)  # facts naming Beta Study, old project notes, a project without a venture line
+            self.pair(sc, "Beta Study sends its newsletter on Fridays after lunch.")
+            identity = sc.root / "operator/profile/identity.md"
+            profile = identity.read_text() if identity.exists() else ""
+            notes = (sc.root / "workspaces/beta/context/CURRENT.md").read_text()
+            self.assertEqual(self.changed(self.finish(sc, mode="full")), 1)  # only the repeat, kept where it was
+            self.assertEqual(profile, identity.read_text() if identity.exists() else "")
+            self.assertEqual(notes, (sc.root / "workspaces/beta/context/CURRENT.md").read_text())
+            self.assertEqual(self.active_text(sc, "beta"), "")
+            self.assertEqual(self.active_text(sc).count("newsletter on Fridays"), 1)
+        self.each(body)
+
+    def test_a_tidy_covers_seven_days_but_compares_with_older_records(self):
+        def body(sc):
+            self.pair(sc, self.DUP)
+            self.age(sc, self.KEY, 40)  # both too old for a 7 day tidy
+            self.assertEqual(self.changed(self.finish(sc, mode="recent")), 0)
+            self.seed(sc, self.DUP.replace(" every", "   every"), USER_REF)  # saved now; compared with the old copies
+            self.assertEqual(self.changed(self.finish(sc, mode="recent")), 1)
+            old = [t for t in self.files(sc).values() if self.KEY in t and "status: active" in t]
+            self.assertEqual(len(old), 2, "the old records were never changed")
+            self.assertEqual(self.changed(self.finish(sc, mode="full")), 1)
+        self.each(body)
+
+    def test_a_batch_that_is_not_finished_says_so_and_retries_from_the_same_place(self):
+        def body(sc):
+            for n in range(7):
+                self.pair(sc, f"Repeated saved note number {n} about the weekly rhythm.")
+            sc.prompt("Tidy.")
+            first = self.all_pass(sc)
+            self.assertEqual(first["changed"], 5)  # five changes per pass
+            self.assertTrue(first["more_to_check"])
             state = sc.bridge.tidy().load()["whole"]
-            self.assertTrue(state["last_full"] and state["last_tidy"])
-            # Automatic: the first one is a full pass; later ones cover only what was saved since the last tidy.
-            self.seed(sc, "Keeps the Friday review short and in writing.", USER_REF)
-            self.seed(sc, "Keeps the Friday review short, and in writing", USER_REF)
-            self.seed(sc, "Sends the weekly report on Mondays by noon.", USER_REF)
-            self.seed(sc, "Sends the weekly report, on Mondays by noon", USER_REF)
-            self.age(sc, "weekly report", 40)  # saved before the last tidy but never checked: only a full pass looks
-            small = self.finish(sc, mode="auto")
-            self.assertEqual(sum(r["changed"] for r in small), 1)
-            self.assertEqual(self.active_text(sc).count("weekly report"), 2)
+            self.assertIsNone(state.get("last_tidy"), "an unfinished pass is not a finished tidy")
+            sc.prompt("Tidy again.")
+            second = self.all_pass(sc)
+            self.assertEqual(second["changed"], 2)
+            self.assertFalse(second["more_to_check"])
+            self.assertTrue(sc.bridge.tidy().load()["whole"]["last_tidy"])
         self.each(body)
 
-    def test_it_works_in_a_project_chat_and_other_projects_are_only_counted(self):
+    def test_an_action_left_half_done_stops_the_pass_from_completing(self):
         def body(sc):
-            self.seed_world(sc)
-            self.seed(sc, "Alpha Study has twelve verified records today.", USER_REF)
-            state = sc.bridge.tidy().load()
-            state["entries"] = []  # the recent-saves pass is not what is under test
-            sc.bridge.tidy().store(state)
-            beta = str(sc.root / "workspaces/beta")
-            sc.prompt("What next?", cwd=beta)
-            turn, tidy = sc.turn(), sc.bridge.tidy()
-            plan = tidy.plan(sc.session, turn["id"], turn["token"], whole="recent")
-            self.assertGreaterEqual(plan["in_other_projects"], 1)
-            self.assertNotIn("alpha", json.dumps(plan).lower())
-            self.assertTrue(all(i["project"] in {"beta", "operator"} for i in plan["items"]))
-            applied = tidy.apply(sc.session, turn["id"], turn["token"])
-            self.assertGreater(len(applied["applied"]), len(plan["items"]))  # the other project's change was made too
-            tidy.done(sc.session, turn["id"], turn["token"])
-            tidy.claim_seconds = -1
-            general = sc.prompt("Hello again.")
-            self.assertNotIn("A tidy note is waiting", general)  # nothing here is general: it all belongs to a project
-            shown = sc.prompt("What next for Beta?", cwd=beta)
-            note = shown.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
-            self.assertIn("Beta Study", note)
-            self.assertNotIn("Alpha", note)
-            self.assertNotIn("twelve verified", note)
-            self.assertRegex(note, r"\(\d+ more changes? in your other projects will be shown in a chat about them\.\)")
-            tidy.acknowledge({"session_id": sc.session}, note)
+            self.pair(sc, self.DUP)
+            tidy = sc.bridge.tidy()
+            sc.prompt("Tidy.")
+            with patch.object(tidy, "run_ops", side_effect=bridge_module.Refused("owner busy")):
+                result = self.all_pass(sc)
+            self.assertTrue(result["more_to_check"])
+            self.assertEqual(result["changed"], 0)
+            self.assertIsNone(tidy.load()["whole"].get("last_tidy"))
+            self.assertEqual(self.changed(self.finish(sc)), 1)  # the next pass finishes it
+            self.assertTrue(tidy.load()["whole"]["last_tidy"])
+        self.each(body)
+
+    def test_saves_made_during_a_full_pass_are_counted_from_its_start(self):
+        def body(sc):
+            for n in range(3):
+                self.pair(sc, f"Repeated saved note number {n} about the weekly rhythm.")
+            tidy = sc.bridge.tidy()
+            sc.prompt("Start.")
+            with patch.object(tidy, "whole_records", 1):
+                self.assertTrue(self.all_pass(sc, "full")["more_to_check"])
+            start = tidy.load()["whole"]["cycle_start"]
+            self.pair(sc, "Saved while a long pass was running, twice over.")
+            self.finish(sc, limit=1, mode="full")
+            state = tidy.load()["whole"]
+            self.assertEqual(state["last_tidy"], start)  # the next small pass counts from the start, not the end
+            self.assertEqual(state["last_full"], start)
+        self.each(body)
+
+    def test_applied_changes_and_undelivered_notes_are_never_pruned(self):
+        def body(sc):
+            tidy = sc.bridge.tidy()
+            data = tidy.load()
+            for n in range(70):
+                data["actions"][f"a{n}"] = {"id": f"a{n}", "kind": "dup", "project": "operator", "status": "applied", "applied_at": n,
+                                            "title": "t", "detail": ["d"]}
+            for n in range(35):
+                data["batches"].append({"id": f"{n:04X}", "items": [{"n": 1, "action": f"a{n}"}], "turn": "x", "claimed_at": 0,
+                                        "acked": n >= 5, "day": "2026-01-01"})
+            tidy.store(data)
+            data = tidy.load()
+            self.assertEqual(len(data["actions"]), 70)
+            self.assertTrue(all(any(b["id"] == f"{n:04X}" for b in data["batches"]) for n in range(5)), "unacknowledged notes stay")
+        self.each(body)
+
+    def test_a_chat_only_claims_notes_it_may_read_and_the_others_stay_queued(self):
+        def body(sc):
+            tidy = sc.bridge.tidy()
+            data = tidy.load()
+            for aid, project in (("beta1", "beta"), ("gen1", "operator")):
+                data["actions"][aid] = {"id": aid, "kind": "dup", "project": project, "status": "applied", "applied_at": 1,
+                                        "title": f"Title {aid}", "detail": ["d"], "authorized": ["operator"]}
+            data["batches"] = [{"id": "AAAA", "items": [{"n": 1, "action": "beta1"}], "turn": "x", "claimed_at": 0, "acked": False, "day": "d"},
+                               {"id": "BBBB", "items": [{"n": 1, "action": "gen1"}], "turn": "y", "claimed_at": 0, "acked": False, "day": "d"}]
+            tidy.store(data)
+            text = sc.prompt("Hello there.")
+            self.assertIn("Title gen1", text)
+            self.assertNotIn("Title beta1", text)
+            self.assertEqual([b["id"] for b in tidy.load()["batches"] if not b["acked"]], ["AAAA", "BBBB"])
+        self.each(body)
+
+    def test_legacy_entries_a_chat_cannot_read_do_not_hide_the_automatic_pass(self):
+        def body(sc):
+            self.ledger(sc, count=25, scope="workspace:beta")
+            general = sc.prompt("Plain chat.")
+            self.assertIn("reflect all --auto", general)
+            self.assertNotIn("reflect plan", general)
+            inside = sc.prompt("Inside beta.", cwd=str(sc.root / "workspaces/beta"))
+            self.assertIn("reflect plan", inside)
+        self.each(body)
+
+    def test_the_monthly_trigger_works_before_the_first_finished_tidy(self):
+        def body(sc):
+            tidy = sc.bridge.tidy()
+            self.ledger(sc, count=1, scope="operator")
             state = tidy.load()
-            state["last_delivery_day"] = None  # the daily limit is not under test
+            for entry in state["entries"]:
+                entry["done"] = True
             tidy.store(state)
-            later = sc.prompt("What about Alpha?", cwd=str(sc.root / "workspaces/alpha"))
-            later_note = later.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
-            self.assertIn("Alpha Study", later_note)
-            self.assertNotIn("Beta Study", later_note)
-            note_id = re.search(r"\(tidy note ([0-9A-F]{4})\)", later_note).group(1)
-            tidy.acknowledge({"session_id": sc.session}, later_note)
-            turn = sc.turn()
-            self.assertEqual(tidy.undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
+            self.assertNotIn("reflect all", sc.prompt("Fresh."))
+            state = tidy.load()
+            state["whole"]["origin"] = time.time() - 31 * 86400
+            tidy.store(state)
+            self.assertIn("reflect all --auto", sc.prompt("A month after the first save."))
         self.each(body)
 
     def test_it_is_offered_in_any_chat_after_enough_saves_a_month_or_a_long_time(self):
@@ -567,7 +657,10 @@ class TidyWholeTests(TidyBase):
             self.assertIn(f"reflect all --auto --session {sc.session} --turn {sc.turn()['id']} --token {sc.turn()['token']}", text)
             self.finish(sc, mode="auto")  # never tidied: a full pass
             self.assertNotIn("reflect all", sc.prompt("Quiet again."))
+            self.ledger(sc, count=1, scope="operator")
             state = tidy.load()
+            for entry in state["entries"]:
+                entry["done"] = True
             state["whole"]["last_tidy"] = time.time() - 31 * 86400
             state["whole"]["last_run"] = 0
             tidy.store(state)
@@ -583,6 +676,42 @@ class TidyWholeTests(TidyBase):
             self.assertTrue(tidy.load()["whole"]["full"])
         self.each(body)
 
+    def test_it_works_in_a_project_chat_and_other_projects_are_only_counted(self):
+        def body(sc):
+            self.pair(sc, "Beta Study sends its newsletter on Fridays after lunch.", scope="workspace:beta")
+            self.pair(sc, "Alpha Study keeps twelve verified records in its ledger.", scope="workspace:alpha")
+            self.pair(sc, self.DUP)
+            beta = str(sc.root / "workspaces/beta")
+            sc.prompt("What next?", cwd=beta)
+            turn, tidy = sc.turn(), sc.bridge.tidy()
+            plan = tidy.plan(sc.session, turn["id"], turn["token"], whole="recent")
+            self.assertEqual(plan["in_other_projects"], 1)
+            self.assertNotIn("alpha", json.dumps(plan).lower())
+            self.assertEqual(sorted(i["project"] for i in plan["items"]), ["beta", "operator"])
+            applied = tidy.apply(sc.session, turn["id"], turn["token"])
+            self.assertEqual(len(applied["applied"]), 3)  # the other project's repeat was removed too
+            tidy.done(sc.session, turn["id"], turn["token"])
+            tidy.claim_seconds = -1
+            shown = sc.prompt("What next for Beta?", cwd=beta)
+            note = shown.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
+            self.assertIn("Beta Study", note)
+            self.assertNotIn("Alpha", note)
+            self.assertNotIn("twelve verified", note)
+            self.assertRegex(note, r"\(1 more change in your other projects will be shown in a chat about them\.\)")
+            tidy.acknowledge({"session_id": sc.session}, note)
+            state = tidy.load()
+            state["last_delivery_day"] = None  # the daily limit is not under test
+            tidy.store(state)
+            later = sc.prompt("What about Alpha?", cwd=str(sc.root / "workspaces/alpha"))
+            later_note = later.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
+            self.assertIn("Alpha Study", later_note)
+            self.assertNotIn("Beta Study", later_note)
+            note_id = re.search(r"\(tidy note ([0-9A-F]{4})\)", later_note).group(1)
+            tidy.acknowledge({"session_id": sc.session}, later_note)
+            turn = sc.turn()
+            self.assertEqual(tidy.undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
+        self.each(body)
+
     def test_possible_duplicate_goals_are_only_suggested_and_never_merged(self):
         def body(sc):
             goals = {"strategic_objects": {"intents": [
@@ -596,7 +725,7 @@ class TidyWholeTests(TidyBase):
                 return bridge_module.run_owner(bridge, operation, payload) if operation == "reflect_scan" else original(bridge, operation, payload)
             fake = type("S", (), {"snapshot": lambda self, scope: goals})()
             with patch.object(Bridge, "owner", owner), patch.object(Bridge, "intent_service", lambda bridge: fake):
-                self.assertEqual(sum(r["changed"] for r in self.finish(sc, mode="recent")), 0)  # a 7 day tidy does not look at goals
+                self.assertEqual(self.changed(self.finish(sc, mode="recent")), 0)  # a 7 day tidy does not look at goals
                 self.finish(sc, mode="full")
             note = sc.prompt("Thanks.")
             self.assertIn("some of your goals may be the same goal", note)

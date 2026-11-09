@@ -441,7 +441,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "9dcb097fef72fefabe4ef20d60a1d5619e79ef38955b2bd5f041539c60a08969"  # refreshed with the package hashes
+REFLECT_SHA256 = "b753abfcc8f1f966b7ff7db2e70077c6461372d3352de185a3f5d26ba3b69ef6"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -1640,6 +1640,74 @@ def current_remove(root, host, payload):
     return {"state": "removed", "changed": True}
 
 
+def reflect_scan_whole(bridge, memory, whole):
+    """Read only: true repeats among everything saved. A repeat has the same place, type and text (case and spacing aside)
+    as an earlier saved record. Dates only limit which repeats may be changed; every active record is compared."""
+    since = whole.get("since") if isinstance(whole.get("since"), (int, float)) else None
+    limit = max(1, min(int(whole.get("limit", 100)), 100))
+    cursor = whole.get("cursor") if isinstance(whole.get("cursor"), str) else None
+    names = {}
+    for folder in sorted(safe(bridge.root / "workspaces", bridge.root).iterdir()):
+        if folder.is_dir() and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", folder.name):
+            with contextlib.suppress(Refused):
+                meta = bridge.manifest(folder.name)
+                if meta.get("status") == "active":
+                    names[folder.name] = {"name": meta.get("name", folder.name)}
+    wanted = {"operator", *("workspace:" + p for p in names)}
+    groups, order = {}, {}
+    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+        if memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE) not in wanted:
+            continue
+        meta, body = memory.parse_markdown(path)
+        scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE),
+                                       bridge.root, memory.MODE_NATIVE)
+        text = body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip()
+        kind, tags = meta.get("type"), meta.get("tags", "")
+        if (scope not in wanted or meta.get("status", "active") != "active" or kind == "correction"
+                or "tidy" in tags.lower().split(",") or len(text) < 20):
+            continue
+        try:
+            made = datetime.fromisoformat(meta.get("created_at", "").replace("Z", "+00:00"))
+            made = (made if made.tzinfo else made.replace(tzinfo=timezone.utc)).timestamp()
+        except ValueError:
+            made = None
+        key = digest([scope, kind, " ".join(text.casefold().split())])
+        rel = memory.relpath(path, bridge.root)
+        order[rel] = len(order)
+        groups.setdefault(key, []).append((made if made is not None else float("inf"), meta.get("id"), rel, len(text) <= 600, made))
+    repeats = []
+    for members in groups.values():
+        if len(members) > 1:
+            members.sort(key=lambda m: (m[0], m[1] or ""))
+            repeats += [(m, members[0][1]) for m in members[1:]
+                        if m[3] and (since is None or (m[4] is not None and m[4] >= since))]  # never a shortened text
+    repeats.sort(key=lambda r: order[r[0][2]])
+    if cursor in order:
+        repeats = [r for r in repeats if order[r[0][2]] > order[cursor]]
+    result = {"workspaces": names, "repeats": [], "cursor": None, "complete": len(repeats) <= limit}
+    for (made, rid, rel, _, _), keeper in repeats[:limit]:
+        meta, body = memory.parse_markdown(bridge.root / rel)
+        refs = meta.get("evidence_refs", "[]")
+        try:
+            refs = json.loads(refs) if isinstance(refs, str) else refs
+        except ValueError:
+            refs = []
+        scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(bridge.root / rel, bridge.root, memory.MODE_NATIVE),
+                                       bridge.root, memory.MODE_NATIVE)
+        result["repeats"].append({
+            "id": rid, "keeper": keeper, "scope": scope, "type": meta.get("type"), "tags": meta.get("tags", ""),
+            "text": body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip(),
+            "evidence_refs": refs[:30] if isinstance(refs, list) else []})
+        result["cursor"] = rel
+    if result["complete"]:
+        result["cursor"] = None
+        if since is None:  # goals are only listed, to suggest merges; Brain has no way to replace one without the operator
+            with contextlib.suppress(Exception):
+                intents = bridge.intent_service().snapshot("operator")["strategic_objects"].get("intents", [])
+                result["goals"] = [i["payload"]["statement"] for i in intents if isinstance(i.get("payload", {}).get("statement"), str)][:60]
+    return result
+
+
 def reflect_scan(bridge, module, host, payload):
     """Read only: bounded view of Memory records, project facts and venture lines for the tidy pass."""
     entry = host._extension_entry("ai-verse-memory")
@@ -1664,19 +1732,8 @@ def reflect_scan(bridge, module, host, payload):
                     words = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
                     other = other or any(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words)
         return {"mentions_other_project": other, "development_project_available": dev}
-    whole, since = payload.get("whole"), None
-    if whole is not None:
-        # Whole memory pass: every active project, in bounded batches from a cursor. Nothing here reaches the AI: the
-        # tidy engine shows detail only for what the turn may read.
-        since = whole.get("since") if isinstance(whole.get("since"), (int, float)) else None
-        limit = max(1, min(int(whole.get("limit", 100)), 100))
-        cursor = whole.get("cursor") if isinstance(whole.get("cursor"), str) else None
-        for folder in sorted(workspace_root.iterdir()):
-            if folder.is_dir() and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", folder.name):
-                with contextlib.suppress(Refused):
-                    if bridge.manifest(folder.name).get("status") == "active":
-                        projects.append(folder.name)
-        projects = projects[:200]
+    if payload.get("whole") is not None:
+        return reflect_scan_whole(bridge, memory, payload["whole"])
     for project in projects:
         meta = bridge.manifest(project)
         notes = bridge.root / "workspaces" / project / "context/CURRENT.md"
@@ -1692,13 +1749,7 @@ def reflect_scan(bridge, module, host, payload):
     if payload.get("upgrade"):
         wanted = {"workspace:ai-verse-os-development"}
     seen = 0
-    files = memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE)
-    last = None
-    if whole is not None:
-        files = list(files)
-        at = [i for i, f in enumerate(files) if cursor and memory.relpath(f, bridge.root) == cursor]
-        files = files[at[0] + 1:] if at else files
-    for path in files:
+    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
         guessed = memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE)
         if guessed not in wanted:
             continue  # cheap path check first: other projects' files are never even parsed
@@ -1720,28 +1771,14 @@ def reflect_scan(bridge, module, host, payload):
             if "upgrade-note" in record["tags"]:
                 result.setdefault("upgrade_notes", []).append({"text": text[:600], "created": record["created"]})
             continue
-        if since is not None:  # only saves made since then; one that cannot be dated is left for a full pass
-            try:
-                made = datetime.fromisoformat(record["created"].replace("Z", "+00:00"))
-                if (made if made.tzinfo else made.replace(tzinfo=timezone.utc)).timestamp() < since:
-                    continue
-            except ValueError:
-                continue
         seen += 1
         if seen > limit:
             result["truncated"] = True
             break
         result["records"].append(record)
-        last = memory.relpath(path, bridge.root)
     if payload.get("upgrade"):
         result["upgrade_notes"] = sorted(result.get("upgrade_notes", []), key=lambda n: n["created"], reverse=True)[:40]
         return result
-    if whole is not None:
-        result.update({"cursor": last if result["truncated"] else None, "complete": not result["truncated"]})
-        if result["complete"] and since is None:  # goals are only listed, to suggest merges; Brain offers no reversible merge yet
-            with contextlib.suppress(Exception):
-                intents = bridge.intent_service().snapshot("operator")["strategic_objects"].get("intents", [])
-                result["goals"] = [i["payload"]["statement"] for i in intents if isinstance(i.get("payload", {}).get("statement"), str)][:60]
     profile = host.request_action(host_action(module, host, "operator", "operator.profile.read", {},
                                               "reflect-read:" + secrets.token_hex(8), "read_local"))["result"]["operator_profile"]
     result["ventures"] = [v["project"] for v in profile["identity"].get("ventures", []) if isinstance(v, dict) and v.get("project")]

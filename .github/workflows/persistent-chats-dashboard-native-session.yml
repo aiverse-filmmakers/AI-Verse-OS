@@ -1,0 +1,87 @@
+name: Persistent Chats trusted Dashboard session contract (pinned upstream)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/persistent-chats-dashboard-native-session.yml'
+      - 'system/extensions/tests/codex-learning/fixture_os_dashboard_boundary.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_host_boundary.py'
+      - 'docs/persistent-chats/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persistent-chat-dashboard-session-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dashboard-native-session-contract:
+    name: Immutable Dashboard host pairing, revocation and scope tests (no recording)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DASHBOARD_COMMIT: 91aad66592ab43dfe2acaeff314ade93c63a7cef
+      CI: "true"
+
+    steps:
+      - name: Configure Node 22 for published Dashboard lockfile
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Clone the exact existing upstream Dashboard implementation, read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          test -z "${OPENAI_API_KEY:-}"
+          DASHBOARD_ROOT="$(mktemp -d "$RUNNER_TEMP/aiverse-pc-dashboard-3a19.XXXXXX")"
+          git -c credential.helper= clone \
+            --quiet --no-checkout \
+            https://github.com/aiverse-filmmakers/AI-Verse-Dashboard.git \
+            "$DASHBOARD_ROOT"
+          git -C "$DASHBOARD_ROOT" -c advice.detachedHead=false \
+            checkout --detach --quiet "$DASHBOARD_COMMIT"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD)" = "$DASHBOARD_COMMIT"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:apps/gateway/src/local-app-session.ts)" = \
+            "299c9c46371f64deaf8899d6672970e015f3b975"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:test/local-app-session.test.ts)" = \
+            "51e7b649a998a094676e408e266d053ecadd7da9"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:package-lock.json)" = \
+            "5f58ee26fb50da632219b6bcbe26d055c70df43a"
+          echo "DASHBOARD_ROOT=$DASHBOARD_ROOT" >> "$GITHUB_ENV"
+
+      - name: Install only lockfile dependencies, never run package scripts
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Compile pinned Dashboard local session and auth tests
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          npm run build --silent
+          test -f dist/test/local-app-session.test.js
+          test -f dist/test/gateway-auth.test.js
+
+      - name: Exercise real localhost pairing, revocation and workspace isolation
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          test -z "${OPENAI_API_KEY:-}"
+          node --test \
+            dist/test/local-app-session.test.js \
+            dist/test/gateway-auth.test.js
+          # This existing Dashboard test-only source has no Codex recording method.
+          ! grep -Eq '"aiverse\.(codex|chat)\.(record|capture|archive)' \
+            apps/gateway/src/local-app-session.ts
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "PASS: existing Dashboard native-session boundary tested, no capture authority"

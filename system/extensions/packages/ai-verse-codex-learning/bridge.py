@@ -38,6 +38,7 @@ DEFAULTS = {
     "state_ttl_seconds": 86400, "owner_timeout_seconds": 12,
     "runtime_path": "", "skills_root": None, "skills_entrypoint": None,
     "reflection_enabled": True, "reflect_min_entries": 5, "reflect_max_age_hours": 6,
+    "reflect_all_min_saves": 25, "reflect_all_days": 30, "reflect_full_days": 120,
     "maintainer_feedback": False,
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
@@ -440,7 +441,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "4f5aaa76b5574f8a1153d24e4ba7ddc16fdca157f63ec69ae8e8a61d5d6c427a"  # refreshed with the package hashes
+REFLECT_SHA256 = "b3a6538ceef78cef9f754ce3175ebebbc4c44176329b7ba120b9d80223137bde"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -472,7 +473,8 @@ class Bridge:
             ("context_max_bytes", 4096, 24000), ("recall_max_bytes", 4096, 16384),
             ("recall_limit", 1, 8), ("source_max_tokens", 128, 8192), ("source_limit", 2, 32),
             ("candidate_limit", 1, 8), ("state_ttl_seconds", 60, 604800),
-            ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168)]:
+            ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168),
+            ("reflect_all_min_saves", 5, 500), ("reflect_all_days", 7, 365), ("reflect_full_days", 90, 180)]:
             if type(self.config[name]) is not int or not low <= self.config[name] <= high:
                 raise Refused("configuration bound violated: " + name)
         if self.config["review_mode"] not in {"all", "meaningful", "off"}:
@@ -782,7 +784,7 @@ class Bridge:
                 raise Refused("invalid destination")
         if unmarked:
             ambiguous.append({"name": "a long message that may contain pasted text", "could_mean": []})
-        return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4]}
+        return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4], "folder": folder}
 
     def scope(self, cwd, prompt, previous=None):
         """Primary destination of one prompt. The previous scope is ignored: bindings never stick."""
@@ -852,7 +854,10 @@ class Bridge:
             "when its trigger, inputs, method, validation and failure behavior are concrete and evidenced. "
             "Notice durable things in what the user says: identity facts, communication preferences and pet peeves, "
             "work habits, goals and changes to them, corrections, project conventions and tool quirks (workspace scope), "
-            "completed work and lessons (Memory). Ignore one time instructions, things already in the Core, and large pasted material. "
+            "completed work and lessons (Memory). A rule, correction, decision or fact stated while giving a task is lasting if it would apply "
+            "to future work, even when phrased as a command; repeating it or frustration (\"how many times\") is a strong signal. "
+            "Project specific ones go to the project, not the general profile. Capture \"my next goal is X\" and \"I've decided not to do X\" "
+            "without being asked. Ignore truly one time edits, things already in the Core, and large pasted material. "
         )
         if turn and turn.get("state") in {"active", "review_requested"}:
             instruction += self.destination_text(turn)
@@ -1151,7 +1156,7 @@ class Bridge:
                     else:
                         state["turn"] = {
                             "id": turn_id, "token": secrets.token_hex(16), "scope": state["scope"],
-                            "allowed": dest["allowed"], "ambiguous": dest["ambiguous"],
+                            "allowed": dest["allowed"], "ambiguous": dest["ambiguous"], "folder": dest["folder"],
                             "runtime_turn_ids": [turn_id],
                             "state": "active", "created": time.time(), "prompt_hash": digest(prompt),
                             "permission_mode": event.get("permission_mode", "default"), "sources": {}}
@@ -1588,13 +1593,13 @@ def current_write(root, host, module, payload):
             "source": str(file.relative_to(root)), "sha256": digest(after)}
 
 
-def verify_capability(bridge, auth):
+def verify_capability(bridge, auth, states=("active", "review_requested")):
     """New owner operations are never open: they need a live turn capability and return the turn's destinations."""
     if not isinstance(auth, dict) or set(auth) != {"session", "turn", "token"}:
         raise Refused("this operation needs a turn capability")
     state = bridge.state(auth["session"])
     turn = bridge.bound_turn(state, auth["turn"], auth["token"])
-    if turn["state"] not in {"active", "review_requested"}:
+    if turn["state"] not in states or bridge.cancelled(auth["session"], auth["turn"]):
         raise Refused("the turn is not live")
     return {"operator", *(turn.get("allowed") or [state["scope"]])}
 
@@ -1635,6 +1640,79 @@ def current_remove(root, host, payload):
     return {"state": "removed", "changed": True}
 
 
+def reflect_scan_whole(bridge, memory, whole):
+    """Read only: true repeats among everything saved. A repeat has the same place, type and text (case and spacing aside)
+    as an earlier saved record. Dates only limit which repeats may be changed; every active record is compared."""
+    since = whole.get("since") if isinstance(whole.get("since"), (int, float)) else None
+    limit = max(1, min(int(whole.get("limit", 100)), 100))
+    cursor = whole.get("cursor") if isinstance(whole.get("cursor"), str) else None
+    names = {}
+    for folder in sorted(safe(bridge.root / "workspaces", bridge.root).iterdir()):
+        if folder.is_dir() and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", folder.name):
+            with contextlib.suppress(Refused):
+                meta = bridge.manifest(folder.name)
+                if meta.get("status") == "active":
+                    names[folder.name] = {"name": meta.get("name", folder.name)}
+    wanted = {"operator", *("workspace:" + p for p in names)}
+    groups, order = {}, {}
+    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+        if memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE) not in wanted:
+            continue
+        meta, body = memory.parse_markdown(path)
+        scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE),
+                                       bridge.root, memory.MODE_NATIVE)
+        text = body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip()
+        kind, tags = meta.get("type"), meta.get("tags", "")
+        why = " ".join(body.split("# Why it matters", 1)[1].casefold().split()) if "# Why it matters" in body else ""
+        if (scope not in wanted or meta.get("status", "active") != "active" or kind == "correction"
+                or "tidy" in tags.lower().split(",") or len(text) < 20):
+            continue
+        try:
+            made = datetime.fromisoformat(meta.get("created_at", "").replace("Z", "+00:00"))
+            made = (made if made.tzinfo else made.replace(tzinfo=timezone.utc)).timestamp()
+        except ValueError:
+            made = None
+        # Same place, type and words, and the same reason, weight, certainty and validity: anything else is not a repeat.
+        key = digest([scope, kind, " ".join(text.casefold().split()), why, meta.get("importance"), meta.get("confidence"),
+                      meta.get("valid_from")])
+        rel = memory.relpath(path, bridge.root)
+        order[rel] = len(order)
+        groups.setdefault(key, []).append((made if made is not None else float("inf"), meta.get("id"), rel, len(text) <= 600, made))
+    repeats = []
+    for members in groups.values():
+        if len(members) > 1:
+            members.sort(key=lambda m: (m[0], m[1] or ""))
+            repeats += [(m, members[0][1]) for m in members[1:]
+                        if m[3] and (since is None or (m[4] is not None and m[4] >= since))]  # never a shortened text
+    repeats.sort(key=lambda r: order[r[0][2]])
+    if cursor in order:
+        repeats = [r for r in repeats if order[r[0][2]] > order[cursor]]
+    result = {"workspaces": names, "repeats": [], "cursor": None, "complete": len(repeats) <= limit}
+    for (made, rid, rel, _, _), keeper in repeats[:limit]:
+        meta, body = memory.parse_markdown(bridge.root / rel)
+        refs = meta.get("evidence_refs", "[]")
+        try:
+            refs = json.loads(refs) if isinstance(refs, str) else refs
+        except ValueError:
+            refs = []
+        scope = memory.normalize_scope(meta.get("scope") or memory.infer_scope_from_path(bridge.root / rel, bridge.root, memory.MODE_NATIVE),
+                                       bridge.root, memory.MODE_NATIVE)
+        result["repeats"].append({
+            "id": rid, "keeper": keeper, "scope": scope, "type": meta.get("type"), "tags": meta.get("tags", ""),
+            "why": body.split("# Why it matters", 1)[1].strip() if "# Why it matters" in body else "",
+            "importance": meta.get("importance"), "confidence": meta.get("confidence"),
+            "text": body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip(),
+            "evidence_refs": refs[:30] if isinstance(refs, list) else []})
+        result["cursor"] = rel
+    if result["complete"]:
+        result["cursor"] = None
+        if since is None:  # goals are only listed, to suggest merges; Brain has no way to replace one without the operator
+            with contextlib.suppress(Exception):
+                intents = bridge.intent_service().snapshot("operator")["strategic_objects"].get("intents", [])
+                result["goals"] = [i["payload"]["statement"] for i in intents if isinstance(i.get("payload", {}).get("statement"), str)][:60]
+    return result
+
+
 def reflect_scan(bridge, module, host, payload):
     """Read only: bounded view of Memory records, project facts and venture lines for the tidy pass."""
     entry = host._extension_entry("ai-verse-memory")
@@ -1659,6 +1737,8 @@ def reflect_scan(bridge, module, host, payload):
                     words = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
                     other = other or any(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words)
         return {"mentions_other_project": other, "development_project_available": dev}
+    if payload.get("whole") is not None:
+        return reflect_scan_whole(bridge, memory, payload["whole"])
     for project in projects:
         meta = bridge.manifest(project)
         notes = bridge.root / "workspaces" / project / "context/CURRENT.md"
@@ -1752,8 +1832,8 @@ def run_owner(bridge, operation, payload):
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
                                                "profile-read:" + secrets.token_hex(8), "read_local"))
         return read["result"]["operator_profile"]
-    if operation == "reflect_scan":
-        allowed = verify_capability(bridge, payload.get("auth"))
+    if operation == "reflect_scan":  # read only: a tidy may also run after the learning review of the same turn
+        allowed = verify_capability(bridge, payload.get("auth"), ("active", "review_requested", "reviewed"))
         wanted = {"workspace:" + p for p in payload.get("projects", [])}
         if payload.get("upgrade") or payload.get("check_text") is not None:
             # The effective scope is the development project: only the maintainer's copy may read it this way.
@@ -1902,7 +1982,7 @@ def main():
     intent.add_argument("--token")
     intent.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
     reflect = commands.add_parser("reflect")
-    reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list"])
+    reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list", "all"])
     reflect.add_argument("--session")
     reflect.add_argument("--turn")
     reflect.add_argument("--token")
@@ -1910,6 +1990,8 @@ def main():
     reflect.add_argument("--item", type=int, help="Item number inside the note (undo)")
     reflect.add_argument("--mode", choices=["undo", "corrected"], default="undo")
     reflect.add_argument("--action-id", help="Apply one planned action only")
+    reflect.add_argument("--full", action="store_true", help="all: tidy everything saved, not just the last 7 days")
+    reflect.add_argument("--auto", action="store_true", help="all: automatic pass (since the last tidy, full when overdue)")
     commands.add_parser("status")
     switch = commands.add_parser("set")
     switch.add_argument("--enabled", choices=["true", "false"])
@@ -1958,6 +2040,8 @@ def main():
                     result = tidy.apply(args.session, args.turn, args.token, args.action_id)
                 elif args.action == "done":
                     result = tidy.done(args.session, args.turn, args.token)
+                elif args.action == "all":
+                    result = tidy.all(args.session, args.turn, args.token, "full" if args.full else "auto" if args.auto else "recent")
                 else:
                     if not args.note or not args.item:
                         raise Refused("undo needs --note and --item")

@@ -855,3 +855,68 @@ https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
    Real OS-issued consent, per-event provenance, complete source coverage,
    independently verified storage/retrieval, and local acceptance remain blocked.
 
+### 3A.17: POSIX disposable v2 file-publication and restart fixture
+
+**Current official reference research (2026-11-09):**
+- [Python \`os.replace\`/file-descriptor \`dir_fd\` and \`os.fsync\` docs](https://docs.python.org/3/library/os.html):
+  POSIX filesystem operations may be scoped to an opened directory
+  descriptor. Flushing the file **and** parent directory matters for crash
+  durability. A successful atomic operation alone is not a proof against
+  every filesystem or power-loss failure.
+- [Python temporary-file creation docs](https://docs.python.org/3/library/tempfile.html):
+  exclusive creation, unpredictable names and 0600 file permissions.
+- [SQLite atomic commit notes](https://www.sqlite.org/atomiccommit.html):
+  recoverability requires a durable commit boundary; a partial temporary
+  file must never be promoted to completed durable data.
+
+**New isolated test-only files, explicitly *not* installed:**
+\`system/extensions/tests/codex-learning/fixture_v2_disk_store.py\` and
+\`test_codex_app_server_v2_fixture_disk.py\`. They implement only a
+disposable POSIX fixture round-trip of an already sealed, **synthetic**
+\`ai-verse.chat-archive-codex-received/v2\` received-wire blob. The disk
+tester requires an existing owner-only 0700 temporary directory, opens
+its descriptor using \`O_DIRECTORY|O_NOFOLLOW\`, validates the synthetic
+header and seal with all authentication/consent flags **false**, fully
+checks each original received-wire SHA-256 and rolling chain, then
+writes a brand-new 0600 temp file with \`O_EXCL\`. File \`fsync\` precedes
+an atomic exclusive \`os.link()\` publication, followed by parent-directory
+\`fsync\` and temp unlink. Competing publishers cannot replace any
+committed file. Readback requires the independent fixed SHA-256 receipt
+and revalidates exact bytes, owner, mode, one hardlink, and v2 wire seal.
+
+This is **not an append, production archive or signed provenance record**.
+It does not repair after a filesystem corruption event or prove real
+power-loss durability. It is only a narrow no-overwrite create-once
+crash/restart exercise. An orphaned uncommitted file cannot become a
+reader-visible archive, and a failure after the exclusive name appears
+may report a refusal despite the committed file surviving.
+
+**Cloud evidence:** after a test-case syntax correction, the current
+phase's thirteen targeted tests plus the existing eleven v2 producer
+tests passed (**24/24**) in a separate isolated cloud browser using
+the exact GitHub branch files, without developer workstation or Codex
+model usage. A further independent browser check loaded the unchanged
+Memory PR #37 v2 parser at
+\`93bb3f1ae8e577b9863d2c99060189152589ff28\` and proved:
+
+\`OS synthetic v2 producer -> fsynced disposable fixture file -> reopen
+exact bytes -> independent Memory v2 reader -> exact synthetic user and
+assistant text\`.
+
+The independent Memory reader's
+\`live_recall_admitted\`, \`host_origin_authenticated\`,
+\`scope_authenticated\`, \`consent_verified\` and
+\`complete_ui_coverage\` remained false. The production archive and
+Memory live-discovery functions were never invoked, and the adapter
+\`admit_real_archive()\` is unconditionally blocked. These manual cloud
+checks do **not** replace the official repository CI required for release.
+
+Repository QC and the isolated real-runtime GitHub Actions workflow
+now include the new disk tests. Earlier GitHub Actions failures were
+workflow-level internal server errors (no jobs); subsequent successful
+runner-backed runtime #21 verified 3A.16. Four Repo Acceptance still
+separately requires repair and signoff for its known unsafe Python
+fixture interpreter and package-manifest failures. No hook, real OS
+writer, persistent real archive path, Memory production discovery,
+consent issuer, user chat, merge or activation is introduced.
+

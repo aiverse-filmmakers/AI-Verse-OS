@@ -59,6 +59,9 @@ jobs:
       - name: Test nonlaunching Codex runtime candidate file preflight (synthetic-only)
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_runtime_preflight.py' -v
 
+      - name: Test parent-owned Codex RPC correlation, no live process
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_rpc_boundary.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

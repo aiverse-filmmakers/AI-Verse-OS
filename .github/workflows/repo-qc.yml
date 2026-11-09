@@ -47,6 +47,9 @@ jobs:
       - name: Test OS-originated thread and turn request binding with private synthetic child only
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_thread_binding.py' -v
 
+      - name: Test exact synthetic Codex App Server JSONL source wire evidence without v1 admission
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_source_evidence.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

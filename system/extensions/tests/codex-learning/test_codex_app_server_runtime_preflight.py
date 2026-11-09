@@ -30,11 +30,12 @@ class CandidateRuntimePreflightTests(unittest.TestCase):
         self.binary.chmod(0o700)
 
     def proposal(self, **kwargs):
-        values = dict(
-            private_root=self.root,
-            expected_sha256=hashlib.sha256(self.binary.read_bytes()).hexdigest(),
-        )
+        values = dict(private_root=self.root)
         values.update(kwargs)
+        if "expected_sha256" not in values:
+            values["expected_sha256"] = hashlib.sha256(
+                self.binary.read_bytes()
+            ).hexdigest()
         return gate.ProposedRuntime(**values)
 
     def blocked(self, fn):

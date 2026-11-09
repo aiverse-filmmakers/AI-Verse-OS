@@ -441,7 +441,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "b753abfcc8f1f966b7ff7db2e70077c6461372d3352de185a3f5d26ba3b69ef6"  # refreshed with the package hashes
+REFLECT_SHA256 = "b3a6538ceef78cef9f754ce3175ebebbc4c44176329b7ba120b9d80223137bde"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -784,7 +784,7 @@ class Bridge:
                 raise Refused("invalid destination")
         if unmarked:
             ambiguous.append({"name": "a long message that may contain pasted text", "could_mean": []})
-        return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4]}
+        return {"primary": primary, "allowed": allowed, "ambiguous": ambiguous[:4], "folder": folder}
 
     def scope(self, cwd, prompt, previous=None):
         """Primary destination of one prompt. The previous scope is ignored: bindings never stick."""
@@ -1156,7 +1156,7 @@ class Bridge:
                     else:
                         state["turn"] = {
                             "id": turn_id, "token": secrets.token_hex(16), "scope": state["scope"],
-                            "allowed": dest["allowed"], "ambiguous": dest["ambiguous"],
+                            "allowed": dest["allowed"], "ambiguous": dest["ambiguous"], "folder": dest["folder"],
                             "runtime_turn_ids": [turn_id],
                             "state": "active", "created": time.time(), "prompt_hash": digest(prompt),
                             "permission_mode": event.get("permission_mode", "default"), "sources": {}}
@@ -1593,13 +1593,13 @@ def current_write(root, host, module, payload):
             "source": str(file.relative_to(root)), "sha256": digest(after)}
 
 
-def verify_capability(bridge, auth):
+def verify_capability(bridge, auth, states=("active", "review_requested")):
     """New owner operations are never open: they need a live turn capability and return the turn's destinations."""
     if not isinstance(auth, dict) or set(auth) != {"session", "turn", "token"}:
         raise Refused("this operation needs a turn capability")
     state = bridge.state(auth["session"])
     turn = bridge.bound_turn(state, auth["turn"], auth["token"])
-    if turn["state"] not in {"active", "review_requested"}:
+    if turn["state"] not in states or bridge.cancelled(auth["session"], auth["turn"]):
         raise Refused("the turn is not live")
     return {"operator", *(turn.get("allowed") or [state["scope"]])}
 
@@ -1663,6 +1663,7 @@ def reflect_scan_whole(bridge, memory, whole):
                                        bridge.root, memory.MODE_NATIVE)
         text = body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip()
         kind, tags = meta.get("type"), meta.get("tags", "")
+        why = " ".join(body.split("# Why it matters", 1)[1].casefold().split()) if "# Why it matters" in body else ""
         if (scope not in wanted or meta.get("status", "active") != "active" or kind == "correction"
                 or "tidy" in tags.lower().split(",") or len(text) < 20):
             continue
@@ -1671,7 +1672,9 @@ def reflect_scan_whole(bridge, memory, whole):
             made = (made if made.tzinfo else made.replace(tzinfo=timezone.utc)).timestamp()
         except ValueError:
             made = None
-        key = digest([scope, kind, " ".join(text.casefold().split())])
+        # Same place, type and words, and the same reason, weight, certainty and validity: anything else is not a repeat.
+        key = digest([scope, kind, " ".join(text.casefold().split()), why, meta.get("importance"), meta.get("confidence"),
+                      meta.get("valid_from")])
         rel = memory.relpath(path, bridge.root)
         order[rel] = len(order)
         groups.setdefault(key, []).append((made if made is not None else float("inf"), meta.get("id"), rel, len(text) <= 600, made))
@@ -1696,6 +1699,8 @@ def reflect_scan_whole(bridge, memory, whole):
                                        bridge.root, memory.MODE_NATIVE)
         result["repeats"].append({
             "id": rid, "keeper": keeper, "scope": scope, "type": meta.get("type"), "tags": meta.get("tags", ""),
+            "why": body.split("# Why it matters", 1)[1].strip() if "# Why it matters" in body else "",
+            "importance": meta.get("importance"), "confidence": meta.get("confidence"),
             "text": body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].strip(),
             "evidence_refs": refs[:30] if isinstance(refs, list) else []})
         result["cursor"] = rel
@@ -1827,8 +1832,8 @@ def run_owner(bridge, operation, payload):
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
                                                "profile-read:" + secrets.token_hex(8), "read_local"))
         return read["result"]["operator_profile"]
-    if operation == "reflect_scan":
-        allowed = verify_capability(bridge, payload.get("auth"))
+    if operation == "reflect_scan":  # read only: a tidy may also run after the learning review of the same turn
+        allowed = verify_capability(bridge, payload.get("auth"), ("active", "review_requested", "reviewed"))
         wanted = {"workspace:" + p for p in payload.get("projects", [])}
         if payload.get("upgrade") or payload.get("check_text") is not None:
             # The effective scope is the development project: only the maintainer's copy may read it this way.

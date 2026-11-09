@@ -238,7 +238,11 @@ class FinalRoundTests(TidyBase):
             upgrade_scan = {"projects": [], "limit": 5, "upgrade": True, "auth": auth}
             self.assertEqual(owner_call(sc, "reflect_scan", upgrade_scan).returncode, 2)      # maintainer switch is off
             sc.bridge.review(sc.session, turn["id"], turn["token"], sc.payload())
-            self.assertEqual(owner_call(sc, "reflect_scan", {"projects": ["alpha"], "limit": 5, "auth": auth}).returncode, 2)
+            # Reading for a tidy after the review is allowed (read only); every other new owner operation stays closed.
+            self.assertEqual(owner_call(sc, "reflect_scan", {"projects": ["alpha"], "limit": 5, "auth": auth}).returncode, 0)
+            self.assertEqual(owner_call(sc, "reflect_scan", {"projects": ["beta"], "limit": 5, "auth": auth}).returncode, 2)
+            removal = {"scope": "operator", "parameters": {"effect_id": "x", "line_sha256": "0" * 64}, "auth": auth}
+            self.assertEqual(owner_call(sc, "current_remove", removal).returncode, 2)
         self.each(body)
 
     def test_profile_query_hides_venture_lines_the_turn_may_not_read(self):

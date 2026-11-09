@@ -200,24 +200,30 @@ class Tidy:
     def readable(self, turn):
         return {"operator", *(turn.get("allowed") or [turn.get("scope", "operator")])}
 
+    def can_see(self, action, turn):
+        """Whole-pass changes (repeats, goal hints) show only for the chat's own project (its folder) and general items,
+        never for another project merely named in the turn. Older tidy changes keep the named-project rule."""
+        if action["kind"] in {"dup", "goals"}:
+            return self.action_scopes(action) <= {"operator", *([turn["folder"]] if turn.get("folder") else [])}
+        return self.action_scopes(action) <= self.readable(turn)
+
     def action_scopes(self, action):
         return {"operator"} | ({"workspace:" + action["project"]} if action["project"] != "operator" else set())
 
     def _claim(self, data, state, turn):
         """Pick one delivery batch for this prompt. It is only acknowledged once the reply showing it is seen."""
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        readable = self.readable(turn)
         claimer = state["session_id"] + ":" + turn["id"]  # turn ids alone are not unique across chats
         batch = next((b for b in data["batches"] if not b["acked"]
                       and (b["turn"] == claimer or self.now() - b["claimed_at"] > self.claim_seconds)
-                      and all(self.action_scopes(data["actions"][i["action"]]) <= readable for i in b["items"])), None)
+                      and all(self.can_see(data["actions"][i["action"]], turn) for i in b["items"])), None)
         if batch is None:
             if data["last_delivery_day"] == day:
                 return ""
             used = {item["action"] for b in data["batches"] for item in b["items"]}
             waiting = [a for aid, a in sorted(data["actions"].items(), key=lambda kv: kv[1].get("applied_at", 0))
                        if a["status"] == "applied" and aid not in used]
-            visible = [a for a in waiting if self.action_scopes(a) <= readable]
+            visible = [a for a in waiting if self.can_see(a, turn)]
             ready = visible[:NOTE_ITEMS]
             if not ready:
                 return ""
@@ -337,7 +343,7 @@ class Tidy:
                                   "truncated": truncated, "whole": wl})
             self.store(data)
         # Detail only for what this chat may read; changes elsewhere are only counted.
-        seen_here = [i for i in items if self.action_scopes(i) <= readable]
+        seen_here = [i for i in items if self.can_see(i, turn)]
         shown = [{k: i[k] for k in ("id", "kind", "project", "traced", "reason", "title")} for i in seen_here]
         out = {"pass": "planned", "pending_inspected": len(inspected), "items": shown, "truncated": truncated,
                "limits": {"pending": MAX_PENDING, "records": MAX_RECORDS, "actions": MAX_ACTIONS, "seconds": WORK_SECONDS}}
@@ -400,6 +406,13 @@ class Tidy:
         return [{"id": "gl" + self.m.digest(["goals", ids])[:10], "kind": "goals", "project": "operator", "name": "", "traced": False,
                  "records": [{"id": i} for i in ids], "facts": [f"\"{a[:120]}\" and \"{b[:120]}\"" for a, b, _ in pairs],
                  "reason": "two goals read as the same goal", "title": ""}]
+
+    @staticmethod
+    def number(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def whole_commit(self, data, wl):
         w = data.setdefault("whole", {})
@@ -592,7 +605,8 @@ class Tidy:
             tags = ",".join([*[t for t in (record.get("tags") or "").split(",") if t], "tidy", "restored", "was-" + str(record.get("type") or "note")])
             comp.append({"name": "restore0", "payload": {k: template[k] for k in ("session_id", "turn_id", "route", "scope")} | {
                 "refs": (record.get("evidence_refs") or [])[:25] + [f"tidy:{aid}:undo"],
-                "parameters": {"type": "correction", "text": record["text"], "confidence": .9,
+                "parameters": {"type": "correction", "text": record["text"], "confidence": max(.75, self.number(record.get("confidence"), .9)),
+                "importance": int(self.number(record.get("importance"), 3)), "why": record.get("why") or "",
                 "admission": dict(ADMISSION), "supersedes": pointer, "tags": tags}, "effect_id": f"tidy:{aid}:restore0"}})
         elif action["kind"] == "move":
             for n, record in enumerate(action["records"]):
@@ -696,8 +710,8 @@ class Tidy:
         done = self.done(session, turn_id, token)
         with self.locked():
             actions = self.load()["actions"]
-        readable = self.readable(self.active_turn(session, turn_id, token)[1])
-        elsewhere = sum(1 for a in applied["applied"] if not self.action_scopes(actions[a]) <= readable)
+        turn = self.active_turn(session, turn_id, token)[1]
+        elsewhere = sum(1 for a in applied["applied"] if not self.can_see(actions[a], turn))
         return {"pass": "all", "checked": planned["checked"], "changed": len(applied["applied"]) - elsewhere,
                 "changed_in_other_projects": elsewhere, "more_to_check": done["more_to_check"],
                 "left_for_later": len(applied["left_for_later"])}
@@ -712,7 +726,7 @@ class Tidy:
             if not entry:
                 raise self.m.Refused("that tidy item was not found")
             action = data["actions"][entry["action"]]
-            if not self.permitted(action, self.readable(turn)):
+            if not self.permitted(action, self.readable(turn)) or not self.can_see(action, turn):
                 raise self.m.Refused("this turn may not undo a change that touches another project")
             if action["status"] == "undone":
                 return {"pass": "undo", "state": "already-undone"}

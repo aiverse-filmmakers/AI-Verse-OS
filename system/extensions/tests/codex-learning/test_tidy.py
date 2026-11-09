@@ -712,6 +712,98 @@ class TidyWholeTests(TidyBase):
             self.assertEqual(tidy.undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
         self.each(body)
 
+    def test_a_project_chat_that_names_another_project_still_sees_only_its_own(self):
+        def body(sc):
+            self.pair(sc, "Beta Study sends its newsletter on Fridays after lunch.", scope="workspace:beta")
+            self.pair(sc, "Alpha Study keeps twelve verified records in its ledger.", scope="workspace:alpha")
+            beta, tidy = str(sc.root / "workspaces/beta"), sc.bridge.tidy()
+            sc.prompt("Compare this with Alpha Study.", cwd=beta)
+            self.assertEqual(sorted(sc.turn()["allowed"]), ["workspace:alpha", "workspace:beta"])
+            turn = sc.turn()
+            plan = tidy.plan(sc.session, turn["id"], turn["token"], whole="recent")
+            self.assertEqual([i["project"] for i in plan["items"]], ["beta"])
+            self.assertEqual(plan["in_other_projects"], 1)
+            self.assertNotIn("alpha", json.dumps(plan).lower())
+            tidy.apply(sc.session, turn["id"], turn["token"])
+            tidy.done(sc.session, turn["id"], turn["token"])
+            tidy.claim_seconds = -1
+            note = sc.prompt("Compare this with Alpha Study.", cwd=beta)
+            self.assertIn("Beta Study", note)
+            self.assertNotIn("twelve verified", note)
+            tidy.acknowledge({"session_id": sc.session}, note.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0])
+            state = tidy.load()
+            state["last_delivery_day"] = None
+            tidy.store(state)
+            later = sc.prompt("Alpha again.", cwd=str(sc.root / "workspaces/alpha"))
+            text = later.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
+            note_id = re.search(r"\(tidy note ([0-9A-F]{4})\)", text).group(1)
+            tidy.acknowledge({"session_id": sc.session}, text)
+            sc.prompt("Compare this with Alpha Study.", cwd=beta)
+            turn = sc.turn()
+            with self.assertRaises(Refused):
+                tidy.undo(sc.session, turn["id"], turn["token"], note_id, 1)
+        self.each(body)
+
+    def edit(self, sc, key, **changes):
+        """Change saved fields of the records containing key (to make records that look alike differ, or match)."""
+        for path in sc.root.rglob("mem-*.md"):
+            text = path.read_text()
+            if key not in text:
+                continue
+            for name, value in changes.items():
+                if name == "why":
+                    text = text.rstrip("\n") + "\n\n# Why it matters\n\n" + value + "\n"
+                else:
+                    text = re.sub(rf"(?m)^{name}: .*$", f"{name}: {value}", text)
+            path.write_text(text)
+
+    def test_records_with_a_different_reason_or_weight_are_not_repeats(self):
+        def body(sc):
+            self.pair(sc, self.DUP)
+            self.pair(sc, "The studio pays contractors within ten days of the invoice.")
+            for path in sc.root.rglob("mem-*.md"):  # change only the spaced-out twin of each pair
+                text = path.read_text()
+                if "The  studio" not in text:
+                    continue
+                if self.KEY in text:
+                    path.write_text(text.rstrip("\n") + "\n\n# Why it matters\n\nCash flow depends on it.\n")
+                else:
+                    path.write_text(re.sub(r"(?m)^importance: .*$", "importance: 5", text))
+            self.assertEqual(self.changed(self.finish(sc, mode="full")), 0)
+        self.each(body)
+
+    def test_undo_restores_the_reason_weight_and_certainty(self):
+        def body(sc):
+            self.pair(sc, self.DUP)
+            self.edit(sc, self.KEY, why="Cash flow depends on it.", importance="4", confidence="0.80")
+            self.assertEqual(self.changed(self.finish(sc)), 1)
+            note = sc.prompt("Thanks.").split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0]
+            note_id = re.search(r"\(tidy note ([0-9A-F]{4})\)", note).group(1)
+            sc.bridge.tidy().acknowledge({"session_id": sc.session}, note)
+            sc.prompt("Undo it.")
+            turn = sc.turn()
+            self.assertEqual(sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
+            restored = [t for t in self.files(sc).values() if "restored" in t and "status: active" in t]
+            self.assertEqual(len(restored), 1)
+            self.assertIn("importance: 4", restored[0])
+            self.assertIn("confidence: 0.80", restored[0])
+            self.assertIn("Cash flow depends on it.", restored[0])
+        self.each(body)
+
+    def test_a_tidy_may_run_after_the_learning_review_of_the_same_turn(self):
+        def body(sc):
+            self.pair(sc, self.DUP)
+            sc.prompt("Please tidy up.")
+            turn = sc.turn()
+            sc.bridge.review(sc.session, turn["id"], turn["token"], sc.payload())
+            self.assertEqual(sc.turn()["state"], "reviewed")
+            result = sc.bridge.tidy().all(sc.session, turn["id"], turn["token"], "recent")
+            self.assertEqual(result["changed"], 1)
+            with self.assertRaises(Refused):  # no other owner operation opens up
+                sc.bridge.owner("current_remove", {"scope": "operator", "parameters": {"effect_id": "x", "line_sha256": "0" * 64},
+                                                   "auth": {"session": sc.session, "turn": turn["id"], "token": turn["token"]}})
+        self.each(body)
+
     def test_possible_duplicate_goals_are_only_suggested_and_never_merged(self):
         def body(sc):
             goals = {"strategic_objects": {"intents": [

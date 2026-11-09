@@ -220,6 +220,9 @@ def evaluate_exact_fixture_frames(
             deltas += 1
             continue
         if method == "item/started":
+            stamp = params.get("startedAtMs")
+            if type(stamp) is not int or not 0 <= stamp <= (1 << 63) - 1:
+                _deny()
             item = _map(params.get("item"))
             item_id = _id(item.get("id"))
             if item_id in started_items or item_id in completed_items:
@@ -230,6 +233,9 @@ def evaluate_exact_fixture_frames(
             started_items.add(item_id)
             continue
         if method != "item/completed":
+            _deny()
+        stamp = params.get("completedAtMs")
+        if type(stamp) is not int or not 0 <= stamp <= (1 << 63) - 1:
             _deny()
         item = _map(params.get("item"))
         item_id = _id(item.get("id"))

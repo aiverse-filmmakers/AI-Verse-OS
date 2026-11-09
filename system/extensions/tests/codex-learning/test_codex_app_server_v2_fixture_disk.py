@@ -209,6 +209,25 @@ class DisposableV2DiskTests(unittest.TestCase):
             self.blob.replace(b'"consent_verified":false',
                               b'"consent_verified":true', 1),
             self.blob.replace(b'"frame_count":4', b'"frame_count":5', 1),
+            self.blob.replace(b'"wire_b64":"', b'"wire_b64":"        ):
+            with self.subTest(size=len(attack)):
+                self.blocked(lambda: store.publish_synthetic(
+                    self.root, self.archive_id, attack
+                ))
+        self.assertFalse(self.path().exists())
+
+    def test_bad_archive_id_and_scope_escaping_not_allowed(self):
+        for bad in ("../archive", "archive/bad", "with.dot", "", "x" * 65, 5):
+            with self.subTest(value=bad):
+                self.blocked(lambda: store.publish_synthetic(
+                    self.root, bad, self.blob
+                ))
+        self.assertFalse(list(self.root.glob("*.jsonl")))
+
+
+if __name__ == "__main__":
+    unittest.main()
+, 1),
             b"x" * (store.MAX_BYTES + 1),
         ):
             with self.subTest(size=len(attack)):

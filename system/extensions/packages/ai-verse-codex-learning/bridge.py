@@ -135,6 +135,19 @@ def bounded_text(value, maximum=4000, *, empty=False):
     return value.strip()
 
 
+OUTSIDE_TOOL = re.compile(r"(?:web_?fetch|web_?search|mcp__)", re.I)
+NETWORK_COMMAND = re.compile(r"\b(?:curl|wget|gh\s+api|git\s+(?:clone|pull|fetch))\b")
+OUTSIDE_LABEL = "Unconfirmed, from outside content: "
+
+
+def outside_event(event):
+    """True when a tool result came from the web, a connector or a network command."""
+    tool_input = event.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    return bool(OUTSIDE_TOOL.match(str(event.get("tool_name", "")))
+                or (isinstance(command, str) and NETWORK_COMMAND.search(command)))
+
+
 def no_secrets(value):
     if SECRET.search(json.dumps(value, ensure_ascii=False)):
         raise Refused("secret-like content cannot be retained")
@@ -1082,7 +1095,7 @@ class Bridge:
         self.save(state)
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": header + encoded}}
 
-    def add_source(self, turn, identity, kind, text, success=None, scopes=None):
+    def add_source(self, turn, identity, kind, text, success=None, scopes=None, outside=False):
         if not isinstance(text, str):
             text = observed_text(text)
         sources = turn["sources"]
@@ -1091,7 +1104,7 @@ class Bridge:
         remaining = max(0, 8192 - sum(len(s["tokens"]) for key, s in sources.items() if key != identity))
         # Evidence keeps the scopes it may support: the operator's words support every destination that
         # those words named; tool and assistant text supports only the turn's primary scope.
-        sources[identity] = {"kind": kind, "success": success,
+        sources[identity] = {"kind": kind, "success": success, "outside": outside,
                              "scopes": list(scopes or [turn.get("scope", "operator")]),
                              "secret_like": bool(SECRET.search(text)),
                              **proof(text, min(remaining, self.config["source_max_tokens"]))}
@@ -1190,7 +1203,7 @@ class Bridge:
                             success = code == 0
                         self.add_source(turn, "tool:" + tool_id, "tool",
                                         response.get("output", response) if isinstance(response, dict) else response,
-                                        success)
+                                        success, outside=outside_event(event))
                     self.save(state)
                     if not turn.get("review_reminded"):
                         turn["review_reminded"] = True
@@ -1372,10 +1385,16 @@ class Bridge:
                 candidate.pop("general_fact", None)
                 if not isinstance(parameters, dict):
                     raise Refused("invalid owner parameters")
+                outside_only = all(turn["sources"].get(item["source_id"], {}).get("outside") for item in candidate["evidence"])
+                if outside_only and route in {"current", "skills"}:
+                    raise Refused("outside content alone cannot change current state or create a skill")
                 if route == "memory":
                     if set(parameters) - {"type", "text", "confidence", "admission", "supersedes"}:
                         raise Refused("unbounded Memory parameters")
                     bounded_text(parameters.get("text"), 4000)
+                    if outside_only:
+                        parameters = {**parameters, "text": OUTSIDE_LABEL + parameters["text"]}
+                        candidate = {**candidate, "parameters": parameters}
                     confidence = parameters.get("confidence")
                     if type(confidence) not in {float, int} or not 0.85 <= confidence <= 1:
                         raise Refused("historical learning confidence below policy")

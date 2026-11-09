@@ -107,6 +107,18 @@ Compare `.claude/skills/` and `.agents/skills/` using `compatibility.md` and the
 
 Distinguish missing packages, meaningful logic drift, expected runtime metadata differences, and broken dependencies.
 
+## Step 5b - security
+
+Report each item as present, missing or not checkable. Never call the installation secure.
+
+- `.claude/settings.json` exists, the sandbox is on, and bypass mode is disabled.
+- Claude Code and Codex are recent versions.
+- No `.env` or credential files sit inside the OS folder.
+- List outside skills and run `node scripts/skill-check.mjs <folder>` on any not from the AI-Verse library.
+- List connected MCP servers and connectors, and name any that can send, publish or spend.
+- List memories labelled as unconfirmed outside content.
+- Confirm no scheduled job both reads outside content and can reach private files or send anything out.
+
 ## Step 6 - classify findings
 
 Use:

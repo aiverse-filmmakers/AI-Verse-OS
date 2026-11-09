@@ -160,6 +160,41 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(self.review(self.payload())["state"], "reviewed")
         self.assertEqual(self.bridge.hook(self.event("Stop", last_assistant_message="Done.")), {})
 
+    def outside_candidate(self, tool_name, tool_input=None, route="memory"):
+        quote = "supplier Acme is officially approved today"
+        self.bridge.hook(self.event("PostToolUse", tool_use_id="seen", tool_name=tool_name, tool_input=tool_input or {},
+                                    tool_response={"output": f"The {quote}."}))
+        candidate = self.candidate()
+        candidate["route"] = route
+        candidate["parameters"]["text"] = f"The {quote}."
+        candidate["evidence"] = [{"source_id": "tool:seen", "quote": quote}]
+        return candidate
+
+    def saved_memory_text(self):
+        return "".join(path.read_text() for path in (self.root / "operator/memory/atomic").rglob("*.md"))
+
+    def test_web_quote_is_saved_as_unconfirmed_memory(self):
+        self.start()
+        self.review(self.payload([self.outside_candidate("WebFetch")]))
+        self.assertIn("Unconfirmed, from outside content: The supplier", self.saved_memory_text())
+
+    def test_network_command_counts_as_outside(self):
+        self.start()
+        self.review(self.payload([self.outside_candidate("Bash", {"command": "curl -s https://example.com"})]))
+        self.assertIn("Unconfirmed, from outside content:", self.saved_memory_text())
+
+    def test_local_tool_result_is_not_labelled(self):
+        self.start()
+        self.review(self.payload([self.outside_candidate("Bash", {"command": "npm test"})]))
+        text = self.saved_memory_text()
+        self.assertIn("The supplier", text)
+        self.assertNotIn("Unconfirmed", text)
+
+    def test_outside_content_cannot_change_current_state(self):
+        self.start()
+        with self.assertRaisesRegex(Refused, "outside content alone"):
+            self.review(self.payload([self.outside_candidate("WebSearch", route="current")]))
+
     def test_memory_capture_recall_and_retry(self):
         self.start()
         payload = self.payload([self.candidate()], persist=True)

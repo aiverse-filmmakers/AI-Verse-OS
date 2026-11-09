@@ -106,6 +106,38 @@ jobs:
             -s "$BRAIN/tests" \
             -p 'test_intent_owner_service.py' -v
 
+      - name: Prepare privately owned Python for synthetic Codex fixture checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          # The shared setup-python executable may be group-writable on CI.
+          # Do not loosen the fixture's protected executable validation.
+          # Python docs: venv --copies --system-site-packages.
+          PRIVATE_PY_ROOT="$(mktemp -d "$RUNNER_TEMP/codex-test-python.XXXXXX")"
+          python -m venv --copies --system-site-packages --without-pip "$PRIVATE_PY_ROOT/venv"
+          PRIVATE_PY="$PRIVATE_PY_ROOT/venv/bin/python"
+          test -x "$PRIVATE_PY"
+          PRIVATE_PY="$("$PRIVATE_PY" -c 'import sys; print(sys.executable)')"
+          chmod 0700 "$(readlink -f "$PRIVATE_PY")"
+          "$PRIVATE_PY" - <<'PY'
+          from pathlib import Path
+          import os
+          import stat
+          import sys
+          target = Path(sys.executable).resolve(strict=True)
+          info = target.stat()
+          assert target.is_file() and stat.S_ISREG(info.st_mode)
+          assert info.st_uid == os.getuid()
+          assert 0 < info.st_size <= 128_000_000
+          assert info.st_mode & 0o022 == 0
+          assert info.st_mode & stat.S_IXUSR
+          assert sys.version_info[:2] == (3, 12)
+          import aiverse_brain
+          print("PASS: private copied Python 3.12 executable, unchanged strict transport policy")
+          PY
+          echo "AIVERSE_CODEX_FIXTURE_PY=$PRIVATE_PY" >> "$GITHUB_ENV"
+
       - name: Run optional Codex learning owner and lifecycle tests
         shell: bash
         run: |
@@ -113,7 +145,7 @@ jobs:
           SKILLS="$(cat "$RUNNER_TEMP/skills-repo.txt")"
           AIVERSE_TEST_SKILLS_ENTRYPOINT="$SKILLS/installer/aiverse_skills.py" \
           PYTHONPATH="system/extensions/packages/ai-verse-codex-learning:system/extensions/tests/codex-learning" \
-            python -m unittest discover \
+            "$AIVERSE_CODEX_FIXTURE_PY" -m unittest discover \
               -s system/extensions/tests/codex-learning \
               -p 'test*.py' -v
 

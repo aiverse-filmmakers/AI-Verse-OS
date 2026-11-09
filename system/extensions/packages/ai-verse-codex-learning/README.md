@@ -352,7 +352,12 @@ thread/turn IDs, history/fork responses, extra pending items,
 failed/interrupted completion, overlapping starts, expired lease,
 consent withdrawal, scope pause, changed child connection, and
 unsupported/oversized input. A cancellation immediately abandons
-the local state before any `turn/interrupt` acknowledgement. A broken
+the local state before any `turn/interrupt` acknowledgement. **The
+synthetic local close flag is shared across earlier immutable state
+snapshots**, so callers retaining a pre-cancellation copy cannot resume
+using that obsolete snapshot after cancellation or disconnection.
+This does not provide atomic revocation against concurrent operations,
+an OS trust boundary, or durable cross-process cancellation. A broken
 connection can ONLY restart with a fresh `thread/start` request:
 it never resumes or imports older conversations under present scope.
 

@@ -400,3 +400,150 @@ class TidySafetyTests(TidyBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TidyWholeTests(TidyBase):
+    """`reflect all`: everything saved, in bounded batches, only real defects, general chat only."""
+
+    DUP = "The studio invoices every client on the first of the month."
+    DUP2 = "The studio invoices every client, on the first of the month"  # same words, other punctuation
+    KEY = "invoices every client"
+
+    def all_pass(self, sc):
+        turn = sc.turn()
+        return sc.bridge.tidy().all(sc.session, turn["id"], turn["token"])
+
+    def finish(self, sc, limit=3):
+        """Repeated passes until the store has been read once; returns each result."""
+        results = []
+        for _ in range(20):
+            sc.prompt("Please look over everything you know.")
+            with patch.object(sc.bridge.tidy(), "whole_records", limit):
+                results.append(self.all_pass(sc))
+            if not results[-1]["more_to_check"]:
+                return results
+        self.fail("the cursor never finished")
+
+    def active_text(self, sc):
+        return "\n".join(p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md") if "status: active" in p.read_text())
+
+    def test_exact_duplicates_are_set_aside_over_batches_and_unchanged_records_are_not_rechecked(self):
+        def body(sc):
+            self.seed(sc, self.DUP, USER_REF)
+            for n in range(6):
+                self.seed(sc, f"Unrelated saved note number {n} about the weekly rhythm.", USER_REF)
+            self.seed(sc, self.DUP2, USER_REF)
+            results = self.finish(sc)
+            self.assertGreater(len(results), 1)  # three at a time: several passes
+            self.assertEqual(sum(r["changed"] for r in results), 1)
+            self.assertEqual(self.active_text(sc).count(self.KEY), 1)
+            all_text = "\n".join(p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md"))
+            self.assertEqual(all_text.count(self.KEY), 2, "nothing was deleted")
+            before = {p: p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md")}
+            again = self.finish(sc)
+            self.assertEqual(sum(r["changed"] for r in again), 0)
+            self.assertEqual(before, {p: p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md")}, "nothing changed")
+            seen = json.loads((sc.root / "runtime/codex-learning/reflect/whole.json").read_text())["seen"]
+            self.assertGreaterEqual(len(seen), 7)
+        self.each(body)
+
+    def test_the_note_is_plain_and_undo_brings_the_repeat_back(self):
+        def body(sc):
+            self.seed(sc, self.DUP, USER_REF)
+            self.seed(sc, self.DUP2, USER_REF)
+            self.finish(sc)
+            text = sc.prompt("Thanks.")
+            note = text.split("Never place it in the middle of an answer:\n", 1)[1].split("\nBound scope:", 1)[0].strip()
+            self.assertIn("**1. Something you saved twice was set aside**", note)
+            for banned in ("workspace", "scope", "owner", "bridge", "Memory", "hook"):
+                self.assertNotIn(banned, note)
+            note_id = re.search(r"\(tidy note ([0-9A-F]{4})\)", note).group(1)
+            sc.bridge.tidy().acknowledge({"session_id": sc.session}, note)
+            sc.prompt("Undo it.")
+            turn = sc.turn()
+            self.assertEqual(sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, 1)["state"], "undone")
+            self.assertEqual(self.active_text(sc).count(self.KEY), 2)
+        self.each(body)
+
+    def test_nothing_to_fix_changes_nothing_and_says_nothing(self):
+        def body(sc):
+            for n in range(4):
+                self.seed(sc, f"Prefers meetings on Tuesday mornings, variant {n} of the schedule.", USER_REF)
+            before = {p: p.read_text() for p in sc.root.rglob("mem-*.md")}
+            self.assertEqual(sum(r["changed"] for r in self.finish(sc)), 0)
+            self.assertEqual(before, {p: p.read_text() for p in sc.root.rglob("mem-*.md")})
+            self.assertNotIn("A tidy note is waiting", sc.prompt("Hello."))
+        self.each(body)
+
+    def test_existing_detectors_work_across_projects_and_the_note_stays_in_plain_chats(self):
+        def body(sc):
+            self.seed_world(sc)
+            self.finish(sc)
+            self.assertIn("81 members", (sc.root / "workspaces/beta/context/CURRENT.md").read_text())
+            state = sc.bridge.tidy().load()
+            state["entries"] = []  # the recent-saves pass is not what is under test
+            sc.bridge.tidy().store(state)
+            sc.bridge.tidy().claim_seconds = -1  # any chat may claim a waiting note, if it is allowed to read all of it
+            # A project chat, and a chat that names the project, never see the note.
+            for cwd, text in ((str(sc.root / "workspaces/beta"), "What next?"), (None, "Tell me about Beta Study.")):
+                shown = sc.prompt(text, cwd=cwd)
+                self.assertNotIn("A tidy note is waiting", shown)
+                self.assertNotIn("tidied", shown)
+            self.assertIn("A tidy note is waiting", sc.prompt("Hello again."))
+        self.each(body)
+
+    def test_it_is_refused_in_a_project_chat_and_when_a_project_is_named(self):
+        def body(sc):
+            self.seed(sc, self.DUP, USER_REF)
+            for cwd, text in ((str(sc.root / "workspaces/beta"), "Hi."), (None, "Hi, about Beta Study.")):
+                sc.prompt(text, cwd=cwd)
+                with self.assertRaises(Refused):
+                    self.all_pass(sc)
+                turn = sc.turn()
+                with self.assertRaises(Refused):  # the reader itself refuses too
+                    sc.bridge.owner("reflect_scan", {"whole": {"cursor": None, "limit": 5},
+                                                     "auth": {"session": sc.session, "turn": turn["id"], "token": turn["token"]}})
+        self.each(body)
+
+    def test_it_is_offered_when_enough_saves_built_up_or_a_long_time_passed(self):
+        def body(sc):
+            self.ledger(sc, count=25, scope="operator")
+            tidy = sc.bridge.tidy()
+            state = tidy.load()
+            for entry in state["entries"]:
+                entry["done"] = True
+            tidy.store(state)
+            turn_cmd = lambda text, cwd=None: sc.prompt(text, cwd=cwd)
+            self.assertNotIn("reflect all", turn_cmd("Inside the project.", cwd=str(sc.root / "workspaces/beta")))
+            text = turn_cmd("Plain chat.")
+            self.assertIn("tidying of everything saved is due", text)
+            self.assertIn(f"reflect all --session {sc.session} --turn {sc.turn()['id']} --token {sc.turn()['token']}", text)
+            self.finish(sc)
+            self.assertNotIn("reflect all", turn_cmd("Quiet again."))
+            state = tidy.load()
+            state["whole"]["last_full"] = time.time() - 31 * 86400
+            state["whole"]["last_run"] = 0
+            tidy.store(state)
+            self.assertIn("reflect all", turn_cmd("A month later."))
+        self.each(body)
+
+    def test_possible_duplicate_goals_are_only_suggested(self):
+        def body(sc):
+            goals = {"strategic_objects": {"intents": [
+                {"payload": {"statement": "Grow the newsletter to ten thousand readers."}},
+                {"payload": {"statement": "Grow the newsletter to 10 thousand readers"}},
+                {"payload": {"statement": "Learn to paint with oil."}}]}}
+            self.seed(sc, self.DUP, USER_REF)
+            original = Bridge.owner
+
+            def owner(bridge, operation, payload):  # the reader runs in this process so the goals can be faked
+                return bridge_module.run_owner(bridge, operation, payload) if operation == "reflect_scan" else original(bridge, operation, payload)
+            fake = type("S", (), {"snapshot": lambda self, scope: goals})()
+            with patch.object(Bridge, "owner", owner), patch.object(Bridge, "intent_service", lambda bridge: fake):
+                self.finish(sc)
+            note = sc.prompt("Thanks.")
+            self.assertIn("some of your goals may be the same goal", note)
+            self.assertIn("Grow the newsletter", note)
+            self.assertIn("I cannot join goals yet", note)
+            self.assertNotIn("Learn to paint", note)
+        self.each(body)

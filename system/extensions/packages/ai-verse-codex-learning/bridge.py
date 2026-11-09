@@ -38,6 +38,7 @@ DEFAULTS = {
     "state_ttl_seconds": 86400, "owner_timeout_seconds": 12,
     "runtime_path": "", "skills_root": None, "skills_entrypoint": None,
     "reflection_enabled": True, "reflect_min_entries": 5, "reflect_max_age_hours": 6,
+    "reflect_all_min_saves": 25, "reflect_all_days": 30,
     "maintainer_feedback": False,
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
@@ -440,7 +441,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "4f5aaa76b5574f8a1153d24e4ba7ddc16fdca157f63ec69ae8e8a61d5d6c427a"  # refreshed with the package hashes
+REFLECT_SHA256 = "352fc5aae4ae4cd21fb37c480058287b2f8b960358c4e1f74ffb8cee0c4d9259"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -472,7 +473,8 @@ class Bridge:
             ("context_max_bytes", 4096, 24000), ("recall_max_bytes", 4096, 16384),
             ("recall_limit", 1, 8), ("source_max_tokens", 128, 8192), ("source_limit", 2, 32),
             ("candidate_limit", 1, 8), ("state_ttl_seconds", 60, 604800),
-            ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168)]:
+            ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168),
+            ("reflect_all_min_saves", 5, 500), ("reflect_all_days", 7, 365)]:
             if type(self.config[name]) is not int or not low <= self.config[name] <= high:
                 raise Refused("configuration bound violated: " + name)
         if self.config["review_mode"] not in {"all", "meaningful", "off"}:
@@ -852,7 +854,10 @@ class Bridge:
             "when its trigger, inputs, method, validation and failure behavior are concrete and evidenced. "
             "Notice durable things in what the user says: identity facts, communication preferences and pet peeves, "
             "work habits, goals and changes to them, corrections, project conventions and tool quirks (workspace scope), "
-            "completed work and lessons (Memory). Ignore one time instructions, things already in the Core, and large pasted material. "
+            "completed work and lessons (Memory). A rule, correction, decision or fact stated while giving a task is lasting if it would apply "
+            "to future work, even when phrased as a command; repeating it or frustration (\"how many times\") is a strong signal. "
+            "Project specific ones go to the project, not the general profile. Capture \"my next goal is X\" and \"I've decided not to do X\" "
+            "without being asked. Ignore truly one time edits, things already in the Core, and large pasted material. "
         )
         if turn and turn.get("state") in {"active", "review_requested"}:
             instruction += self.destination_text(turn)
@@ -1659,6 +1664,17 @@ def reflect_scan(bridge, module, host, payload):
                     words = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
                     other = other or any(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words)
         return {"mentions_other_project": other, "development_project_available": dev}
+    whole = payload.get("whole")
+    if whole is not None:
+        # Whole memory pass: every active project, in bounded batches from a cursor (run_owner allows plain operator chats only).
+        limit = max(1, min(int(whole.get("limit", 100)), 100))
+        cursor = whole.get("cursor") if isinstance(whole.get("cursor"), str) else None
+        for folder in sorted(workspace_root.iterdir()):
+            if folder.is_dir() and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", folder.name):
+                with contextlib.suppress(Refused):
+                    if bridge.manifest(folder.name).get("status") == "active":
+                        projects.append(folder.name)
+        projects = projects[:200]
     for project in projects:
         meta = bridge.manifest(project)
         notes = bridge.root / "workspaces" / project / "context/CURRENT.md"
@@ -1674,7 +1690,13 @@ def reflect_scan(bridge, module, host, payload):
     if payload.get("upgrade"):
         wanted = {"workspace:ai-verse-os-development"}
     seen = 0
-    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+    files = memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE)
+    last = None
+    if whole is not None:
+        files = list(files)
+        at = [i for i, f in enumerate(files) if cursor and memory.relpath(f, bridge.root) == cursor]
+        files = files[at[0] + 1:] if at else files
+    for path in files:
         guessed = memory.infer_scope_from_path(path, bridge.root, memory.MODE_NATIVE)
         if guessed not in wanted:
             continue  # cheap path check first: other projects' files are never even parsed
@@ -1701,9 +1723,16 @@ def reflect_scan(bridge, module, host, payload):
             result["truncated"] = True
             break
         result["records"].append(record)
+        last = memory.relpath(path, bridge.root)
     if payload.get("upgrade"):
         result["upgrade_notes"] = sorted(result.get("upgrade_notes", []), key=lambda n: n["created"], reverse=True)[:40]
         return result
+    if whole is not None:
+        result.update({"cursor": last if result["truncated"] else None, "complete": not result["truncated"]})
+        if result["complete"]:  # goals are only listed, to suggest merges; Brain offers no reversible merge yet
+            with contextlib.suppress(Exception):
+                intents = bridge.intent_service().snapshot("operator")["strategic_objects"].get("intents", [])
+                result["goals"] = [i["payload"]["statement"] for i in intents if isinstance(i.get("payload", {}).get("statement"), str)][:60]
     profile = host.request_action(host_action(module, host, "operator", "operator.profile.read", {},
                                               "reflect-read:" + secrets.token_hex(8), "read_local"))["result"]["operator_profile"]
     result["ventures"] = [v["project"] for v in profile["identity"].get("ventures", []) if isinstance(v, dict) and v.get("project")]
@@ -1764,6 +1793,8 @@ def run_owner(bridge, operation, payload):
             raise Refused("the development project is not a destination of this turn")
         if not wanted <= allowed:
             raise Refused("a destination is not authorized for this turn")
+        if payload.get("whole") is not None and allowed != {"operator"}:
+            raise Refused("reading every project is only for a plain chat with the operator")
         return reflect_scan(bridge, module, host, payload)
     if operation == "current_remove":
         allowed = verify_capability(bridge, payload.get("auth"))
@@ -1902,7 +1933,7 @@ def main():
     intent.add_argument("--token")
     intent.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
     reflect = commands.add_parser("reflect")
-    reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list"])
+    reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list", "all"])
     reflect.add_argument("--session")
     reflect.add_argument("--turn")
     reflect.add_argument("--token")
@@ -1958,6 +1989,8 @@ def main():
                     result = tidy.apply(args.session, args.turn, args.token, args.action_id)
                 elif args.action == "done":
                     result = tidy.done(args.session, args.turn, args.token)
+                elif args.action == "all":
+                    result = tidy.all(args.session, args.turn, args.token)
                 else:
                     if not args.note or not args.item:
                         raise Refused("undo needs --note and --item")

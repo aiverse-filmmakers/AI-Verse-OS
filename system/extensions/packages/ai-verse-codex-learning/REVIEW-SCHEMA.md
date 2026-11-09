@@ -134,6 +134,8 @@ When the start of a chat says tidying is due, run the three printed commands aft
 
 A finished pass leaves a tidy note. When the start of a chat includes one, begin the next reply with it exactly as given. Never put it in the middle of an answer. If the operator says "undo N", run `reflect undo --note ID --item N`; if they correct an item in words, save the right fact normally and run `reflect undo --note ID --item N --mode corrected`.
 
+`reflect all` (one command, no JSON) tidies everything saved instead of only recent saves: 100 records per pass from a saved cursor, finished over repeated passes, skipping records unchanged since they were checked. It only acts on real defects (a repeat of an earlier saved note in the same place, details in the wrong place, out-of-date project notes), never shortens or rewrites a record, and says nothing when nothing needs fixing. It is refused in a project chat or when a project is named, and its tidy note is shown only in a plain operator chat. Goals that read as the same are listed in the note as a suggestion; nothing is merged.
+
 Not in this build: merging two goals that mean the same, linking a goal to a project, and any change to what a goal means. These need Brain to offer a reversible API and an explicit statement from the operator.
 
 ## Maintainer feedback (the upgrade list)

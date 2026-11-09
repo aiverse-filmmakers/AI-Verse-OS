@@ -165,8 +165,14 @@ class OwnedFixtureConnection:
         except (OSError, ValueError, BrokenPipeError):
             raise TransportBlocked("synthetic outbound pipe failed") from None
 
-    def read_frame(self, timeout=MAX_FRAME_WAIT_SECONDS) -> dict:
-        """Read one bounded JSONL frame without trusting child stdout.
+    def read_frame_with_raw(self, timeout=MAX_FRAME_WAIT_SECONDS) -> tuple[dict, bytes]:
+        """Read one bounded JSONL frame and retain the EXACT received bytes.
+
+        This remains synthetic-only; raw pipe bytes are NOT host attestation.
+        The wire includes the original terminal newline and is never
+        reconstructed with json.dumps().
+
+        Read one bounded JSONL frame without trusting child stdout.
 
         select/os.read are used instead of buffered readline so an incomplete
         line cannot hang indefinitely after a single readable byte.
@@ -205,11 +211,16 @@ class OwnedFixtureConnection:
             if "jsonrpc" in frame and frame["jsonrpc"] != "2.0":
                 raise TransportBlocked("invalid synthetic JSON-RPC version")
             self._received += 1
-            return frame
+            return frame, raw + b"\n"
         except TransportBlocked:
             raise
         except (OSError, UnicodeError, ValueError, TypeError):
             raise TransportBlocked("malformed synthetic stdout frame") from None
+
+    def read_frame(self, timeout=MAX_FRAME_WAIT_SECONDS) -> dict:
+        """Legacy parsed-only fixture API. Drops the source-wire witness."""
+        frame, _raw = self.read_frame_with_raw(timeout)
+        return frame
 
     def handshake(self) -> None:
         """Initialize the private fixture before exposing notifications."""
@@ -229,12 +240,19 @@ class OwnedFixtureConnection:
         self._send({"method": "initialized"})
 
     def next_notification(self, timeout=MAX_FRAME_WAIT_SECONDS) -> dict:
-        frame = self.read_frame(timeout)
+        frame, _raw = self.next_notification_with_raw(timeout)
+        return frame
+
+    def next_notification_with_raw(
+        self, timeout=MAX_FRAME_WAIT_SECONDS
+    ) -> tuple[dict, bytes]:
+        """Synthetic-only notification with unmodified JSONL source bytes."""
+        frame, raw = self.read_frame_with_raw(timeout)
         if (not isinstance(frame.get("method"), str)
                 or "id" in frame
                 or not isinstance(frame.get("params"), Mapping)):
             raise TransportBlocked("unexpected synthetic RPC frame")
-        return frame
+        return frame, raw
 
     def close(self) -> None:
         if self._closed:

@@ -625,3 +625,50 @@ Official references:
 - https://learn.chatgpt.com/docs/developer-commands
 - https://github.com/openai/codex/tree/e54a5713caf331f42a6eef0166186df5f7563c29/codex-rs/app-server-protocol/schema
 
+### 3A.12: GitHub-hosted stable Codex App Server smoke gate, no user data
+
+**Source research on 2026-11-09:**
+- https://learn.chatgpt.com/docs/app-server documents default local stdio
+  JSONL, the one-time \`initialize\` request and \`initialized\` notification,
+  duplicate-initialization rejection and the ability to generate schemas
+  directly from a particular CLI version.
+- https://github.com/openai/codex/releases/tag/rust-v0.167.0 is the official
+  latest stable release as of the research date; newer alpha/pre-releases
+  must not silently replace it in this gate.
+- The official GitHub release API lists Linux x86_64 CLI tarball
+  \`codex-x86_64-unknown-linux-musl.tar.gz\` with SHA-256
+  \`9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a\`
+  and exact archive size 122587028 bytes. CI pins that exact archive.
+- Official release-tag source has seven generated JSON schema blob hashes
+  enumerated by \`test_codex_real_app_server_ci.py\`. The released schema
+  is not byte-for-byte identical to the earlier **newer upstream** 3A.9
+  pin \`e54a5713caf331f42a6eef0166186df5f7563c29\`.
+  Never treat schema compatibility between the two snapshots as automatic.
+
+**CI-only test:** \`.github/workflows/persistent-chats-codex-real-runtime.yml\`
+downloads the official stable archive, verifies its exact size and checksum
+before extracting a single regular binary, and runs it inside a pinned
+Python container with no network, no inherited credentials, a read-only
+checkout-independent bind mount, no extra capabilities and an ephemeral
+\`CODEX_HOME\`. The test verifies the runtime \`--version\`, generates JSON
+schemas from **this exact executable** and checks their seven source-tag
+Git blob IDs plus timestamp and item coverage shape. It launches the
+official \`codex app-server\` in stdio mode to perform **only** an
+\`initialize\` handshake and duplicate initialization refusal.
+It does not send \`thread/start\`, \`turn/start\`, text prompts, approval
+requests or model calls; it neither reads nor restores user conversations.
+
+A green smoke job would prove that this particular release runs and
+can initialize under the CI container restrictions. It would **not**
+authenticate later app-server events, attest a local Mac installation,
+approve a binary for production, prove that source digests are signed
+vendor provenance, or grant real OS consent/scope/write privileges.
+The release tarball digest comes from official GitHub release metadata,
+not an independently verified Sigstore signature. The earlier source pin
+and the stable runtime lane remain separate until a deliberate reviewed
+protocol/version decision.
+
+**Real recording stays hard blocked** in every production path.
+No installer change, local Codex process, real conversation, archive write,
+Memory live discovery, PR merge or \`main\` activation is in this phase.
+

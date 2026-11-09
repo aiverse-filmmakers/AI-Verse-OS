@@ -35,6 +35,10 @@ The previously frozen five-component first-member beta remains reproducible from
 
 Do not substitute moving `main` branches when reproducing that frozen gate.
 
+## Security
+
+Read the [member security guide](docs/MEMBER-SECURITY-GUIDE.md). AI-Verse OS reduces the risk from outside content and untrusted skills. It cannot remove that risk.
+
 ## Setup
 
 After installation:

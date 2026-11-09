@@ -57,6 +57,8 @@ ownership:
     - system/
     - skills/registry.yaml
     - .claude/skills/
+    - .claude/settings.json
+    - .claude/agents/
     - .agents/skills/
     - scripts/
   user_owned:

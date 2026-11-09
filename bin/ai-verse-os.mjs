@@ -72,6 +72,23 @@ function run(command, args = [], options = {}) {
   return result;
 }
 
+// Members receive the version accepted for release, never whatever is newest on main.
+function acceptedRevision(root, ref) {
+  const raw = run('git', ['-C', root, 'show', `${ref}:release/component-release.json`], { capture: true }).stdout;
+  let release = null;
+  try { release = JSON.parse(raw); } catch {}
+  if (release?.release_status !== 'accepted' || !/^[a-f0-9]{40}$/.test(release?.revision ?? '')) fail('Stopped: no valid accepted release was found, so nothing was changed.');
+  return release.revision;
+}
+
+// An acceptance commit only touches release/, so a tip that differs from the accepted code in nothing else is that release.
+function acceptedCommit(root, ref) {
+  const accepted = acceptedRevision(root, ref);
+  const changed = run('git', ['-C', root, 'diff', '--name-only', accepted, ref], { capture: true }).stdout.split('\n').filter(Boolean);
+  if (!changed.every((file) => file.startsWith('release/'))) return accepted;
+  return run('git', ['-C', root, 'rev-parse', `${ref}^{commit}`], { capture: true }).stdout.trim();
+}
+
 function commandVersion(command) {
   const result = run(command, ['--version'], { capture: true, allowFailure: true });
   if (result.error || result.status !== 0) return null;
@@ -345,7 +362,10 @@ function install(options) {
     out(`Install to: ${target}`);
   }
 
-  run('git', ['clone', '--depth', '1', '--branch', 'main', REPO_URL, target], { capture: options.json });
+  run('git', ['clone', '--branch', 'main', REPO_URL, target], { capture: options.json });
+  const accepted = acceptedCommit(target, 'HEAD');
+  run('git', ['-C', target, 'checkout', '--quiet', '-B', 'main', accepted], { capture: options.json });
+  if (run('git', ['-C', target, 'rev-parse', 'HEAD'], { capture: true }).stdout.trim() !== accepted) fail('Install stopped: the checked out version is not the accepted release.');
 
   const missing = validateInstall(target);
   if (missing.length) fail(`Install completed but validation failed. Missing: ${missing.join(', ')}`);
@@ -508,7 +528,9 @@ function update(options) {
 
   const before = readSetup(root);
   run('git', ['-C', root, 'fetch', 'origin', 'main'], { capture: options.json });
-  run('git', ['-C', root, 'merge', '--ff-only', 'origin/main'], { capture: options.json });
+  const accepted = acceptedCommit(root, 'FETCH_HEAD');
+  run('git', ['-C', root, 'merge', '--ff-only', accepted], { capture: options.json });
+  if (run('git', ['-C', root, 'merge-base', '--is-ancestor', accepted, 'HEAD'], { allowFailure: true, capture: true }).status !== 0) fail('Update stopped: the installed version does not include the accepted release.');
   const missing = validateInstall(root);
   if (missing.length) fail(`Update finished but validation failed. Missing: ${missing.join(', ')}`);
   const after = readSetup(root);

@@ -3,7 +3,7 @@
   "id": "ai-verse-codex-learning",
   "version": "0.3.0-local",
   "files": {
-    "bridge.py": "21c70e20f832756ecd9ab100191811c73de6dca5861cca1dfb45c039c31d067d",
+    "bridge.py": "8a916658eb88f4aa19a0ff3b267122853a0224bbe9e53b70b71e3fc745341c19",
     "lifecycle.py": "f3c4bf7096b780aadfa50992c8db19f2828b9ce71c840e658196476982974281",
     "install.py": "cde0d9c3799905f3af125a874aade691bba793150aa3fe675d218b84ebde01e4",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",

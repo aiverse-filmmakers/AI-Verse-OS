@@ -50,6 +50,9 @@ jobs:
       - name: Test exact synthetic Codex App Server JSONL source wire evidence without v1 admission
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_source_evidence.py' -v
 
+      - name: Test v2 synthetic Codex received-wire archive envelope without persistence
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_archive_v2.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v

@@ -113,11 +113,13 @@ output({"method": "turn/started", "params": {
 }})
 output({"method": "item/completed", "params": {
     "threadId": "fixture-thread-1", "turnId": "fixture-turn-1",
+    "completedAtMs": 1000,
     "item": {"id": "user-1", "type": "userMessage",
              "content": [{"type": "text", "text": " hello 🧪 中文  "}]},
 }})
 output({"method": "item/completed", "params": {
     "threadId": "fixture-thread-1", "turnId": "fixture-turn-1",
+    "completedAtMs": 1001,
     "item": {"id": "answer-1", "type": "agentMessage",
              "phase": "final_answer", "text": "  finished 🚀\n"},
 }})

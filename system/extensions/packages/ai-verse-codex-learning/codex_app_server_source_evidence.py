@@ -168,7 +168,7 @@ def evaluate_exact_fixture_frames(
             or not 4 <= len(frames) <= MAX_FRAMES):
         _deny()
     seen_ids = set()
-    started_items = set()
+    started_items: dict[str, tuple[str, int]] = {}
     completed_items = set()
     messages = []
     records = []
@@ -217,6 +217,34 @@ def evaluate_exact_fixture_frames(
                 or _id(params.get("turnId")) != turn_id):
             _deny()
         if method in DELTA_METHODS:
+            # Official stable v2 deltas have an itemId and are always
+            # associated with a started item of the matching kind.
+            # Without that association a missing or foreign item might be
+            # silently treated as non-chat context. This is a deliberately
+            # narrow fixture, not a full UI or source completeness claim.
+            expected_kind = {
+                "item/agentMessage/delta": "agentMessage",
+                "item/plan/delta": "plan",
+                "item/reasoning/summaryTextDelta": "reasoning",
+                "item/reasoning/textDelta": "reasoning",
+                "item/commandExecution/outputDelta": "commandExecution",
+            }.get(method)
+            item_id = _id(params.get("itemId"))
+            delta = params.get("delta")
+            if (expected_kind is None or item_id not in started_items
+                    or item_id in completed_items
+                    or started_items[item_id][0] != expected_kind
+                    or not isinstance(delta, str)
+                    or len(delta.encode("utf-8", "strict")) > MAX_TEXT_BYTES):
+                _deny()
+            if method == "item/reasoning/summaryTextDelta":
+                idx = params.get("summaryIndex")
+                if type(idx) is not int or not 0 <= idx <= 1000:
+                    _deny()
+            if method == "item/reasoning/textDelta":
+                idx = params.get("contentIndex")
+                if type(idx) is not int or not 0 <= idx <= 1000:
+                    _deny()
             deltas += 1
             continue
         if method == "item/started":
@@ -230,7 +258,7 @@ def evaluate_exact_fixture_frames(
             if item.get("type") not in (
                     "userMessage", "agentMessage", *NON_CHAT_ITEMS):
                 _deny()
-            started_items.add(item_id)
+            started_items[item_id] = (item.get("type"), stamp)
             continue
         if method != "item/completed":
             _deny()
@@ -244,6 +272,10 @@ def evaluate_exact_fixture_frames(
         seen_ids.add(item_id)
         completed_items.add(item_id)
         kind = item.get("type")
+        if item_id in started_items:
+            started_kind, started_clock = started_items[item_id]
+            if kind != started_kind or stamp < started_clock:
+                _deny()
         if kind in NON_CHAT_ITEMS:
             nonchat += 1
             continue

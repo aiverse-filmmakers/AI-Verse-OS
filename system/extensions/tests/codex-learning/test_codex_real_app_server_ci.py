@@ -402,6 +402,238 @@ def probe_empty_ephemeral_thread(proc: subprocess.Popen[bytes],
     deny("sterile thread lifecycle did not complete")
 
 
+@dataclass(frozen=True)
+class DisposableRealChildLease:
+    """Bound parent pipe identity, NOT authenticated operator or capture consent."""
+
+    process: subprocess.Popen[bytes]
+    pid: int
+    stdout_fd: int
+    stdout_dev: int
+    stdout_ino: int
+    workspace: str
+    workspace_dev: int
+    workspace_ino: int
+    generation: int
+
+
+class DisposableRealChildEpoch:
+    """3A.24: real CI Codex subprocess owner fence, no recording admission.
+
+    A Popen reference is meaningful only to the parent process that created
+    it. A PID, caller-supplied threadId or reused scope cannot impersonate
+    an old lease. Nothing here mints an OS user recording grant.
+    """
+
+    def __init__(self, allowed_workspaces: tuple[str, str]):
+        if (sys.platform != "linux" or len(allowed_workspaces) != 2
+                or len(set(allowed_workspaces)) != 2
+                or any(not isinstance(x, str) or not x.startswith("/")
+                       for x in allowed_workspaces)):
+            deny("invalid disposable process scope")
+        self.allowed = frozenset(allowed_workspaces)
+        self.generation = 0
+        self.current: DisposableRealChildLease | None = None
+        self.retired: subprocess.Popen[bytes] | None = None
+
+    def bind(self, process: subprocess.Popen[bytes],
+             workspace: str) -> DisposableRealChildLease:
+        if (self.current is not None or workspace not in self.allowed
+                or not isinstance(process, subprocess.Popen)
+                or process.poll() is not None
+                or process.pid is None or process.pid <= 0
+                or process.stdin is None or process.stdout is None
+                or (self.retired is not None
+                    and self.retired.poll() is None)):
+            deny("real CI child process binding refused")
+        try:
+            root = Path(workspace)
+            if (root.is_symlink() or root.resolve(strict=True) != root):
+                deny("real CI child workspace identity refused")
+            info = root.stat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o077):
+                deny("real CI child workspace identity refused")
+            from_proc = os.stat("/proc/" + str(process.pid) + "/cwd")
+            if (from_proc.st_dev, from_proc.st_ino) != (
+                    info.st_dev, info.st_ino):
+                deny("real CI child changed physical workspace")
+            outfd = process.stdout.fileno()
+            pipe = os.fstat(outfd)
+            if not stat.S_ISFIFO(pipe.st_mode):
+                deny("real CI child stdout is not the parent's pipe")
+        except RuntimeBlocked:
+            raise
+        except (OSError, ValueError, TypeError, AttributeError):
+            deny("real CI child process identity unavailable")
+        self.generation += 1
+        lease = DisposableRealChildLease(
+            process, process.pid, outfd, pipe.st_dev, pipe.st_ino,
+            workspace, info.st_dev, info.st_ino, self.generation,
+        )
+        self.current = lease
+        self.retired = None
+        return lease
+
+    def require(self, lease: DisposableRealChildLease) -> None:
+        if (not isinstance(lease, DisposableRealChildLease)
+                or lease is not self.current
+                or lease.generation != self.generation
+                or lease.process.poll() is not None
+                or lease.pid != lease.process.pid
+                or lease.process.stdout is None):
+            deny("real CI child lease revoked or replaced")
+        try:
+            if lease.stdout_fd != lease.process.stdout.fileno():
+                deny("real CI child stdout binding changed")
+            pipe = os.fstat(lease.stdout_fd)
+            root = os.stat(lease.workspace)
+            from_proc = os.stat("/proc/" + str(lease.pid) + "/cwd")
+            if (not stat.S_ISFIFO(pipe.st_mode)
+                    or (pipe.st_dev, pipe.st_ino) != (
+                        lease.stdout_dev, lease.stdout_ino)
+                    or (root.st_dev, root.st_ino) != (
+                        lease.workspace_dev, lease.workspace_ino)
+                    or (from_proc.st_dev, from_proc.st_ino) != (
+                        lease.workspace_dev, lease.workspace_ino)):
+                deny("real CI child stdout or workspace changed")
+        except RuntimeBlocked:
+            raise
+        except (OSError, ValueError, TypeError, AttributeError):
+            deny("real CI child process disappeared")
+
+    def revoke(self) -> None:
+        self.generation += 1
+        if self.current is not None:
+            self.retired = self.current.process
+        self.current = None
+
+
+def _stop_disposable_real_child(process: subprocess.Popen[bytes]) -> None:
+    try:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        deny("real CI child shutdown could not be confirmed")
+    finally:
+        for stream in (process.stdin, process.stdout):
+            if stream is not None:
+                stream.close()
+
+
+def probe_real_process_replacement(binary: str, env: dict[str, str]) -> None:
+    """Use TWO actual pinned Codex Popen handles. No model turns or history.
+
+    Unlike a synthetic source classifier, the parent directly owns the
+    stdout pipe from each separately spawned *real* pinned app server.
+    Old owner epochs cannot read a queued reply or be adopted by a new
+    workspace after stop. The entire sandbox has --network none.
+    """
+    approved = ("/scratch/workspace-alpha", "/scratch/workspace-beta")
+    owner = DisposableRealChildEpoch(approved)
+    old = None
+    fresh = None
+
+    def launch(workspace: str) -> subprocess.Popen[bytes]:
+        try:
+            return subprocess.Popen(
+                [binary, "app-server", "--listen", "stdio://"],
+                cwd=workspace, env=env, shell=False,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, close_fds=True,
+                start_new_session=True,
+            )
+        except (OSError, ValueError, TypeError):
+            deny("pinned real Codex child launch failed")
+
+    try:
+        old = launch(approved[0])
+        old_lease = owner.bind(old, approved[0])
+        pending = bytearray()
+        send(old, {"id": 21, "method": "initialize",
+                   "params": {"clientInfo": {
+                       "name": "aiverse_process_epoch_ci",
+                       "title": "AI-Verse isolated process ownership proof",
+                       "version": "0.0.0-test",
+                   }}})
+        first = read_matching(
+            old, 21, pending,
+            require_owned=lambda: owner.require(old_lease),
+        )
+        if "error" in first or not isinstance(first.get("result"), dict):
+            deny("first pinned real Codex child did not initialize")
+        send(old, {"method": "initialized"})
+        owner.require(old_lease)
+        read_isolated_config(
+            old, pending, request_id=22,
+            require_owned=lambda: owner.require(old_lease),
+        )
+        # A pending response is never consumed after revocation.
+        owner.require(old_lease)
+        send(old, {"id": 23, "method": "config/read",
+                   "params": {"includeLayers": False}})
+        owner.revoke()
+        try:
+            read_matching(
+                old, 23, pending,
+                require_owned=lambda: owner.require(old_lease),
+            )
+        except RuntimeBlocked as exc:
+            if str(exc) != "real CI child lease revoked or replaced":
+                raise
+        else:
+            deny("revoked real Codex child response was wrongly accepted")
+        _stop_disposable_real_child(old)
+        old = None
+        fresh = launch(approved[1])
+        fresh_lease = owner.bind(fresh, approved[1])
+        if fresh_lease.generation <= old_lease.generation:
+            deny("real Codex child owner epoch was reused")
+        try:
+            owner.require(old_lease)
+        except RuntimeBlocked as exc:
+            if str(exc) != "real CI child lease revoked or replaced":
+                raise
+        else:
+            deny("old real Codex child lease was resurrected")
+        pending_second = bytearray()
+        send(fresh, {"id": 31, "method": "initialize",
+                     "params": {"clientInfo": {
+                         "name": "aiverse_process_epoch_ci",
+                         "title": "AI-Verse isolated process ownership proof",
+                         "version": "0.0.0-test",
+                     }}})
+        second = read_matching(
+            fresh, 31, pending_second,
+            require_owned=lambda: owner.require(fresh_lease),
+        )
+        if "error" in second or not isinstance(second.get("result"), dict):
+            deny("replacement pinned real Codex child did not initialize")
+        send(fresh, {"method": "initialized"})
+        read_isolated_config(
+            fresh, pending_second, request_id=32,
+            require_owned=lambda: owner.require(fresh_lease),
+        )
+        owner.revoke()
+        try:
+            owner.require(fresh_lease)
+        except RuntimeBlocked:
+            pass
+        else:
+            deny("second real Codex child remained live after revocation")
+    finally:
+        owner.revoke()
+        if old is not None:
+            _stop_disposable_real_child(old)
+        if fresh is not None:
+            _stop_disposable_real_child(fresh)
+
+
 def handshake(binary: str, env: dict[str, str]) -> None:
     process = None
     try:
@@ -499,8 +731,9 @@ def main() -> None:
                "--out", str(schema_root)], env, timeout=25)
     verify_schemas(schema_root)
     handshake(binary, env)
+    probe_real_process_replacement(binary, env)
     print("PASS: official stable Codex runtime, 10 matching release schemas, "
-          "no-token stdio initialization, duplicate refusal, two owner-correlated read-only RPCs, two isolated empty ephemeral threads, clean teardown")
+          "no-token stdio initialization, duplicate refusal, two owner-correlated read-only RPCs, two isolated empty ephemeral threads, two separate parent-owned real Codex subprocesses with revoked old stdout, clean teardown")
     print("BLOCKED: model turns, user data, archive writes, consent "
           "and real-host production admission")
 

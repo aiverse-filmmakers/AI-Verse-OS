@@ -434,3 +434,54 @@ Passing synthetic source tests never enables capture.
 
 Sources: https://learn.chatgpt.com/docs/app-server
 and https://openai.com/index/unlocking-the-codex-harness/
+
+### 3A.8 Cross-repo versioned received-wire fixture archive (not admitted)
+
+Official Codex App Server v2 generated JSON schemas define
+`userMessage`, `agentMessage`, media, tool and other `ThreadItem`
+variants. A narrowly observed final text-only turn is **not** complete
+UI coverage. The protocol is evolving: pin an actual host release
+and generated schema before a future production integration.
+
+The existing OS archive v1 requires original provider record bytes
+and continuous original provider byte offsets. App Server JSON-RPC
+stdout only supplies **received** notification wire bytes. Inventing
+offsets, regenerating JSON or labeling this provider-origin evidence
+would breach the v1 format's provenance contract.
+
+New `codex_app_server_archive_v2.py` implements a separate
+`ai-verse.chat-archive-codex-received/v2` envelope **in memory only**.
+Header: scope and chat identifiers are UNVERIFIED claims, with
+origin/consent/completeness and admission flags forced false.
+Frame rows: immutable exact received JSONL bytes encoded in canonical
+base64 with original SHA-256/byte length, and a chain digest seeded
+from the header. Seal: frame count, whole-stream checksum, last chain
+hash, and two text-only item pointers with text hashes. The text is
+reconstructed by an independent decoder from the exact received bytes.
+The envelope does not contain fabricated provider byte offsets.
+
+The builder accepts only a fully validated 3A.7 synthetic candidate
+with matching complete frame hashes, matching text witnesses and all
+provenance flags false. It does NOT create a file, archive directory,
+Memory record, consent token or host connection. `save_real_chat()`
+and `admission()` are hard-blocked even if test flags change.
+
+Memory [draft #37](https://github.com/aiverse-filmmakers/AI-Verse-Memory/pull/37)
+implements an independent **in-memory synthetic-only** decoder.
+Its cross-repo contract CI pins the original OS #124 builder to
+commit `f23d479f50c42636136a102922b42025a1533858`. The
+decoder validates canonical envelope, integrity chain, exact wire
+hashes, item identities and successful final text-only turn;
+it never enters live progressive recall or Memory file discovery.
+
+**Not yet implemented:** production v2 file writer/reader, OS-owned
+authenticated session and per-event workspace consent, complete
+images/audio/tool/continuation coverage, cryptographic host event
+attestation, secure storage and revocation, independently reviewed
+schema/version pinning and isolated real-host pilot. Treat both
+v2 modules as test fixtures, NOT released chat history support.
+
+Research inputs: generated Codex protocol schema
+https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json
+and OWASP Logging Cheat Sheet
+https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html

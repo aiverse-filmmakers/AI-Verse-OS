@@ -49,11 +49,13 @@ for event in (
     }},
     {"method": "item/completed", "params": {
         "threadId": "fixture-thread-1", "turnId": "fixture-turn-1",
+        "completedAtMs": 1000,
         "item": {"id": "u-1", "type": "userMessage",
                  "content": [{"type": "text", "text": " synthetic only user 🧪"}]},
     }},
     {"method": "item/completed", "params": {
         "threadId": "fixture-thread-1", "turnId": "fixture-turn-1",
+        "completedAtMs": 1001,
         "item": {"id": "a-1", "type": "agentMessage",
                  "phase": "final_answer", "text": " synthetic only reply"},
     }},

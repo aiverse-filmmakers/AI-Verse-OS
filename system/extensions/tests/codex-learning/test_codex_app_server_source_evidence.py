@@ -50,10 +50,12 @@ send({"method":"turn/started", "params":{
     "turn":{"id":"turn-fixture-7", "status":"inProgress", "items":[]}}})
 send({"method":"item/completed", "params":{
     "threadId":"thread-fixture-7", "turnId":"turn-fixture-7",
+    "completedAtMs":1000,
     "item":{"id":"u-7", "type":"userMessage",
             "content":[{"type":"text", "text":" user 🧪 中文 \n "}]}}})
 send({"method":"item/completed", "params":{
     "threadId":"thread-fixture-7", "turnId":"turn-fixture-7",
+    "completedAtMs":1001,
     "item":{"id":"a-7", "type":"agentMessage", "phase":"final_answer",
             "text":" response 🚀\n "}}})
 send({"method":"turn/completed", "params":{
@@ -76,13 +78,15 @@ class SourceWireContractTests(unittest.TestCase):
 
     def user(self, text=None, ident="u-7", content=None):
         return self.event("item/completed", threadId=self.thread,
-                          turnId=self.turn, item={"id": ident, "type": "userMessage",
+                          turnId=self.turn, completedAtMs=1000,
+                          item={"id": ident, "type": "userMessage",
                           "content": ([{"type":"text", "text": self.secret if text is None else text}]
                                       if content is None else content)})
 
     def assistant(self, text=None, phase="final_answer", ident="a-7"):
         return self.event("item/completed", threadId=self.thread,
-                          turnId=self.turn, item={"id": ident, "type": "agentMessage",
+                          turnId=self.turn, completedAtMs=1001,
+                          item={"id": ident, "type": "agentMessage",
                           "phase": phase, "text": " synthetic reply " if text is None else text})
 
     def end(self, status="completed"):
@@ -266,16 +270,51 @@ class SourceWireContractTests(unittest.TestCase):
     def test_unfinished_item_started_cannot_be_hidden(self):
         rows = self.rows()
         started = self.event("item/started", threadId=self.thread,
-                             turnId=self.turn,
-                             item={"id":"unfinished", "type":"userMessage"})
+                             turnId=self.turn, startedAtMs=900,
+                             item={"id":"unfinished", "type":"userMessage",
+                                   "content":[{"type":"text","text":"unfinished"}]})
         rows.insert(1, self.wire(started))
         self.blocked(lambda: self.evaluate(rows))
+
+    def test_pinned_item_completion_timestamp_missing_or_bad_is_refused(self):
+        for position, create in ((1, self.user), (2, self.assistant)):
+            for stamp in ("missing", None, True, False, -1, 1.25, "1000", 2**63):
+                with self.subTest(position=position, stamp=stamp):
+                    event = create()
+                    if stamp == "missing":
+                        del event["params"]["completedAtMs"]
+                    else:
+                        event["params"]["completedAtMs"] = stamp
+                    rows = self.rows()
+                    rows[position] = self.wire(event)
+                    self.blocked(lambda: self.evaluate(rows))
+                    state, _, _ = parser.observe(None, self.start())
+                    with self.assertRaises(parser.CandidateBlocked):
+                        parser.observe(state, event)
+
+    def test_pinned_item_started_timestamp_missing_or_bad_is_refused(self):
+        for stamp in ("missing", None, True, -1, 1.25, "900", 2**63):
+            with self.subTest(stamp=stamp):
+                started = self.event(
+                    "item/started", threadId=self.thread, turnId=self.turn,
+                    startedAtMs=900,
+                    item={"id":"u-7", "type":"userMessage",
+                          "content":[{"type":"text", "text":self.secret}]},
+                )
+                if stamp == "missing":
+                    del started["params"]["startedAtMs"]
+                else:
+                    started["params"]["startedAtMs"] = stamp
+                rows = self.rows()
+                rows.insert(1, self.wire(started))
+                self.blocked(lambda: self.evaluate(rows))
 
     def test_matching_item_start_and_completion_are_bounded(self):
         rows = self.rows()
         started = self.event("item/started", threadId=self.thread,
-                             turnId=self.turn,
-                             item={"id":"u-7", "type":"userMessage"})
+                             turnId=self.turn, startedAtMs=900,
+                             item={"id":"u-7", "type":"userMessage",
+                                   "content":[{"type":"text","text":self.secret}]})
         rows.insert(1, self.wire(started))
         report = self.evaluate(rows)
         self.assertEqual([x.role for x in report.messages], ["user", "assistant"])
@@ -283,9 +322,11 @@ class SourceWireContractTests(unittest.TestCase):
     def test_tool_and_delta_records_are_excluded_without_ui_completeness_claim(self):
         rows = self.rows()
         nonchat = self.event("item/completed", threadId=self.thread,
-                             turnId=self.turn, item={"id":"tool-7",
-                                "type":"commandExecution",
-                                "output":self.secret})
+                             turnId=self.turn, completedAtMs=1002,
+                             item={"id":"tool-7", "type":"commandExecution",
+                                   "command":"echo synthetic", "commandActions":[],
+                                   "cwd":"/synthetic", "status":"completed",
+                                   "aggregatedOutput":self.secret})
         delta = self.event("item/agentMessage/delta",
                            threadId=self.thread, turnId=self.turn,
                            delta="UNTRUSTED_PARTIAL")
@@ -319,7 +360,7 @@ class SourceWireContractTests(unittest.TestCase):
         rows = self.rows()
         rows[1] = (
             b'{"method":"item/completed","params":{"threadId":"thread-fixture-7",'
-            b'"turnId":"turn-fixture-7","item":{"id":"u-7","type":"userMessage",'
+            b'"turnId":"turn-fixture-7","completedAtMs":1000,"item":{"id":"u-7","type":"userMessage",'
             b'"content":[{"type":"text","text":"\\ud800"}]}}}\n'
         )
         self.blocked(lambda: self.evaluate(rows))

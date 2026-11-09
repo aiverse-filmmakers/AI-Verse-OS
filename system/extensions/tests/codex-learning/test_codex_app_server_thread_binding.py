@@ -96,11 +96,13 @@ if MODE in ("wrong_turn_response_id", "foreign_turn_notice"):
     sys.exit(0)
 send({"method": "item/completed", "params": {
     "threadId": "thr_fixture_1", "turnId": "turn_fixture_1",
+    "completedAtMs": 1000,
     "item": {"id": "item_user", "type": "userMessage",
              "content": [{"type": "text", "text": "SYNTHETIC_ONLY_PROMPT"}]}
 }})
 send({"method": "item/completed", "params": {
     "threadId": "thr_fixture_1", "turnId": "turn_fixture_1",
+    "completedAtMs": 1001,
     "item": {"id": "item_answer", "type": "agentMessage",
              "phase": "final_answer", "text": "SYNTHETIC_ONLY_REPLY"}
 }})

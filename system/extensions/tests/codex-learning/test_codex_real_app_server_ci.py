@@ -113,6 +113,38 @@ def send(proc: subprocess.Popen[bytes], msg: dict) -> None:
         deny("real App Server CI initialization pipe failed")
 
 
+def classify_rpc_frame(message: object, request_id: int, *,
+                       allow_startup_notifications: bool = False) -> str:
+    """Classify one CI-only frame without treating notifications as replies.
+
+    This is deliberately a strict prospective request/response correlation
+    check, not provenance or authorization for anything an OS might record.
+    """
+    if type(request_id) is not int or request_id < 1:
+        deny("invalid parent-owned test request id")
+    if not isinstance(message, dict):
+        deny("real App Server returned nonobject protocol frame")
+    if "jsonrpc" in message and message["jsonrpc"] != "2.0":
+        deny("real App Server sent invalid JSON-RPC version")
+    if "id" in message:
+        if (type(message["id"]) is not int
+                or message["id"] != request_id or "method" in message
+                or ("result" in message) == ("error" in message)):
+            deny("real App Server returned unowned or ambiguous RPC reply")
+        if "error" in message and not isinstance(message["error"], dict):
+            deny("real App Server returned invalid RPC error")
+        return "response"
+    method = message.get("method")
+    if (allow_startup_notifications and isinstance(method, str)
+            and 0 < len(method) <= 96
+            and not method.startswith((
+                "thread/", "turn/", "item/", "serverRequest/"
+            )) and "result" not in message and "error" not in message
+            and isinstance(message.get("params"), dict)):
+        return "startup_notification"
+    deny("real App Server sent unexpected protocol message")
+
+
 def read_matching(proc: subprocess.Popen[bytes], request_id: int,
                   pending: bytearray, *, timeout: float = 12.0,
                   allow_startup_notifications: bool = False) -> dict:
@@ -129,25 +161,16 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
                 message = json.loads(frame.decode("utf-8"))
             except (ValueError, UnicodeError):
                 deny("real App Server returned non-JSON protocol bytes")
-            if not isinstance(message, dict):
-                deny("real App Server returned nonobject protocol frame")
-            if message.get("id") == request_id:
+            classification = classify_rpc_frame(
+                message, request_id,
+                allow_startup_notifications=allow_startup_notifications,
+            )
+            if classification == "response":
                 return message
-            # The pinned Codex source emits configuration and other startup
-            # notifications after initialized. They are not RPC responses,
-            # a user conversation, or proof of recorded chat coverage.
-            # Never swallow thread, turn, item or server-request events.
-            method = message.get("method")
-            if (allow_startup_notifications and "id" not in message
-                    and isinstance(method, str) and len(method) <= 96
-                    and not method.startswith((
-                        "thread/", "turn/", "item/", "serverRequest/"
-                    )) and isinstance(message.get("params"), dict)):
-                skipped += 1
-                if skipped > 8:
-                    deny("real App Server sent too many unsolicited startup notifications")
-                continue
-            deny("real App Server sent unexpected protocol message")
+            skipped += 1
+            if skipped > 8:
+                deny("real App Server sent too many unsolicited startup notifications")
+            continue
         if proc.poll() is not None:
             deny("real App Server exited before responding")
         remain = end - time.monotonic()
@@ -167,6 +190,22 @@ def read_matching(proc: subprocess.Popen[bytes], request_id: int,
         if count > MAX_JSONL * 3:
             deny("real App Server stdout over budget")
     deny("real App Server initialization timed out")
+
+
+def read_isolated_config(proc: subprocess.Popen[bytes], pending: bytearray,
+                         *, request_id: int) -> None:
+    """Exercise real owned request ID routing with a sterile read-only RPC."""
+    send(proc, {
+        "id": request_id, "method": "config/read",
+        "params": {"includeLayers": False},
+    })
+    reply = read_matching(
+        proc, request_id, pending, allow_startup_notifications=True,
+    )
+    if ("error" in reply or not isinstance(reply.get("result"), dict)
+            or not isinstance(reply["result"].get("config"), dict)
+            or not isinstance(reply["result"].get("origins"), dict)):
+        deny("real App Server sterile configuration read refused")
 
 
 def handshake(binary: str, env: dict[str, str]) -> None:
@@ -204,6 +243,10 @@ def handshake(binary: str, env: dict[str, str]) -> None:
         )
         if not isinstance(duplicate.get("error"), dict) or "result" in duplicate:
             deny("real App Server did not reject duplicate initialize")
+        # Both calls are strictly read-only, use distinct parent-owned IDs,
+        # and execute in a private, empty, offline container.
+        read_isolated_config(process, pending, request_id=3)
+        read_isolated_config(process, pending, request_id=4)
     except RuntimeBlocked:
         raise
     except (OSError, ValueError, TypeError):
@@ -250,7 +293,7 @@ def main() -> None:
     verify_schemas(schema_root)
     handshake(binary, env)
     print("PASS: official stable Codex runtime, 7 matching release schemas, "
-          "no-token stdio initialization, duplicate refusal, clean teardown")
+          "no-token stdio initialization, duplicate refusal, two owner-correlated read-only RPCs, clean teardown")
     print("BLOCKED: thread/turn execution, user data, archive writes, consent "
           "and real-host production admission")
 

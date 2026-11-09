@@ -39,10 +39,14 @@ class AppServerSourceCandidateTests(unittest.TestCase):
         elif kind == "agentMessage":
             row["text"] = text if text is not None else " Original reply 🚀\n "
             row["phase"] = "final_answer" if phase is None else phase
+        elif kind == "commandExecution":
+            row.update({"command": "printf synthetic", "commandActions": [],
+                        "cwd": "/fixture", "status": "completed"})
         row.update(extra)
         return {"method": "item/completed", "params": {
             "threadId": "test-thread-1",
             "turnId": "test-turn-1",
+            "completedAtMs": 1000,
             "item": row,
         }}
 
@@ -62,7 +66,7 @@ class AppServerSourceCandidateTests(unittest.TestCase):
         if with_tool:
             state, report, status = candidate.observe(
                 state, self.item("commandExecution", iid="tool-1",
-                                 output="PRIVATE_TOOL_OUTPUT")
+                                 aggregatedOutput="PRIVATE_TOOL_OUTPUT")
             )
             self.assertEqual((status, report), ("ignored_nonchat", None))
         state, report, status = candidate.observe(

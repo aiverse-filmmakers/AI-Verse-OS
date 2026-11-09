@@ -48,10 +48,10 @@ class SyntheticOwnerAuthorizationTests(unittest.TestCase):
         process = self.process if process is None else process
         if cwd is None:
             cwd = self.alpha if scope == "workspace:alpha" else self.beta
-        return owner.begin_preview(
-            scope=scope, cwd=cwd, process=process,
-            thread_id="new-root-thread", turn_id="new-turn-1", **kwargs,
-        )
+        values = dict(scope=scope, cwd=cwd, process=process,
+                      thread_id="new-root-thread", turn_id="new-turn-1")
+        values.update(kwargs)
+        return owner.begin_preview(**values)
 
     def event_thread(self, cwd=None):
         return {"method": "thread/started", "params": {"thread": {

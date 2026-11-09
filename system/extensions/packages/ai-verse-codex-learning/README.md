@@ -751,3 +751,58 @@ of an OS-issued consent and revocation service. A future local integration
 must explicitly establish those boundaries before capture or merge. The
 real-host and archive admission functions remain hard-blocked.
 
+### 3A.15: synthetic owner-only consent, project identity and revocation
+
+**Research verified on 2026-11-09:**
+- [Official Codex App Server documentation](https://learn.chatgpt.com/docs/app-server)
+  distinguishes \`thread/start\`, \`thread/resume\`, \`thread/fork\`,
+  thread-session identities, turns and items. A reply or notification
+  containing matching thread/session IDs is NOT OS authorization.
+- [OWASP Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html)
+  recommends deny-by-default and validating permissions on every request,
+  not merely once when a session starts.
+- [NIST SP 800-63B session guidance](https://pages.nist.gov/800-63-4/sp800-63b.html)
+  describes session binding and discourages persistence of bearer session
+  secrets across restart. This synthetic fixture explicitly has no
+  bearer credential, issuance service or persistent secret.
+
+The disconnected \`codex_app_server_preview_authorization.py\` models a
+**synthetic parent-side owner** with exactly one active prospective text
+preview lease. Parent-only test methods explicitly set current synthetic
+workspace selection, workspace-active status, preview opt-in and active
+process identity. A new preview is allowed only for the exact physical
+workspace directory registered by the synthetic owner, a matching
+selected scope, matching process object, fresh prospective intent and
+currently enabled synthetic opt-in. All directory ancestors and their
+physical identities are rechecked. A file or directory replaced after
+synthetic scope registration cannot mint a new lease until re-admitted.
+
+Every synthetic thread/turn/item notification must match the lease's
+exact source IDs, event phase, bounded item timestamps and physical
+scope. No untrusted event fields can grant authority. A consent change,
+revocation, workspace switch (including alpha > beta > alpha),
+workspace pause, process replacement, disconnect, expiry, over-budget
+event, malformed frame or unexpected lifecycle permanently invalidates
+the older lease. A later opt-in cannot restore it.
+
+The ledger keeps only an opaque in-memory lease identity, expected
+thread/turn IDs and event counts. It NEVER stores or emits message text
+or source wire data, and no real process, filesystem content, personal
+transcript, remote account, OS Bridge, or Memory runtime is connected.
+
+**Authority verdict is always false:** \`authenticated_os_session\`,
+\`authenticated_codex_host\`, \`consent_issued_by_os_ui\`,
+\`real_scope_issuer_verified\`, \`complete_source_coverage\` and
+\`archive_write_admitted\` are false even on a successful synthetic
+preview. \`authorize_production_capture()\` and
+\`persist_authenticated_chat()\` hard-deny even with forged claims.
+No real consent UI, authenticated origin issuer, credential exchange,
+\`turn/start\` model call, production integration, archive write,
+installed hook, Memory source discovery, merge or live data access.
+This is a test model, NOT a functioning user authorization service.
+
+Regression tests run in Repository QC and the separate GitHub-hosted,
+offline pinned Codex runtime workflow. Real OS-approved consent and
+cryptographically or process-backed authenticated capture provenance
+remain explicit later requirements.
+

@@ -211,7 +211,9 @@ class OwnedFixtureConnection:
             if "jsonrpc" in frame and frame["jsonrpc"] != "2.0":
                 raise TransportBlocked("invalid synthetic JSON-RPC version")
             self._received += 1
-            return frame, raw + b"\n"
+            # bytearray.partition() returns a mutable bytearray. Freeze the
+            # exact received bytes without reserializing or normalizing JSON.
+            return frame, bytes(raw) + b"\n"
         except TransportBlocked:
             raise
         except (OSError, UnicodeError, ValueError, TypeError):

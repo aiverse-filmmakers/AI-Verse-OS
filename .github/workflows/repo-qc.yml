@@ -53,6 +53,9 @@ jobs:
       - name: Test v2 synthetic Codex received-wire archive envelope without persistence
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_archive_v2.py' -v
 
+      - name: Test pinned-schema shape and hard-disabled Codex capture (synthetic only)
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_host_schema_pin.py' -v
+
       - name: Test OS private portable chat archive fixtures
         run: |
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v
@@ -296,3 +299,40 @@ jobs:
           console.log('Real Skills provider discovery: PASS');
           NODE
           test -z "$(git status --porcelain --untracked-files=no)"
+
+  codex-upstream-schema-pin:
+    name: Exact upstream Codex generated v2 schema, read-only pinned checkout
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout upstream Codex source at immutable commit (no execution)
+        uses: actions/checkout@v4
+        with:
+          repository: openai/codex
+          ref: e54a5713caf331f42a6eef0166186df5f7563c29
+          path: pinned-codex
+          sparse-checkout: |
+            codex-rs/app-server-protocol/schema/json/v2/ThreadStartParams.json
+            codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json
+            codex-rs/app-server-protocol/schema/json/v2/TurnStartParams.json
+            codex-rs/app-server-protocol/schema/json/v2/TurnStartResponse.json
+            codex-rs/app-server-protocol/schema/json/v2/ItemCompletedNotification.json
+            codex-rs/app-server-protocol/schema/json/v2/TurnCompletedNotification.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Verify exact source commit and generated blob identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C pinned-codex rev-parse HEAD)" = "e54a5713caf331f42a6eef0166186df5f7563c29"
+          test -f pinned-codex/codex-rs/app-server-protocol/schema/json/v2/ItemCompletedNotification.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify source schema structure and deny real-host admission
+        env:
+          AI_VERSE_PINNED_CODEX_V2_SCHEMA_DIR: ${{ github.workspace }}/pinned-codex/codex-rs/app-server-protocol/schema/json/v2
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_host_schema_pin.py' -v
+

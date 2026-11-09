@@ -806,3 +806,11 @@ offline pinned Codex runtime workflow. Real OS-approved consent and
 cryptographically or process-backed authenticated capture provenance
 remain explicit later requirements.
 
+### 3A.16: replay-safe synthetic item lifecycle (not archive permission)
+
+**Official research (2026-11-09):** The stable Codex `rust-v0.167.0` generated [ItemStartedNotification](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ItemStartedNotification.json) and [ItemCompletedNotification](https://github.com/openai/codex/blob/rust-v0.167.0/codex-rs/app-server-protocol/schema/json/v2/ItemCompletedNotification.json) both contain `threadId`, `turnId`, `item` and their respective required lifecycle millisecond timestamps. Delta notifications are a distinct event shape and do not establish message completeness.
+
+The new `codex_app_server_preview_replay.py` is an entirely disconnected, in-memory synthetic fixture, scoped to one thread/turn. It tracks **only** bounded item IDs, types and per-item started/completed clock values. Duplicate or conflicting item identities, malformed times, cross-thread/turn records, incomplete synthetic agent lifecycle, unexpected deltas, malformed envelope, event budget overruns and events after revoke/closure fail closed. Its decision objects cannot carry message text or archive authorization. A narrow synthetic userMessage-completed-only case reflects existing fixtures; this is not a claim of full Codex UI event coverage.
+
+Both Repository QC and the real-runtime workflow run dedicated synthetic negative tests for this ledger. The real runtime lane still has no model turn or user input. **No durable storage, real session consent, host-origin attestation, callback wiring, live Memory discovery or production writer is added.** All real archive admission remains unconditionally blocked. This does not resolve the separate broad Four Repo Acceptance fixture executable/packaging failure.
+

@@ -485,3 +485,76 @@ Research inputs: generated Codex protocol schema
 https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/json/v2/ThreadStartResponse.json
 and OWASP Logging Cheat Sheet
 https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html
+
+### 3A.9 Upstream host schema pin and real-host admission requirements
+
+**Research basis (verified 2026-11-09):** Official Codex App Server
+generated JSON schemas, pinned to upstream source commit
+`openai/codex@e54a5713caf331f42a6eef0166186df5f7563c29`.
+The new `codex_host_schema_pin.py` verifies Git object IDs and
+schema contents for `ThreadStartParams`, `ThreadStartResponse`,
+`TurnStartParams`, `TurnStartResponse`,
+`ItemCompletedNotification`, and `TurnCompletedNotification`.
+The separate CI job uses sparse checkout at that immutable commit
+without building or executing upstream Codex.
+
+**Verified compatibility findings:**
+
+- At this source pin, `ItemCompletedNotification` requires
+  `completedAtMs`, `item`, `threadId`, and `turnId`. Earlier 3A.7/3A.8
+  synthetic item fixtures OMIT `completedAtMs` and are **not valid**
+  complete notification examples for this pinned real-host schema.
+  They remain useful isolated format fixtures but cannot support
+  a live-host compatibility or complete backup claim.
+- The generated `ThreadItem` schema has 19 variants. A final-only
+  text implementation cannot promise complete conversation recall.
+  The generated `UserInput` has seven kinds: text, image, localImage,
+  audio, localAudio, skill and mention. None may be silently downgraded
+  into text-only evidence.
+- Assistant phase is optional and may be commentary, partial_answer,
+  or final_answer; unknown or nonterminal phase fails closed for
+  the narrow text fixture. Unknown/extra types require explicit
+  versioned support and regression tests before admission.
+- `thread/start` and `turn/start` have distinct request and response
+  payloads. Physical workspace metadata and a caller-supplied thread
+  field are NOT original-message provenance or user consent.
+
+**Before any real Codex archive write, all gates must be independently
+implemented, verified, and reviewed:**
+
+1. A version-pinned actual Codex binary/runtime, its approved digest
+   and acquisition process, and a privately owned child and stdio
+   lifecycle with a provenance link back to OS-originated
+   initialize/thread-start/turn-start requests and responses.
+   Pinning generated source schemas alone does not attest an executable.
+2. An OS-owned user-facing recording consent decision, default opt-out,
+   clear per-session disclosure of recording scope and coverage,
+   private/no-record boundaries, revocation and retention/deletion
+   semantics. Consent must not originate in provider JSON.
+3. Per-event physical workspace owner, session, current turn and
+   consent revision revalidated at the commit/read boundary under
+   an appropriately synchronized OS authority. Filesystem path
+   checks and in-memory synthetic leases are not atomic grants.
+4. Full item/turn coverage for the exact pinned version, including
+   incomplete, interrupted, resumed and media-containing sessions;
+   otherwise label the archive explicitly partial and decline
+   claims of complete conversation backup.
+5. Exact received source bytes, authenticated origin where possible,
+   new v2 durable storage with read-time scope checks, stable
+   replay/recovery and deterministic rejection of ambiguous data.
+   Unkeyed SHA-256 detects accidental or unrecomputed changes but
+   does not authenticate a hostile writer or a real host.
+6. Independent combined security review, explicitly approved
+   isolated real-host pilot, and final installation/release gate.
+
+**Current decision:** `admit_real_capture()` is unconditionally
+blocked even when all development flags are patched to true.
+`validate_synthetic_completion_shape()` only checks the shape of a
+single synthetic text item; it never returns a capture credential or
+authorizes any existing v1/v2 writer. No host launch, user data,
+installer modification, archive write, Memory discovery or merge.
+
+References:
+https://github.com/openai/codex/commit/e54a5713caf331f42a6eef0166186df5f7563c29
+https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/turn.rs
+https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html

@@ -19,8 +19,7 @@ LEASE_SECONDS = 180
 WORK_SECONDS = 45          # stop starting new work after this much tool time
 MAX_PENDING, MAX_RECORDS, MAX_BYTES, MAX_ACTIONS = 20, 40, 24 * 1024, 5
 CLAIM_SECONDS = 30
-WHOLE_RECORDS, WHOLE_SEEN = 100, 5000  # whole-memory pass: records per batch, remembered fingerprints
-GENERAL = "general"  # pseudo destination: a plain chat with the operator, where every project may be read
+WHOLE_RECORDS, WHOLE_SEEN, RECENT_DAYS = 100, 5000, 7  # whole-memory pass: records per batch, remembered fingerprints, days
 NOTE_ITEMS = 8
 ADMISSION = {"durable": True, "historical": True, "current_truth": False, "contains_secret": False,
              "strategic": False, "permission_expansion": False, "privacy_ambiguous": False,
@@ -133,9 +132,13 @@ class Tidy:
         old = self.now() - min(e["at"] for e in pending) > self.b.config.get("reflect_max_age_hours", 6) * 3600
         return len(pending) >= self.b.config.get("reflect_min_entries", 5) or old
 
-    def whole_due(self, data, turn):
-        """Time for a pass over everything saved: enough new saves, or a long time since the last full pass."""
-        if not self.enabled or GENERAL not in self.readable(turn):
+    def full_wanted(self, w):
+        """A full pass is due when none ever finished or the last one is older than reflect_full_days."""
+        return not w.get("last_full") or self.now() - w["last_full"] > self.b.config.get("reflect_full_days", 120) * 86400
+
+    def whole_due(self, data):
+        """Time for an automatic pass: enough new saves, a month since the last tidy, or a full pass is overdue."""
+        if not self.enabled:
             return False
         lease = data.get("lease")
         if lease and lease["expires"] > self.now():
@@ -145,7 +148,9 @@ class Tidy:
             return False
         if w.get("cursor"):
             return self.now() - w.get("last_run", 0) > 3600  # a big store is finished over repeated passes
-        if w.get("last_full") and self.now() - w["last_full"] > cfg.get("reflect_all_days", 30) * 86400:
+        if w.get("last_full") and self.full_wanted(w):
+            return True
+        if w.get("last_tidy") and self.now() - w["last_tidy"] > cfg.get("reflect_all_days", 30) * 86400:
             return True
         return data["seq"] - w.get("seq_at", 0) >= cfg.get("reflect_all_min_saves", 25)
 
@@ -171,9 +176,9 @@ class Tidy:
                              + base.format("apply") + " ; then " + base.format("done")
                              + " . Do not mention tidying, or what it changed, in your answer: the operator gets a separate tidy note later. "
                              "If a command is refused, skip tidying this turn and do not mention it. ")
-                elif self.whole_due(data, turn):
+                elif self.whole_due(data):
                     text += ("\nAI-Verse OS tidying of everything saved is due. After you finish the operator's request and before your "
-                             "final answer, run this one command and nothing else for tidying: " + self.commands(state["session_id"], turn).format("all")
+                             "final answer, run this one command and nothing else for tidying: " + self.commands(state["session_id"], turn).format("all --auto")
                              + " . Do not mention tidying, or what it changed, in your answer: the operator gets a separate tidy note later. "
                              "If the command is refused, skip tidying this turn and do not mention it. ")
                 if not compact:
@@ -185,14 +190,10 @@ class Tidy:
 
     # ---------------------------------------------------------------- notes
     def readable(self, turn):
-        allowed = turn.get("allowed") or [turn.get("scope", "operator")]
-        # Only a plain chat with the operator (no project folder, no project named) may read across projects.
-        return {"operator", *allowed, *([GENERAL] if turn.get("scope") == "operator" and list(allowed) == ["operator"] else [])}
+        return {"operator", *(turn.get("allowed") or [turn.get("scope", "operator")])}
 
     def action_scopes(self, action):
-        if action.get("whole"):
-            return {"operator", GENERAL}
-        return {"operator", "workspace:" + action["project"]}
+        return {"operator"} | ({"workspace:" + action["project"]} if action["project"] != "operator" else set())
 
     def _claim(self, data, state, turn):
         """Pick one delivery batch for this prompt. It is only acknowledged once the reply showing it is seen."""
@@ -205,13 +206,17 @@ class Tidy:
             if data["last_delivery_day"] == day:
                 return ""
             used = {item["action"] for b in data["batches"] for item in b["items"]}
-            ready = [a for aid, a in sorted(data["actions"].items(), key=lambda kv: kv[1].get("applied_at", 0))
-                     if a["status"] == "applied" and aid not in used and self.action_scopes(a) <= readable][:NOTE_ITEMS]
+            waiting = [a for aid, a in sorted(data["actions"].items(), key=lambda kv: kv[1].get("applied_at", 0))
+                       if a["status"] == "applied" and aid not in used]
+            visible = [a for a in waiting if self.action_scopes(a) <= readable]
+            ready = visible[:NOTE_ITEMS]
             if not ready:
                 return ""
             ids = [aid for aid, a in data["actions"].items() if a in ready]
+            # Changes in projects this chat may not read are only counted here; their detail waits for a chat that may read them.
             batch = {"id": secrets.token_hex(2).upper(), "items": [{"n": i + 1, "action": aid} for i, aid in enumerate(ids)],
-                     "turn": claimer, "claimed_at": self.now(), "acked": False, "day": day}
+                     "turn": claimer, "claimed_at": self.now(), "acked": False, "day": day,
+                     "elsewhere": len(waiting) - len(visible)}
             data["batches"].append(batch)
         if not all(self.action_scopes(data["actions"][i["action"]]) <= readable for i in batch["items"]):
             return ""  # kept for a turn that may read every project it mentions; nothing is revealed here
@@ -225,6 +230,8 @@ class Tidy:
         lines = [f"\U0001f9f9 **AI-Verse OS tidied {len(items)} {word} it knows about you**", ""]
         for number, action in items:
             lines += [f"**{number}. {action['title']}**"] + [f"• {line}" for line in action["detail"]] + [""]
+        if batch.get("elsewhere"):
+            lines += [f"({batch['elsewhere']} more {'change' if batch['elsewhere'] == 1 else 'changes'} in your other projects will be shown in a chat about them.)", ""]
         lines += ["✅ All correct? Just carry on.",
                   "✏️ Something wrong? Say \"undo " + str(items[0][0] if len(items) == 1 else "N") + "\", or tell me what's right.",
                   f"(tidy note {batch['id']})"]
@@ -280,11 +287,10 @@ class Tidy:
         return lease
 
     # ---------------------------------------------------------------- plan
-    def plan(self, session, turn_id, token, whole=False):
+    def plan(self, session, turn_id, token, whole=None):
+        """whole: None for the recent-saves pass, else "recent" (7 days), "full" (everything) or "auto" (since the last tidy)."""
         state, turn = self.active_turn(session, turn_id, token)
         readable = self.readable(turn)
-        if whole and GENERAL not in readable:
-            raise self.m.Refused("tidying everything needs a plain chat with the operator, not a project chat")
         projects = sorted(s[10:] for s in readable if s.startswith("workspace:"))
         with self.locked(10):
             data = self.load()
@@ -300,7 +306,7 @@ class Tidy:
             self.recover(data, session, turn_id, readable)
             wl = None
             if whole:
-                inspected, scan, found, wl = [], *self.whole_scan(data)
+                inspected, scan, found, wl = [], *self.whole_scan(data, whole)
                 truncated = len(found) > MAX_ACTIONS
                 wl["ok"] = wl["ok"] and not truncated
             else:
@@ -316,16 +322,19 @@ class Tidy:
                 known = data["actions"].setdefault(item["id"], {**item, "status": "planned", "generation": data["generation"]})
                 if known["status"] == "planned" and len(items) < MAX_ACTIONS:
                     known["generation"] = data["generation"]
-                    known["authorized"] = ["operator", GENERAL] if whole else ["operator", "workspace:" + known["project"]]
+                    known["authorized"] = sorted(self.action_scopes(known))
                     items.append(known)
             data["lease"].update({"inspected": [e["seq"] for e in inspected], "plan": [i["id"] for i in items],
                                   "truncated": truncated, "whole": wl})
             self.store(data)
-        shown = [{k: i[k] for k in ("id", "kind", "project", "traced", "reason", "title")} for i in items]
+        # Detail only for what this chat may read; changes elsewhere are only counted.
+        seen_here = [i for i in items if self.action_scopes(i) <= readable]
+        shown = [{k: i[k] for k in ("id", "kind", "project", "traced", "reason", "title")} for i in seen_here]
         out = {"pass": "planned", "pending_inspected": len(inspected), "items": shown, "truncated": truncated,
                "limits": {"pending": MAX_PENDING, "records": MAX_RECORDS, "actions": MAX_ACTIONS, "seconds": WORK_SECONDS}}
         if whole:
-            out.update({"checked": wl["checked"], "more_to_check": wl["cursor"] is not None})
+            out.update({"checked": wl["checked"], "more_to_check": wl["cursor"] is not None,
+                        "in_other_projects": len(items) - len(seen_here)})
         while len(str(out).encode()) > MAX_BYTES and out["items"]:
             out["items"].pop()
             out["truncated"] = True
@@ -340,13 +349,16 @@ class Tidy:
         file = self.dir / "whole.json"
         return self.m.read_json(file, self.b.root) if file.exists() else {}
 
-    def whole_scan(self, data):
-        """One bounded batch of everything saved, from the saved cursor. Unchanged records (same content fingerprint
-        as when last checked) are skipped. Returns scan, items found and what to remember once the batch is finished."""
+    def whole_scan(self, data, mode):
+        """One bounded batch of what was saved (last 7 days, since the last tidy, or everything), from the saved cursor.
+        Unchanged records (same content fingerprint as when last checked) are skipped. Returns scan, items found and
+        what to remember once the batch is finished."""
         w = data.setdefault("whole", {})
-        if not w.get("cursor"):
-            w["cycle_seq"] = data["seq"]
-        scan = self.owner("reflect_scan", {"whole": {"cursor": w.get("cursor"), "limit": self.whole_records}})
+        if not (w.get("cursor") and w.get("pass") == mode):  # a different kind of pass starts over
+            full = mode == "full" or (mode == "auto" and (self.full_wanted(w) or not w.get("last_tidy")))
+            since = None if full else (self.now() - RECENT_DAYS * 86400 if mode == "recent" else w["last_tidy"] - 120)  # saved times are whole seconds: look back a little
+            w.update({"cursor": None, "cycle_seq": data["seq"], "pass": mode, "full": full, "since": since})
+        scan = self.owner("reflect_scan", {"whole": {"cursor": w.get("cursor"), "limit": self.whole_records, "since": w["since"]}})
         projects = sorted(scan.get("workspaces", {}))
         ctx = self.m.digest([[p, scan["workspaces"][p]["name"], scan["workspaces"][p].get("aliases", [])] for p in projects])[:12]
         seen = self.wload().get("seen", {}) if self.wload().get("ctx") == ctx else {}
@@ -384,10 +396,8 @@ class Tidy:
                           "name": info.get("name", ""), "traced": True, "records": [r], "facts": [r["text"]],
                           "reason": "it repeated an earlier note", "title": ""})
         found += self.detect_goals(scan.get("goals", []), refused)
-        for item in found:
-            item["whole"] = True
         wl = {"cursor": scan.get("cursor"), "complete": bool(scan.get("complete")), "remember": remember, "ctx": ctx,
-              "checked": len(scan.get("records", [])), "ok": not self.overflow}
+              "checked": len(scan.get("records", [])), "ok": not self.overflow, "full": w["full"]}
         return scan, found, wl
 
     def detect_goals(self, goals, refused):
@@ -416,7 +426,9 @@ class Tidy:
         w = data.setdefault("whole", {})
         w["cursor"] = None if wl["complete"] else wl["cursor"]
         if wl["complete"]:
-            w.update({"last_full": self.now(), "seq_at": w.get("cycle_seq", data["seq"])})
+            w.update({"last_tidy": self.now(), "seq_at": w.get("cycle_seq", data["seq"])})
+            if wl["full"]:
+                w["last_full"] = self.now()
 
     def traced(self, record):
         marker = self.m.digest("user")[:16]
@@ -635,10 +647,10 @@ class Tidy:
     def titles(self, action):
         name, flag = action["name"], "" if action["traced"] else "⚠️ A guess: "
         if action["kind"] == "dup":
-            action["title"] = "Something you saved twice was set aside"
+            action["title"] = "Something you saved twice was removed"
             action["detail"] = ["What: " + action["facts"][0][:160],
                                 "Where: " + (f"your {name} project" if name else "what I know about you"),
-                                "Nothing was deleted. The first copy stays as it is."]
+                                "I removed the repeat and kept the first copy."]
         elif action["kind"] == "goals":
             action["title"] = "⚠️ A guess: some of your goals may be the same goal"
             action["detail"] = ["Maybe the same: " + "; ".join(action["facts"]),
@@ -692,13 +704,18 @@ class Tidy:
                 self.write_upgrade_list()
         return result
 
-    def all(self, session, turn_id, token):
-        """Tidy everything saved, one bounded batch at a time: plan, apply and done in one command."""
-        planned = self.plan(session, turn_id, token, whole=True)
+    def all(self, session, turn_id, token, mode="recent"):
+        """Tidy what was saved (7 days by default, "full" for everything, "auto" since the last tidy), one bounded batch."""
+        planned = self.plan(session, turn_id, token, whole=mode)
         applied = self.apply(session, turn_id, token)
         done = self.done(session, turn_id, token)
-        return {"pass": "all", "checked": planned["checked"], "changed": len(applied["applied"]),
-                "more_to_check": done["more_to_check"], "left_for_later": len(applied["left_for_later"])}
+        with self.locked():
+            actions = self.load()["actions"]
+        readable = self.readable(self.active_turn(session, turn_id, token)[1])
+        elsewhere = sum(1 for a in applied["applied"] if not self.action_scopes(actions[a]) <= readable)
+        return {"pass": "all", "checked": planned["checked"], "changed": len(applied["applied"]) - elsewhere,
+                "changed_in_other_projects": elsewhere, "more_to_check": done["more_to_check"],
+                "left_for_later": len(applied["left_for_later"])}
 
     # ---------------------------------------------------------------- undo
     def undo(self, session, turn_id, token, note_id, item, mode="undo"):

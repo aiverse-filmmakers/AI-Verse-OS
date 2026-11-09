@@ -38,7 +38,7 @@ DEFAULTS = {
     "state_ttl_seconds": 86400, "owner_timeout_seconds": 12,
     "runtime_path": "", "skills_root": None, "skills_entrypoint": None,
     "reflection_enabled": True, "reflect_min_entries": 5, "reflect_max_age_hours": 6,
-    "reflect_all_min_saves": 25, "reflect_all_days": 30,
+    "reflect_all_min_saves": 25, "reflect_all_days": 30, "reflect_full_days": 120,
     "maintainer_feedback": False,
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
@@ -441,7 +441,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "352fc5aae4ae4cd21fb37c480058287b2f8b960358c4e1f74ffb8cee0c4d9259"  # refreshed with the package hashes
+REFLECT_SHA256 = "9dcb097fef72fefabe4ef20d60a1d5619e79ef38955b2bd5f041539c60a08969"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -474,7 +474,7 @@ class Bridge:
             ("recall_limit", 1, 8), ("source_max_tokens", 128, 8192), ("source_limit", 2, 32),
             ("candidate_limit", 1, 8), ("state_ttl_seconds", 60, 604800),
             ("owner_timeout_seconds", 1, 30), ("reflect_min_entries", 1, 50), ("reflect_max_age_hours", 1, 168),
-            ("reflect_all_min_saves", 5, 500), ("reflect_all_days", 7, 365)]:
+            ("reflect_all_min_saves", 5, 500), ("reflect_all_days", 7, 365), ("reflect_full_days", 90, 180)]:
             if type(self.config[name]) is not int or not low <= self.config[name] <= high:
                 raise Refused("configuration bound violated: " + name)
         if self.config["review_mode"] not in {"all", "meaningful", "off"}:
@@ -1664,9 +1664,11 @@ def reflect_scan(bridge, module, host, payload):
                     words = [folder.name, meta.get("name", ""), *meta.get("aliases", [])]
                     other = other or any(w and re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", text, re.I) for w in words)
         return {"mentions_other_project": other, "development_project_available": dev}
-    whole = payload.get("whole")
+    whole, since = payload.get("whole"), None
     if whole is not None:
-        # Whole memory pass: every active project, in bounded batches from a cursor (run_owner allows plain operator chats only).
+        # Whole memory pass: every active project, in bounded batches from a cursor. Nothing here reaches the AI: the
+        # tidy engine shows detail only for what the turn may read.
+        since = whole.get("since") if isinstance(whole.get("since"), (int, float)) else None
         limit = max(1, min(int(whole.get("limit", 100)), 100))
         cursor = whole.get("cursor") if isinstance(whole.get("cursor"), str) else None
         for folder in sorted(workspace_root.iterdir()):
@@ -1718,6 +1720,13 @@ def reflect_scan(bridge, module, host, payload):
             if "upgrade-note" in record["tags"]:
                 result.setdefault("upgrade_notes", []).append({"text": text[:600], "created": record["created"]})
             continue
+        if since is not None:  # only saves made since then; one that cannot be dated is left for a full pass
+            try:
+                made = datetime.fromisoformat(record["created"].replace("Z", "+00:00"))
+                if (made if made.tzinfo else made.replace(tzinfo=timezone.utc)).timestamp() < since:
+                    continue
+            except ValueError:
+                continue
         seen += 1
         if seen > limit:
             result["truncated"] = True
@@ -1729,7 +1738,7 @@ def reflect_scan(bridge, module, host, payload):
         return result
     if whole is not None:
         result.update({"cursor": last if result["truncated"] else None, "complete": not result["truncated"]})
-        if result["complete"]:  # goals are only listed, to suggest merges; Brain offers no reversible merge yet
+        if result["complete"] and since is None:  # goals are only listed, to suggest merges; Brain offers no reversible merge yet
             with contextlib.suppress(Exception):
                 intents = bridge.intent_service().snapshot("operator")["strategic_objects"].get("intents", [])
                 result["goals"] = [i["payload"]["statement"] for i in intents if isinstance(i.get("payload", {}).get("statement"), str)][:60]
@@ -1793,8 +1802,6 @@ def run_owner(bridge, operation, payload):
             raise Refused("the development project is not a destination of this turn")
         if not wanted <= allowed:
             raise Refused("a destination is not authorized for this turn")
-        if payload.get("whole") is not None and allowed != {"operator"}:
-            raise Refused("reading every project is only for a plain chat with the operator")
         return reflect_scan(bridge, module, host, payload)
     if operation == "current_remove":
         allowed = verify_capability(bridge, payload.get("auth"))
@@ -1941,6 +1948,8 @@ def main():
     reflect.add_argument("--item", type=int, help="Item number inside the note (undo)")
     reflect.add_argument("--mode", choices=["undo", "corrected"], default="undo")
     reflect.add_argument("--action-id", help="Apply one planned action only")
+    reflect.add_argument("--full", action="store_true", help="all: tidy everything saved, not just the last 7 days")
+    reflect.add_argument("--auto", action="store_true", help="all: automatic pass (since the last tidy, full when overdue)")
     commands.add_parser("status")
     switch = commands.add_parser("set")
     switch.add_argument("--enabled", choices=["true", "false"])
@@ -1990,7 +1999,7 @@ def main():
                 elif args.action == "done":
                     result = tidy.done(args.session, args.turn, args.token)
                 elif args.action == "all":
-                    result = tidy.all(args.session, args.turn, args.token)
+                    result = tidy.all(args.session, args.turn, args.token, "full" if args.full else "auto" if args.auto else "recent")
                 else:
                     if not args.note or not args.item:
                         raise Refused("undo needs --note and --item")

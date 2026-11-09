@@ -370,6 +370,7 @@ class SourceWireContractTests(unittest.TestCase):
                 raw_frames = []
                 for _ in range(4):
                     decoded, wire = connection.next_notification_with_raw()
+                    self.assertIs(type(wire), bytes)
                     self.assertEqual(json.loads(wire), decoded)
                     self.assertTrue(wire.endswith(b"\n"))
                     raw_frames.append(wire)

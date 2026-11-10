@@ -206,6 +206,19 @@ class AdapterTests(unittest.TestCase):
             "query": "zorblaxhook", "max_bytes": 8192, "limit": 4})
         self.assertIn("filter", json.dumps(rows))
 
+    def test_tidy_attention_finds_missing_search_words_and_can_add_them(self):
+        self.start()
+        self.review(self.payload([self.candidate()]))
+        turn = self.bridge.state(self.session)["turn"]
+        auth = {"session": self.session, "turn": turn["id"], "token": turn["token"]}
+        found = self.bridge.owner("reflect_scan", {"projects": [], "attention": True, "auth": auth})["attention"]
+        self.assertEqual(len(found["search_words_needed"]), 1)
+        ident = found["search_words_needed"][0]["id"]
+        tags = self.bridge.owner("add_search_words", {"auth": auth, "id": ident, "words": "zorblax"})["tags"]
+        self.assertIn("~zorblax", tags)
+        again = self.bridge.owner("reflect_scan", {"projects": [], "attention": True, "auth": auth})["attention"]
+        self.assertEqual(again["search_words_needed"], [])
+
     def test_memory_capture_recall_and_retry(self):
         self.start()
         payload = self.payload([self.candidate()], persist=True)

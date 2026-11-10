@@ -454,7 +454,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "b3a6538ceef78cef9f754ce3175ebebbc4c44176329b7ba120b9d80223137bde"  # refreshed with the package hashes
+REFLECT_SHA256 = "531450cee91f29f9b021bbe76a6f686fe0860292f48f08778dbca36c2c048148"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -859,8 +859,10 @@ class Bridge:
             "globalization of workspace facts, or blind copying of transcripts. "
             "The review receipt prevents a redundant Stop continuation. "
             "Complete the review in this original turn before the final answer; automatic follow-ups are off "
-            "by default. Do not announce an empty review to the user. For recall use query --session SESSION "
-            "--kind memory --query TEXT --depth detail, then --depth source with the full evidence item on stdin. "
+            "by default. Do not announce an empty review to the user. Set persist_digest true whenever the turn changed "
+            "files, decided something or produced a result worth finding later, even with no candidates. "
+            "For recall use query --session SESSION --kind memory --query 'QUESTION || REWORDING || REWORDING' "
+            "(the question plus 3 to 5 rewordings: topic, synonyms, how a saved note might say it) --depth detail, then --depth source with the full evidence item on stdin. "
             "Example/template files are scaffolding and never operator facts. "
             "Use only this project and bound scope; do not search parent directories or other chat state for your binding. "
             "Correct a wrong historical memory with type correction and the exact supersedes ID, keeping the same scope. Propose a Skill only "
@@ -896,7 +898,7 @@ class Bridge:
                 "For warranted learning read " + str(self.extension / "REVIEW-SCHEMA.md") + ". "
                 f"For history use this exact executable prefix: {prefix} query --session "
                 f"{shlex.quote(state['session_id'])} --turn {shlex.quote(turn['id'])} --token {shlex.quote(turn['token'])} "
-                "--kind memory --query 'relevant question' --depth detail. "
+                "--kind memory --query 'question || 3 to 5 rewordings' --depth detail. "
                 "For source depth pass the complete detail item on stdin; keep the query or let its ID supply it. "
                 "Evidence quotes must match the real user prompt or tool result, with source ids from "
                 f"{prefix} sources --session {shlex.quote(state['session_id'])}. "
@@ -983,7 +985,7 @@ class Bridge:
                 "Before your final answer, " + submit + ". "
                 'For nothing to retain: {"topic":"task review","summary":"No durable learning identified",'
                 '"outcomes":[],"unresolved":[],"candidates":[],"persist_digest":false}. '
-                "Do not announce an empty review. Do not inspect other session state to discover your binding; "
+                "Do not announce an empty review. Set persist_digest true when this turn did real work. Do not inspect other session state to discover your binding; "
                 "the exact bound command is above. For warranted learning use REVIEW-SCHEMA.md. "
                 "Complete the user's requested work, including requested capture, before reviewing. "
                 "An owner refusal is an unresolved outcome, not proof that nothing deserved retention. "
@@ -1734,12 +1736,70 @@ def reflect_scan_whole(bridge, memory, whole):
     return result
 
 
+DATED_FACT = re.compile(r"\b(as of|as reported|reported on|on \d{1,2} (january|february|march|april|may|june|july|"
+                        r"august|september|october|november|december))\b", re.I)
+
+
+def reflect_attention(bridge, memory, scopes, projects=frozenset()):
+    """Read only: what a tidy should look at beyond moving project facts.
+
+    Memories with no search words, pairs that look like repeats or an old and a newer version, and dated
+    facts more than a month old that may no longer be true. The assistant decides; nothing is changed here."""
+    words = getattr(memory, "query_terms", None) or memory.tokenize
+    now = time.time()
+    # Never show a note that names a project this chat may not read.
+    hidden = set()
+    workspace_root = bridge.root / "workspaces"
+    for folder in (workspace_root.iterdir() if workspace_root.is_dir() else []):
+        if folder.is_dir() and folder.name not in projects:
+            hidden.add(folder.name.replace("-", " ").casefold())
+            manifest = folder / "WORKSPACE.yaml"
+            found = re.search(r'^name:\s*"?([^"\n]+)"?', manifest.read_text(errors="ignore"), re.M) if manifest.is_file() else None
+            if found:
+                hidden.add(found.group(1).strip().casefold())
+    hooks, dated, records = [], [], []
+    for path in memory.iter_atomic_files(bridge.root, memory.MODE_NATIVE):
+        meta, body = memory.parse_markdown(path)
+        tags = meta.get("tags", "") if meta else ""
+        if (not meta or meta.get("scope") not in scopes or meta.get("status", "active") != "active"
+                or meta.get("type") == "correction" or "upgrade-note" in tags or "tidy" in tags.split(",")):
+            continue
+        text = " ".join(body.split("# Memory", 1)[-1].split("# Why it matters", 1)[0].split())
+        plain = text.replace("-", " ").casefold()
+        if any(re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", plain) for name in hidden if name):
+            continue
+        ident = meta.get("id") or path.stem
+        if len(hooks) < 5 and not any(t.strip().startswith("~") for t in re.split(r"[,;|]+", tags)):
+            hooks.append({"id": ident, "text": text[:300]})
+        try:
+            made = datetime.fromisoformat(meta.get("created_at", "").replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            made = now
+        if len(dated) < 3 and DATED_FACT.search(text) and now - made >= 30 * 86400:
+            dated.append({"id": ident, "text": text[:300]})
+        if len(records) < 500:
+            records.append((ident, meta.get("scope"), text, {w.casefold() for w in words(text)}))
+    pairs = []
+    for index, first in enumerate(records):
+        for second in records[index + 1:]:
+            if first[1] == second[1] and first[3] and second[3]:
+                overlap = len(first[3] & second[3]) / len(first[3] | second[3])
+                if overlap >= 0.35:
+                    pairs.append((overlap, first, second))
+    pairs.sort(key=lambda pair: pair[0], reverse=True)
+    return {"search_words_needed": hooks, "check_still_true": dated,
+            "possible_repeats": [{"ids": [a[0], b[0]], "texts": [a[2][:300], b[2][:300]]} for _, a, b in pairs[:3]]}
+
+
 def reflect_scan(bridge, module, host, payload):
     """Read only: bounded view of Memory records, project facts and venture lines for the tidy pass."""
     entry = host._extension_entry("ai-verse-memory")
     if not entry:
         raise Refused("Memory is unavailable")
     memory = load_module(host._safe_repo_file(entry.get("engine"), "Memory engine"), "_codex_reflect_scan")
+    if payload.get("attention"):
+        scopes = {"operator", *("workspace:" + p for p in payload.get("projects", []))}
+        return {"attention": reflect_attention(bridge, memory, scopes, set(payload.get("projects", [])))}
     limit = max(1, min(int(payload.get("limit", 40)), 40))
     projects = [p for p in payload.get("projects", []) if re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", p)]
     result = {"records": [], "workspaces": {}, "ventures": [], "truncated": False}
@@ -1866,6 +1926,22 @@ def run_owner(bridge, operation, payload):
         if not wanted <= allowed:
             raise Refused("a destination is not authorized for this turn")
         return reflect_scan(bridge, module, host, payload)
+    if operation == "add_search_words":
+        allowed = verify_capability(bridge, payload.get("auth"), ("active", "review_requested", "reviewed"))
+        entry = host._extension_entry("ai-verse-memory")
+        if not entry:
+            raise Refused("Memory is unavailable")
+        memory = load_module(host._safe_repo_file(entry.get("engine"), "Memory engine"), "_codex_search_words")
+        if not hasattr(memory, "add_search_hooks"):
+            raise Refused("this Memory version cannot add search words yet")
+        path = memory.locate_memory(str(payload.get("id", "")), bridge.root, memory.MODE_NATIVE)
+        meta = memory.parse_markdown(path)[0] if path else {}
+        if not meta or meta.get("scope") not in allowed:
+            raise Refused("that memory is not readable from this turn")
+        tags = memory.add_search_hooks(meta.get("id") or path.stem, bounded_text(payload.get("words"), 300),
+                                       bridge.root, memory.MODE_NATIVE)
+        memory.rebuild(silent=True, root=bridge.root, mode=memory.MODE_NATIVE)
+        return {"tags": tags}
     if operation == "current_remove":
         allowed = verify_capability(bridge, payload.get("auth"))
         if payload["scope"] not in allowed:
@@ -2002,6 +2078,12 @@ def main():
     intent.add_argument("--turn")
     intent.add_argument("--token")
     intent.add_argument("--input-file", help="Read input from a note file in the note folder (runtime/codex-learning/claude-input); it is deleted after reading")
+    words = commands.add_parser("search-words")
+    words.add_argument("--session", required=True)
+    words.add_argument("--turn", required=True)
+    words.add_argument("--token", required=True)
+    words.add_argument("--id", required=True)
+    words.add_argument("--words", required=True, help="Comma separated everyday words, without ~")
     reflect = commands.add_parser("reflect")
     reflect.add_argument("action", choices=["plan", "apply", "done", "undo", "status", "list", "all"])
     reflect.add_argument("--session")
@@ -2040,6 +2122,10 @@ def main():
             result = {"ok": True, "result": run_owner(bridge, args.operation, payload)}
         elif args.command == "intent":
             result = bridge.intent(args.action, args.scope, payload, args.session, args.turn, args.token)
+        elif args.command == "search-words":
+            result = bridge.owner("add_search_words", {
+                "auth": {"session": args.session, "turn": args.turn, "token": args.token},
+                "id": args.id, "words": args.words})
         elif args.command == "reflect":
             tidy = bridge.tidy()
             if args.action == "status":

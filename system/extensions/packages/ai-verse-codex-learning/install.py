@@ -382,7 +382,7 @@ def remove(root):
 # Claude Code adapter: manages only ROOT/.claude/settings.local.json and one record file.
 # It never touches .codex/, the shared registry entry, the install receipt or config.json.
 # ---------------------------------------------------------------------------
-CLAUDE_SUBCOMMANDS = ("review", "sources", "query", "intent", "reflect")
+CLAUDE_SUBCOMMANDS = ("review", "sources", "query", "intent", "reflect", "search-words")
 
 
 def claude_paths(root):

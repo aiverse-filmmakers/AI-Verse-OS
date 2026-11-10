@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      DASHBOARD_CURRENT_TESTED_SHA: 0b1c67c7a3cae8bc0627cb77e2c41f13d73ae5b8
+      DASHBOARD_CURRENT_TESTED_SHA: 06b99772ffaf2234e66fcc3c1d8be38e33894be6
       CI: "true"
     steps:
       - name: Checkout OS prospective source with no stored credentials
@@ -122,11 +122,12 @@ jobs:
             --detach --quiet "$DASHBOARD_CURRENT_TESTED_SHA"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD)" = "$DASHBOARD_CURRENT_TESTED_SHA"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-codex-child-owner.m)" = "fec2c528a50e0c13707fe93621c1453b3d60e954"
-          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-workspace-event-fence.m)" = "2aa2750ee32bfbf4001325c1d3fcb691946974f8"
-          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-owner.m)" = "e4c2e999dc985fc8a7d25014f536081a1231d0f8"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-workspace-event-fence.m)" = "b558bfbde685b29d26f13b572506a675a837a473"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-owner.m)" = "5a7ceff7f3fbc35390de10ccbd0c418d3d7d054d"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-service.m)" = "4084da02ae62a76a402ba9e47b9163632ce39d1a"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-no-capture-release-contract.mjs)" = "c0b231d464793bb8466d668d1e1996a6d9ac8fb6"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:apps/gateway/src/local-app-session.ts)" = "87a3e4213b52ad2b77c321f0785fe578ae2ececa"
-          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-actual-xpc-lifecycle.sh)" = "3d7e4d6e8b12f78ac5dbc706363a913a65a28ab5"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-actual-xpc-lifecycle.sh)" = "3ff7564fdc888052be98e88a04cbfa00671adc86"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-codex-child-owner.h)" = "ac15ab1d80c7041d765c407f680d4334664c52e2"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-pinned-codex-owner.sh)" = "1427d7fcbb1153a3b2763f1872cd51718db1ac00"
           test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:.github/workflows/persistent-chats-macos-auth-preview.yml)" = "6c76cd7b064e75e03661d932a548c9c45723d9bd"

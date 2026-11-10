@@ -214,6 +214,69 @@ class EventPreviewTests(unittest.TestCase):
         self.assertFalse(completed.authentic_host_origin)
         self.assertFalse(completed.recording_consent_issued)
 
+    def test_3a46_nested_consent_fields_fail_closed(self):
+        examples = []
+        x = start()
+        x["params"]["claimedConsent"] = True
+        examples.append(x)
+        x = start()
+        x["params"]["turn"]["recordingAuthorized"] = True
+        examples.append(x)
+        x = item("userMessage", "u")
+        x["params"]["scope"] = "film"
+        examples.append(x)
+        x = item("userMessage", "u")
+        x["params"]["item"]["authenticated"] = True
+        examples.append(x)
+        x = item("userMessage", "u")
+        x["params"]["item"]["content"][0]["consentVerified"] = True
+        examples.append(x)
+        x = item("agentMessage", "a")
+        x["params"]["item"]["hostSigned"] = True
+        examples.append(x)
+        x = end()
+        x["params"]["turn"]["signed"] = True
+        examples.append(x)
+        for example in examples:
+            owner = m.SyntheticOwner("operator", "/scratch/operator", 1001)
+            gate = m.ProspectiveEventPreview(owner)
+            src = owner._source
+            method = example["method"]
+            if method != "turn/started":
+                gate.observe(src, start())
+            if method == "turn/completed":
+                gate.observe(src, item("userMessage", "u"))
+                gate.observe(src, item("agentMessage", "a"))
+            self.refused(lambda e=example, g=gate, s=src: g.observe(s, e))
+            self.assertFalse(gate.persist(SENTINEL))
+
+    def test_3a46_monotonic_emission_stamp_never_proves_trusted_time(self):
+        events = [start(), item("userMessage", "u"),
+                  item("agentMessage", "a"), end()]
+        for number, event in enumerate(events):
+            event["emittedAtMs"] = 1000 + number
+            verdict = self.gate.observe(self.source, event)
+            self.assertFalse(verdict.authentic_host_origin)
+            self.assertFalse(verdict.recording_consent_issued)
+        self.assertTrue(verdict.candidate_complete)
+        owner = m.SyntheticOwner("operator", "/scratch/operator", 1001)
+        gate = m.ProspectiveEventPreview(owner)
+        e = start()
+        e["emittedAtMs"] = 300
+        gate.observe(owner._source, e)
+        older = item("userMessage", "u")
+        older["emittedAtMs"] = 299
+        self.refused(lambda: gate.observe(owner._source, older))
+        self.assertFalse(gate.recording_permitted())
+        self.refused(lambda: gate.observe(owner._source, end()))
+
+    def test_3a46_missing_optional_emission_stamp_stays_deny_only(self):
+        self.gate.observe(self.source, start())
+        self.gate.observe(self.source, item("userMessage", "u"))
+        result = self.gate.observe(self.source, item("agentMessage", "a"))
+        self.assertFalse(result.archive_write_admitted)
+        self.assertFalse(self.gate.retrieve_memory(SENTINEL))
+
     def test_bounded_events_and_invalid_owner(self):
         with mock.patch.object(m, "MAX_EVENTS", 1):
             gate = m.ProspectiveEventPreview(self.owner)

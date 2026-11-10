@@ -149,6 +149,71 @@ class EventPreviewTests(unittest.TestCase):
                 s, item("userMessage", "u")))
             self.assertFalse(gate.recording_permitted())
 
+    def test_3a42_assistant_before_user_fails_terminally(self):
+        self.gate.observe(self.source, start())
+        self.refused(lambda: self.gate.observe(
+            self.source, item("agentMessage", "a-first")))
+        self.refused(lambda: self.gate.observe(
+            self.source, item("userMessage", "user-after")))
+
+    def test_3a42_non_monotonic_items_and_replay_are_rejected(self):
+        self.gate.observe(self.source, start())
+        self.gate.observe(self.source, item(
+            "userMessage", "user-first", timestamp=500))
+        self.refused(lambda: self.gate.observe(
+            self.source, item("agentMessage", "a", timestamp=499)))
+        self.refused(lambda: self.gate.observe(self.source, end()))
+
+    def test_3a42_claimed_auth_and_invalid_envelopes_do_not_issue_rights(self):
+        bads = [
+            {"method": "turn/started", "params": start()["params"],
+             "consentVerified": True},
+            {"method": "turn/started", "params": start()["params"],
+             "authenticated": True},
+            {"method": "turn/started", "params": start()["params"],
+             "jsonrpc": "1.0"},
+            {"method": "turn/started", "params": start()["params"],
+             "emittedAtMs": -1},
+            {"method": "turn/started", "params": start()["params"],
+             "emittedAtMs": True},
+            {"method": "turn/started", "params": start()["params"],
+             "emittedAtMs": 1 << 63},
+        ]
+        for bad in bads:
+            owner = m.SyntheticOwner("operator", "/scratch/operator", 1001)
+            gate = m.ProspectiveEventPreview(owner)
+            with self.subTest(bad=list(bad)):
+                self.refused(lambda b=bad, g=gate, src=owner._source:
+                             g.observe(src, b))
+                self.assertFalse(gate.recording_permitted())
+                self.assertFalse(gate.persist(SENTINEL))
+        # Optional v2 envelope emission time is allowed, but never
+        # interpreted as a trusted OS timestamp or consent.
+        owner = m.SyntheticOwner("operator", "/scratch/operator", 1001)
+        gate = m.ProspectiveEventPreview(owner)
+        valid = start()
+        valid["emittedAtMs"] = 100
+        report = gate.observe(owner._source, valid)
+        self.assertEqual(report.status, "synthetic_shape_only_not_authentic")
+        self.assertFalse(report.archive_write_admitted)
+
+    def test_3a42_no_second_user_or_unordered_completed_turn(self):
+        self.gate.observe(self.source, start())
+        self.gate.observe(self.source, item("userMessage", "user-first"))
+        self.refused(lambda: self.gate.observe(
+            self.source, item("userMessage", "user-two")))
+        owner = m.SyntheticOwner("operator", "/scratch/operator", 1001)
+        gate = m.ProspectiveEventPreview(owner)
+        src = owner._source
+        gate.observe(src, start())
+        gate.observe(src, item("userMessage", "u"))
+        gate.observe(src, item("agentMessage", "a"))
+        self.assertFalse(gate.recording_permitted())
+        completed = gate.observe(src, end())
+        self.assertTrue(completed.candidate_complete)
+        self.assertFalse(completed.authentic_host_origin)
+        self.assertFalse(completed.recording_consent_issued)
+
     def test_bounded_events_and_invalid_owner(self):
         with mock.patch.object(m, "MAX_EVENTS", 1):
             gate = m.ProspectiveEventPreview(self.owner)

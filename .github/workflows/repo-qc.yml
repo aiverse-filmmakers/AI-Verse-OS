@@ -71,6 +71,9 @@ jobs:
       - name: Test disposable v2 fixture atomic disk write, restart and tamper refusal
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_v2_fixture_disk.py' -v
 
+      - name: Enforce Phase 3A.43 production capture hard-denial matrix
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_release_capture_denial.py' -v
+
       - name: Test Phase 3A.39 synthetic original-event admission preview, zero writes
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_event_admission_preview.py' -v
 

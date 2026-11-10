@@ -48,7 +48,8 @@ Code head: `95b9232996d77cd513bffb8ba4e71a83451f75f5`.
 - [Pinned real Codex offline workflow, including 3A.39 negative tests](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073804): **PASS**
 - [Repository QC, including 3A.39 negative tests](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073703): **PASS**
 - [Trusted Dashboard session boundary](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073878): **PASS**
-- [Four Repo Acceptance](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073665) and other OS workflows may still be running. Do not claim global green until finished.
+- [Four Repo Acceptance](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073665): **PASS**
+- [Migration Source Concurrency](https://github.com/aiverse-filmmakers/AI-Verse-OS/actions/runs/42886073549): **PASS**
 
 ## Remaining hard gates
 

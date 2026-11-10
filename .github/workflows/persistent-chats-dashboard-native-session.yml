@@ -6,6 +6,9 @@ on:
       - '.github/workflows/persistent-chats-dashboard-native-session.yml'
       - 'system/extensions/tests/codex-learning/fixture_os_dashboard_boundary.py'
       - 'system/extensions/tests/codex-learning/test_codex_app_server_host_boundary.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_event_admission_preview.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_release_capture_denial.py'
+      - 'system/extensions/packages/ai-verse-codex-learning/codex_app_server_event_admission_preview.py'
       - 'docs/persistent-chats/**'
   workflow_dispatch:
 
@@ -85,3 +88,64 @@ jobs:
             apps/gateway/src/local-app-session.ts
           test -z "$(git status --porcelain --untracked-files=no)"
           echo "PASS: existing Dashboard native-session boundary tested, no capture authority"
+
+
+  pinned-current-native-owner-no-capture:
+    name: Exact current Dashboard child/workspace/XPC owner versus OS event gate (no recording)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DASHBOARD_CURRENT_TESTED_SHA: faab75af2e792f0d5e23d3e4ff88e4041742b841
+      CI: "true"
+    steps:
+      - name: Checkout OS prospective source with no stored credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node 22 to inspect Dashboard runtime deny contract
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Clone immutable tested Dashboard native owner source read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "${OPENAI_API_KEY:-}"
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          DASHBOARD_DIR="$(mktemp -d "$RUNNER_TEMP/aiverse-current-native-owner-47.XXXXXX")"
+          git -c credential.helper= clone --quiet --no-checkout \
+            https://github.com/aiverse-filmmakers/AI-Verse-Dashboard.git "$DASHBOARD_DIR"
+          git -C "$DASHBOARD_DIR" -c advice.detachedHead=false checkout \
+            --detach --quiet "$DASHBOARD_CURRENT_TESTED_SHA"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD)" = "$DASHBOARD_CURRENT_TESTED_SHA"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-codex-child-owner.m)" = "0651c0ef195aa57817c745e7617fcbac0f91cadf"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-workspace-event-fence.m)" = "2aa2750ee32bfbf4001325c1d3fcb691946974f8"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-owner.m)" = "13f22762d066ce0cd82c2a6d0acbfb79fae67445"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-no-capture-release-contract.mjs)" = "c0b231d464793bb8466d668d1e1996a6d9ac8fb6"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:apps/gateway/src/local-app-session.ts)" = "87a3e4213b52ad2b77c321f0785fe578ae2ececa"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-actual-xpc-lifecycle.sh)" = "fda88d41aa04d251c0055fb27dd059b21295ef03"
+          echo "DASHBOARD_DIR=$DASHBOARD_DIR" >> "$GITHUB_ENV"
+
+      - name: Prove pinned live Dashboard has no browser or native archive admission
+        working-directory: ${{ env.DASHBOARD_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/mc2/ci-no-capture-release-contract.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "PASS: audited pinned Dashboard child + XPC owner and release hard-denial source"
+
+      - name: Independently reject OS prospective event and writer authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s system/extensions/tests/codex-learning \
+            -p 'test_codex_app_server_event_admission_preview.py' -v
+          python3 -m unittest discover \
+            -s system/extensions/tests/codex-learning \
+            -p 'test_codex_app_server_release_capture_denial.py' -v
+          echo "PASS: cross-repo pinned-source compatibility only, no authority or capture"

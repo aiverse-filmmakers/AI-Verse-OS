@@ -1,0 +1,155 @@
+name: Persistent Chats trusted Dashboard session contract (pinned upstream)
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/persistent-chats-dashboard-native-session.yml'
+      - 'system/extensions/tests/codex-learning/fixture_os_dashboard_boundary.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_host_boundary.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_event_admission_preview.py'
+      - 'system/extensions/tests/codex-learning/test_codex_app_server_release_capture_denial.py'
+      - 'system/extensions/packages/ai-verse-codex-learning/codex_app_server_event_admission_preview.py'
+      - 'docs/persistent-chats/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: persistent-chat-dashboard-session-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dashboard-native-session-contract:
+    name: Immutable Dashboard host pairing, revocation and scope tests (no recording)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DASHBOARD_COMMIT: 91aad66592ab43dfe2acaeff314ade93c63a7cef
+      CI: "true"
+
+    steps:
+      - name: Configure Node 22 for published Dashboard lockfile
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Clone the exact existing upstream Dashboard implementation, read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          test -z "${OPENAI_API_KEY:-}"
+          DASHBOARD_ROOT="$(mktemp -d "$RUNNER_TEMP/aiverse-pc-dashboard-3a19.XXXXXX")"
+          git -c credential.helper= clone \
+            --quiet --no-checkout \
+            https://github.com/aiverse-filmmakers/AI-Verse-Dashboard.git \
+            "$DASHBOARD_ROOT"
+          git -C "$DASHBOARD_ROOT" -c advice.detachedHead=false \
+            checkout --detach --quiet "$DASHBOARD_COMMIT"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD)" = "$DASHBOARD_COMMIT"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:apps/gateway/src/local-app-session.ts)" = \
+            "299c9c46371f64deaf8899d6672970e015f3b975"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:test/local-app-session.test.ts)" = \
+            "51e7b649a998a094676e408e266d053ecadd7da9"
+          test "$(git -C "$DASHBOARD_ROOT" rev-parse HEAD:package-lock.json)" = \
+            "5f58ee26fb50da632219b6bcbe26d055c70df43a"
+          echo "DASHBOARD_ROOT=$DASHBOARD_ROOT" >> "$GITHUB_ENV"
+
+      - name: Install only lockfile dependencies, never run package scripts
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Compile pinned Dashboard local session and auth tests
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          npm run build --silent
+          test -f dist/test/local-app-session.test.js
+          test -f dist/test/gateway-auth.test.js
+
+      - name: Exercise real localhost pairing, revocation and workspace isolation
+        shell: bash
+        working-directory: ${{ env.DASHBOARD_ROOT }}
+        run: |
+          set -euo pipefail
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          test -z "${OPENAI_API_KEY:-}"
+          node --test \
+            dist/test/local-app-session.test.js \
+            dist/test/gateway-auth.test.js
+          # This existing Dashboard test-only source has no Codex recording method.
+          ! grep -Eq '"aiverse\.(codex|chat)\.(record|capture|archive)' \
+            apps/gateway/src/local-app-session.ts
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "PASS: existing Dashboard native-session boundary tested, no capture authority"
+
+
+  pinned-current-native-owner-no-capture:
+    name: Exact current Dashboard child/workspace/XPC owner versus OS event gate (no recording)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DASHBOARD_CURRENT_TESTED_SHA: 06b99772ffaf2234e66fcc3c1d8be38e33894be6
+      CI: "true"
+    steps:
+      - name: Checkout OS prospective source with no stored credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Node 22 to inspect Dashboard runtime deny contract
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Clone immutable tested Dashboard native owner source read-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "${OPENAI_API_KEY:-}"
+          test -z "${AIVERSE_GATEWAY_TOKEN:-}"
+          DASHBOARD_DIR="$(mktemp -d "$RUNNER_TEMP/aiverse-current-native-owner-47.XXXXXX")"
+          git -c credential.helper= clone --quiet --no-checkout \
+            https://github.com/aiverse-filmmakers/AI-Verse-Dashboard.git "$DASHBOARD_DIR"
+          git -C "$DASHBOARD_DIR" -c advice.detachedHead=false checkout \
+            --detach --quiet "$DASHBOARD_CURRENT_TESTED_SHA"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD)" = "$DASHBOARD_CURRENT_TESTED_SHA"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-codex-child-owner.m)" = "fec2c528a50e0c13707fe93621c1453b3d60e954"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-workspace-event-fence.m)" = "b558bfbde685b29d26f13b572506a675a837a473"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-owner.m)" = "5a7ceff7f3fbc35390de10ccbd0c418d3d7d054d"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-actual-xpc-service.m)" = "4084da02ae62a76a402ba9e47b9163632ce39d1a"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-no-capture-release-contract.mjs)" = "c0b231d464793bb8466d668d1e1996a6d9ac8fb6"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:apps/gateway/src/local-app-session.ts)" = "87a3e4213b52ad2b77c321f0785fe578ae2ececa"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-actual-xpc-lifecycle.sh)" = "3ff7564fdc888052be98e88a04cbfa00671adc86"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/native-macos-codex-child-owner.h)" = "ac15ab1d80c7041d765c407f680d4334664c52e2"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:scripts/mc2/ci-macos-pinned-codex-owner.sh)" = "1427d7fcbb1153a3b2763f1872cd51718db1ac00"
+          test "$(git -C "$DASHBOARD_DIR" rev-parse HEAD:.github/workflows/persistent-chats-macos-auth-preview.yml)" = "6c76cd7b064e75e03661d932a548c9c45723d9bd"
+          echo "DASHBOARD_DIR=$DASHBOARD_DIR" >> "$GITHUB_ENV"
+
+      - name: Prove pinned live Dashboard has no browser or native archive admission
+        working-directory: ${{ env.DASHBOARD_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/mc2/ci-no-capture-release-contract.mjs
+          test -z "$(git status --porcelain --untracked-files=no)"
+          echo "PASS: audited pinned Dashboard child + XPC owner and release hard-denial source"
+
+      - name: Independently reject OS prospective event and writer authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s system/extensions/tests/codex-learning \
+            -p 'test_codex_app_server_event_admission_preview.py' -v
+          python3 -m unittest discover \
+            -s system/extensions/tests/codex-learning \
+            -p 'test_codex_app_server_release_capture_denial.py' -v
+          echo "PASS: cross-repo pinned-source compatibility only, no authority or capture"

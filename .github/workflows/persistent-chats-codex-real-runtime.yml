@@ -1,0 +1,140 @@
+name: Persistent Chats Codex real runtime (offline pinned release)
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/persistent-chats-codex-real-runtime.yml
+      - system/extensions/tests/codex-learning/test_codex_real_app_server_ci.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_rpc_boundary.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_process_epoch.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_ephemeral_boundary.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_preview_authorization.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_preview_replay.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_event_admission_preview.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_release_capture_denial.py
+      - system/extensions/tests/codex-learning/fixture_v2_disk_store.py
+      - system/extensions/tests/codex-learning/test_codex_app_server_v2_fixture_disk.py
+      - system/extensions/packages/ai-verse-codex-learning/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-stable-codex-app-server:
+    name: Official Codex 0.167.0, pinned schemas and offline stdio startup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CODEX_RELEASE_TAG: rust-v0.167.0
+      CODEX_RELEASE_ASSET: codex-x86_64-unknown-linux-musl.tar.gz
+      CODEX_RELEASE_ARCHIVE_SHA256: 9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a
+      CODEX_RELEASE_ARCHIVE_SIZE: "122587028"
+      # Current Docker Hub official Python image manifest-list digest at 2026-11-09.
+      PYTHON_CI_IMAGE: python:3.12-slim-bookworm@sha256:935c3c5b12357a7e10caa9c1e6ca5692344d97cf229832ef584be2cec9fc03df
+    steps:
+      - name: Checkout only the test code, without persisting GitHub credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prove strict parent-owned request and reply ownership using synthetic frames
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_rpc_boundary.py' -v
+
+      - name: Refuse stale parent-owned pipes, wrong physical cwd and live process reuse
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_process_epoch.py' -v
+
+      - name: Reject cross-workspace and forged empty ephemeral thread events
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_ephemeral_boundary.py' -v
+
+      - name: Deny stale synthetic owner grants after consent or workspace changes
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_authorization.py' -v
+
+      - name: Reject synthetic repeated items and cross-turn lifecycle without launching Codex
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_preview_replay.py' -v
+
+      - name: Enforce all named production capture flags and write entrypoints remain blocked
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_release_capture_denial.py' -v
+
+      - name: Reject synthetic prospective event provenance and unsupported UI shapes
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_event_admission_preview.py' -v
+
+      - name: Prove disposable synthetic v2 fixture disk durability before real offline Codex
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_codex_app_server_v2_fixture_disk.py' -v
+
+      - name: Fetch only the immutable official stable release archive and verify exact digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          RELEASE_DIR="$(mktemp -d "$RUNNER_TEMP/aiverse-codex-3a12.XXXXXX")"
+          echo "RELEASE_DIR=$RELEASE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$RELEASE_DIR/bin"
+          ASSET="$RELEASE_DIR/codex-release.tar.gz"
+          curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            --retry 3 --connect-timeout 20 --max-time 240 \
+            --output "$ASSET" \
+            "https://github.com/openai/codex/releases/download/$CODEX_RELEASE_TAG/$CODEX_RELEASE_ASSET"
+          test "$(stat -c '%s' "$ASSET")" = "$CODEX_RELEASE_ARCHIVE_SIZE"
+          printf '%s  %s\n' "$CODEX_RELEASE_ARCHIVE_SHA256" "$ASSET" | sha256sum --check --status
+          CODEX_ASSET_FILE="$ASSET" CODEX_OUTPUT_BINARY="$RELEASE_DIR/bin/codex" \
+            python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import shutil
+          import tarfile
+
+          source = Path(os.environ["CODEX_ASSET_FILE"])
+          output = Path(os.environ["CODEX_OUTPUT_BINARY"])
+          with tarfile.open(source, "r:gz") as archive:
+              members = archive.getmembers()
+              if (len(members) != 1
+                      or members[0].name.removeprefix("./") != "codex-x86_64-unknown-linux-musl"
+                      or not members[0].isfile()
+                      or not 1 <= members[0].size <= 500_000_000):
+                  raise SystemExit("FAIL: unexpected official archive layout")
+              contents = archive.extractfile(members[0])
+              if contents is None:
+                  raise SystemExit("FAIL: official archive missing executable contents")
+              with output.open("xb") as dest:
+                  shutil.copyfileobj(contents, dest, length=128 * 1024)
+          if output.stat().st_size != members[0].size:
+              raise SystemExit("FAIL: extracted binary size mismatch")
+          output.chmod(0o500)
+          print("PASS: stable release archive exact bytes verified and one binary extracted")
+          PY
+          rm -f "$ASSET"
+
+      - name: Execute pinned stable CLI without network, credentials, repository or user data
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$RELEASE_DIR/bin/codex"
+          timeout --signal=TERM --kill-after=10s 120s \
+            docker run --rm \
+              --network none \
+              --read-only \
+              --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --pids-limit 64 \
+              --memory 1536m \
+              --cpus 2 \
+              --user "$(id -u):$(id -g)" \
+              --tmpfs "/scratch:rw,nosuid,nodev,size=512m,mode=0700,uid=$(id -u),gid=$(id -g)" \
+              --tmpfs "/tmp:rw,nosuid,nodev,size=64m,mode=1777" \
+              --mount "type=bind,src=$RELEASE_DIR/bin,dst=/test,readonly" \
+              --mount "type=bind,src=$GITHUB_WORKSPACE/system/extensions/tests/codex-learning/test_codex_real_app_server_ci.py,dst=/check.py,readonly" \
+              --env CODEX_CI_OFFLINE_CONTAINER=1 \
+              --env PYTHONDONTWRITEBYTECODE=1 \
+              --workdir /scratch \
+              "$PYTHON_CI_IMAGE" \
+              python /check.py /test/codex
+
+      - name: Confirm Git checkout remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain --untracked-files=no)"

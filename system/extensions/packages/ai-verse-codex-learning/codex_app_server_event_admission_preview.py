@@ -117,6 +117,10 @@ class ProspectiveEventPreview:
         self._turn: str | None = None
         self._ids: set[str] = set()
         self._roles: set[str] = set()
+        # The first completed visible message must be the user's prompt.
+        # Completing the assistant first is not prospective turn evidence.
+        self._expected_role = "user"
+        self._last_item_ms: int | None = None
         self._events = 0
 
     def _current(self, source: object) -> None:
@@ -137,7 +141,13 @@ class ProspectiveEventPreview:
         try:
             self._current(source)
             frame = _mapping(frame)
-            if self._events >= MAX_EVENTS or "id" in frame:
+            if (self._events >= MAX_EVENTS or "id" in frame
+                    or frame.get("jsonrpc", "2.0") != "2.0"
+                    or set(frame) - {"method", "params", "jsonrpc", "emittedAtMs"}):
+                raise PreviewRejected("synthetic event attribution denied")
+            if "emittedAtMs" in frame and (
+                    type(frame["emittedAtMs"]) is not int
+                    or not 0 <= frame["emittedAtMs"] < (1 << 63)):
                 raise PreviewRejected("synthetic event attribution denied")
             method = frame.get("method")
             params = _mapping(frame.get("params"))
@@ -179,15 +189,21 @@ class ProspectiveEventPreview:
                     role = "assistant"
                 else:
                     raise PreviewRejected("synthetic event attribution denied")
-                if role in self._roles:
+                if (role != self._expected_role or role in self._roles
+                        or (self._last_item_ms is not None
+                            and stamp < self._last_item_ms)):
                     raise PreviewRejected("synthetic event attribution denied")
                 self._ids.add(item_id)
                 self._roles.add(role)
+                self._last_item_ms = stamp
+                self._expected_role = ("assistant" if role == "user"
+                                       else "completed")
             elif method == "turn/completed":
                 if (_id(params.get("threadId")) != self._thread
                         or _mapping(params.get("turn")).get("id") != self._turn
                         or _mapping(params.get("turn")).get("status") != "completed"
-                        or self._roles != {"user", "assistant"}):
+                        or self._roles != {"user", "assistant"}
+                        or self._expected_role != "completed"):
                     raise PreviewRejected("synthetic event attribution denied")
                 self._closed = True
                 return EventVerdict(self._events, candidate_complete=True)

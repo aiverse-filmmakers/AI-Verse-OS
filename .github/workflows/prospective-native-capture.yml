@@ -56,8 +56,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(npm view @anthropic-ai/claude-code@2.1.316 dist.integrity)" = 'sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ=='
-          npm install --prefix "$RUNNER_TEMP/claude-proof" --ignore-scripts @anthropic-ai/claude-code@2.1.316
+          test "$(npm view @anthropic-ai/claude-code-linux-x64@2.1.316 dist.integrity)" = 'sha512-RQDM6N285IjNKcmlPRriayNzpTkEJreAw5/vBU+V0R3qljkQ5z6/pSbzcVUAXvasoOlvub0RIma3NWvSuZA8Cg=='
+          npm install --prefix "$RUNNER_TEMP/claude-proof" --ignore-scripts @anthropic-ai/claude-code-linux-x64@2.1.316
       - name: Checkout the exact composed Memory reader
         uses: actions/checkout@v4
         with:
@@ -66,6 +66,6 @@ jobs:
           path: native-proof-memory
           persist-credentials: false
       - name: Prove native Claude transcript against a local synthetic model
-        run: python3 system/extensions/tests/codex-learning/prove_native_claude_transcript.py "$RUNNER_TEMP/claude-proof/node_modules/.bin/claude"
+        run: python3 system/extensions/tests/codex-learning/prove_native_claude_transcript.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
       - name: Native hooks to OS archive to copied-folder exact Memory source
-        run: python3 system/extensions/tests/codex-learning/prove_native_capture_roundtrip.py "$RUNNER_TEMP/claude-proof/node_modules/.bin/claude" "$GITHUB_WORKSPACE/native-proof-memory"
+        run: python3 system/extensions/tests/codex-learning/prove_native_capture_roundtrip.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude" "$GITHUB_WORKSPACE/native-proof-memory"

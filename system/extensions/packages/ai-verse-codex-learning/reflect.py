@@ -182,7 +182,14 @@ class Tidy:
                     text += ("\nAI-Verse OS tidying is due. After you finish the operator's request and before your final answer, run "
                              "these three in order and nothing else for tidying: " + base.format("plan") + " ; then "
                              + base.format("apply") + " ; then " + base.format("done")
-                             + " . Do not mention tidying, or what it changed, in your answer: the operator gets a separate tidy note later. "
+                             + " . If plan returns attention: for each search_words_needed memory add 6 to 12 everyday words "
+                             "someone might use to ask about it later with " + base.split(" reflect ")[0] + " search-words --session "
+                             + self.m.shlex.quote(state["session_id"]) + " --turn " + self.m.shlex.quote(turn["id"]) + " --token "
+                             + self.m.shlex.quote(turn["token"]) + " --id ID --words 'a,b,c' ; for possible_repeats that say the same "
+                             "thing, or where one is an older version, save a correction that supersedes the older one through the review "
+                             "(leave pairs that differ); for check_still_true, ask the operator once, in one short line at the end of your "
+                             "answer, whether it is still true. Apart from that question, do not mention tidying, or what it changed, in "
+                             "your answer: the operator gets a separate tidy note later. "
                              "If a command is refused, skip tidying this turn and do not mention it. ")
                 elif self.whole_due(data):
                     text += ("\nAI-Verse OS tidying of everything saved is due. After you finish the operator's request and before your "
@@ -350,6 +357,14 @@ class Tidy:
         if whole:
             out.update({"checked": wl["checked"], "more_to_check": wl["cursor"] is not None or not wl["ok"],
                         "in_other_projects": len(items) - len(seen_here)})
+        try:
+            own = turn.get("scope") or state.get("scope") or "operator"
+            mine = [own[10:]] if own.startswith("workspace:") else []  # detail only for this chat's own project
+            attention = self.owner("reflect_scan", {"projects": mine, "attention": True}).get("attention")
+            if attention and any(attention.values()):
+                out["attention"] = attention
+        except (self.m.Refused, OSError, ValueError):
+            pass
         while len(str(out).encode()) > MAX_BYTES and out["items"]:
             out["items"].pop()
             out["truncated"] = True
@@ -444,7 +459,10 @@ class Tidy:
             if not info or info.get("status") != "active":
                 continue
             names = {project, info["name"], *info.get("aliases", [])}
-            hits = [r for r in records if any(re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", r["text"], re.I)
+            # Match the project by name in the text or in its tags, with hyphens and spaces treated alike.
+            names = {n for name in names if name for n in (name, name.replace("-", " "))}
+            hits = [r for r in records if any(re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)",
+                                                        r["text"] + " " + str(r.get("tags", "")).replace("-", " ").replace(",", " "), re.I)
                                               for n in names if n)][:3]
             hits = [r for r in hits if self.rejected("move", project, [r["id"] + self.m.digest(r["text"])[:12]]) not in refused]
             for flag in (True, False):

@@ -950,26 +950,34 @@ def recover_move(root, archive_id, *, source_scope, fingerprint, confirmed, auth
             return _finish_move(root, receipt, authorization_check)
 
 
-def list_archives(root, scope, authorization_check, *, limit=12):
-    """Bounded tidy preview for one currently authorized home only."""
-    import itertools
+def list_archives(root, scope, authorization_check, *, limit=12, after=None):
+    """Bounded tidy preview with a stable scoped continuation, never other homes."""
+    import heapq
     root = Path(root).absolute()
     _scope_parts(scope)
     _authorize_scope(root, scope, authorization_check)
+    if type(limit) is not int or not 1 <= limit <= 40:
+        raise ArchiveBlocked("invalid chat preview limit")
+    if after is not None:
+        _assert_id(after, "preview continuation")
     folder = _private_dir(root, STORE_PARTS + _scope_parts(scope), create=False)
     if folder is None:
-        return {"chats": [], "unavailable": 0, "truncated": False}
-    entries = list(itertools.islice(folder.iterdir(), 513))
-    files = sorted((p for p in entries if p.suffix == ".jsonl" and ID.fullmatch(p.stem)), key=lambda p: p.name)
+        return {"chats": [], "unavailable": 0, "truncated": False, "next_archive": None}
+    files = heapq.nsmallest(limit + 1,
+        (p for p in folder.iterdir() if p.suffix == ".jsonl" and ID.fullmatch(p.stem)
+         and (after is None or p.stem > after)), key=lambda p: p.name)
     result, unavailable = [], 0
-    for path in files[:max(0, min(limit, 40))]:
+    for path in files[:limit]:
         try:
             receipt = placement_receipt(root, path.stem, scope)
             if receipt and (receipt["status"] != "committed" or receipt["to"] != scope):
                 raise ArchiveBlocked("archive is moving")
-            data = _read_move_file(path)
-            header = _strict_json(data.split(b"\n", 1)[0])
-            # Reuse the exact reader rather than treating a directory entry as truth.
+            fd = _regular_open(path, os.O_RDONLY)
+            with os.fdopen(fd, "rb") as stream:
+                header_wire = stream.readline(4097)
+            if len(header_wire) > 4096 or not header_wire.endswith(b"\n"):
+                raise ArchiveBlocked("invalid preview header")
+            header = _strict_json(header_wire)
             archive = ChatArchive(root, scope=scope, authorized_scope=scope,
                 archive_id=path.stem, chat_id=header.get("chat_id"), origin=header.get("origin"),
                 session_id=header.get("session_id"), authorization_check=authorization_check)
@@ -983,5 +991,6 @@ def list_archives(root, scope, authorization_check, *, limit=12):
         receipt = placement_receipt(root, item["archive_id"], scope)
         if receipt and (receipt["status"] != "committed" or receipt["to"] != scope):
             raise ArchiveBlocked("archive placement changed during preview")
-    return {"chats": result, "unavailable": unavailable,
-            "truncated": len(entries) > 512 or len(files) > len(result) + unavailable}
+    more = len(files) > limit
+    return {"chats": result, "unavailable": unavailable, "truncated": more,
+            "next_archive": files[limit - 1].stem if more else None}

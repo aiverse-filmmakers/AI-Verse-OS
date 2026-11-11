@@ -457,7 +457,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "979483bf98f66700dfb679501dcd60d0f367c94ef7fbb1c1279c620ba39abd32"  # refreshed with the package hashes
+REFLECT_SHA256 = "15d8199874403a71ca785e4b413965328b68f8c8187d88c2ca66ed0fdba7abf0"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -1143,7 +1143,7 @@ class Bridge:
             if source not in allowed:
                 raise Refused("chat source is outside this turn")
             if action == "list":
-                return archive.list_archives(self.root, source, authorize, limit=payload.get("limit", 12))
+                return archive.list_archives(self.root, source, authorize, limit=payload.get("limit", 12), after=payload.get("after"))
             if action == "plan":
                 target = payload.get("to")
                 if target not in allowed:
@@ -2171,6 +2171,7 @@ def main():
     query.add_argument("--session", required=True)
     query.add_argument("--kind", choices=["context", "memory", "capabilities", "connections", "profile"], required=True)
     query.add_argument("--query", default="")
+    query.add_argument("--archive-cursor", help="Exact next_cursor JSON from a previous archive page")
     query.add_argument("--depth", choices=["catalog", "summary", "detail", "source"], default="summary")
     query.add_argument("--scope", help="Read from one of this turn's destinations (or the operator scope); needs --turn and --token")
     query.add_argument("--turn")
@@ -2318,6 +2319,10 @@ def main():
             elif args.kind == "memory":
                 request = {"version": "memory.progressive-recall.v1", "scope": scope, "depth": args.depth,
                            "query": args.query[:4096], "limit": 4, "max_bytes": 8192}
+                if args.archive_cursor is not None:
+                    if len(args.archive_cursor.encode("utf-8")) > 2048:
+                        raise Refused("archive continuation exceeds the safe size limit")
+                    request["archive_cursor"] = strict_loads(args.archive_cursor)
                 if args.depth == "source":
                     raw = stdin_text(65536)
                     if len(raw.encode()) > 65536:

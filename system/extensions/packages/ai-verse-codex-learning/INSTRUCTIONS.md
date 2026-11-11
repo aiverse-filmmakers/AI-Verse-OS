@@ -63,3 +63,13 @@ confirmed plan can be completed with `history recover`; both homes remain
 inaccessible until its verified recovery commits. Source application files are
 never changed. Retained message references resolve only in the chat's current
 authorized home.
+
+
+For Memory queries, `archive_page.complete` describes only the chat search scan.
+If false, chat counts and matches cover one page, not all saved chats. Continue
+with the same depth, query and scope, passing the exact `archive_page.next_cursor`
+JSON through `query --archive-cursor`, until complete before claiming nothing was
+found. A new query starts a fresh scan. Do not use an archive cursor for exact
+source reads. New messages or placements during a scan may require a fresh scan.
+The tidy preview also rotates through scoped chats in bounded pages so it does
+not repeatedly inspect only the first few chats.

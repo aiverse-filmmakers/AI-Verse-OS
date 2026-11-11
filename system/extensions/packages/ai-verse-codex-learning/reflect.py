@@ -369,8 +369,19 @@ class Tidy:
             try:
                 own = turn.get("scope") or state.get("scope") or "operator"
                 previews = []
+                cursors = data.get("chat_review_cursors", {})
+                updated_cursors = {}
                 for selected in dict.fromkeys((own, "operator")):
-                    previews.append(self.b.history("list", {"from": selected, "limit": 4}, session, turn_id, token))
+                    preview = self.b.history("list", {"from": selected, "limit": 4,
+                        "after": cursors.get(selected)}, session, turn_id, token)
+                    previews.append(preview)
+                    updated_cursors[selected] = preview.get("next_archive")
+                with self.locked():
+                    current = self.load()
+                    lease = current.get("lease") or {}
+                    if (lease.get("session"), lease.get("turn")) == (session, turn_id):
+                        current.setdefault("chat_review_cursors", {}).update(updated_cursors)
+                        self.store(current)
                 out["chat_placement"] = {
                     "previews": previews,
                     "instruction": "Review these chat homes too. Mixed chats stay here. Propose a different home only "

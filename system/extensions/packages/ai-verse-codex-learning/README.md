@@ -217,3 +217,17 @@ source rows stay within the archive's shared capacity, and partial tails are
 retried without committing provisional text. Prefix integrity is hashed while
 streaming. The older disabled historical import retains its original snapshot
 limit and admission gates.
+
+
+Archive discovery now returns an explicit bounded page and continuation instead
+of rejecting the entire history after 128 chats or 40,000 combined messages.
+Each page keeps those existing content-read bounds. The continuation is bound
+to the same query and currently visible homes; changing either refuses it.
+Individual file-size, integrity and message-count limits still apply. Directory
+names are streamed into a bounded selection heap, and unowned junk entries keep
+a separate refusal budget. Counts describe the current page. Continue until
+`archive_page.complete` before concluding that no saved chat matches. Start a
+fresh scan to pick up new messages or placement changes during a scan. Tidying
+also rotates bounded previews through later chats instead of stopping at the
+first few. Old source references pass the OS's permission check using their
+owner-resolved current home, with another Memory check before exact disclosure.

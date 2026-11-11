@@ -55,6 +55,20 @@ class ChatPlacementTests(unittest.TestCase):
         self.assertNotEqual(a.placement_key('operator', chat.archive_id),
                             a.placement_key('workspace:music', chat.archive_id))
 
+    def test_tidy_preview_pages_visit_later_chats_without_other_project_content(self):
+        first, check, _ = self.prepare()
+        second = self.archive(archive_id='portable-chat-b')
+        second.append(event(text='later Personal chat'))
+        private = self.archive(scope='workspace:music', archive_id='portable-chat-c')
+        private.append(event(text='unrelated hidden music chat'))
+        page = a.list_archives(self.root, 'operator', check, limit=1)
+        self.assertTrue(page['truncated'])
+        self.assertEqual(page['chats'][0]['archive_id'], first.archive_id)
+        continued = a.list_archives(self.root, 'operator', check, limit=1, after=page['next_archive'])
+        self.assertFalse(continued['truncated'])
+        self.assertEqual(continued['chats'][0]['excerpt'], 'later Personal chat')
+        self.assertNotIn('unrelated hidden music chat', str(page) + str(continued))
+
     def test_stale_preview_and_revoked_destination_never_move(self):
         chat, check, plan = self.prepare()
         chat.append(event('later', sequence=2, offset=100, end=200))

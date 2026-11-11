@@ -459,6 +459,7 @@ class AIverseOSHost:
             "limit",
             "max_bytes",
             "evidence_ref",
+            "archive_cursor",
         }
         extras = set(payload) - allowed
         required = {"version", "depth", "scope"}
@@ -516,9 +517,24 @@ class AIverseOSHost:
                 raise AdapterError(
                     "progressive source depth requires evidence_ref from a prior detail item"
                 )
-            self._validate_progressive_evidence_scope(scope, evidence_ref)
+            if evidence_ref.get("record_type") == "portable_chat_message":
+                self._validate_scope(evidence_ref.get("scope"))
+                self._validate_progressive_evidence_scope(scope, {**evidence_ref, "scope": scope})
+            else:
+                self._validate_progressive_evidence_scope(scope, evidence_ref)
         elif evidence_ref is not None:
             raise AdapterError("progressive evidence_ref is only valid for source depth")
+
+        archive_cursor = payload.get("archive_cursor")
+        if archive_cursor is not None:
+            if not isinstance(archive_cursor, Mapping) or depth == "source":
+                raise AdapterError("archive continuation requires catalog, summary or detail depth")
+            try:
+                cursor_bytes = json.dumps(archive_cursor, allow_nan=False).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise AdapterError("archive continuation must be JSON-safe") from exc
+            if len(cursor_bytes) > 2048:
+                raise AdapterError("archive continuation exceeds the safe size limit")
 
         entry = self._extension_entry("ai-verse-memory")
         if entry is None:
@@ -534,6 +550,17 @@ class AIverseOSHost:
 
         mode = memory.detect_mode(self.root)
         try:
+            if depth == "source" and evidence_ref.get("record_type") == "portable_chat_message":
+                resolver = getattr(memory, "resolve_portable_chat_scope", None)
+                if callable(resolver):
+                    current_scope = resolver(evidence_ref, scope=scope, root=self.root, mode=mode)
+                    self._validate_progressive_evidence_scope(scope, {**evidence_ref, "scope": current_scope})
+                else:
+                    self._validate_progressive_evidence_scope(scope, evidence_ref)
+            if archive_cursor is not None:
+                import inspect
+                if "archive_cursor" not in inspect.signature(progressive).parameters:
+                    raise AdapterError("installed Memory does not support archive continuation")
             result = progressive(
                 query,
                 version=version,
@@ -542,6 +569,7 @@ class AIverseOSHost:
                 limit=limit,
                 max_bytes=max_bytes,
                 evidence_ref=dict(evidence_ref) if evidence_ref is not None else None,
+                **({"archive_cursor": dict(archive_cursor)} if archive_cursor is not None else {}),
                 root=self.root,
                 mode=mode,
             )

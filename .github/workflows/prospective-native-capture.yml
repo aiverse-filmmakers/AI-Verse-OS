@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aiverse-filmmakers/AI-Verse-Memory
-          ref: 9a17aa72cef9197280ec72056bdf62872e06cc71
+          ref: 735d6ffb9878e61b2f53a46d59d3105c0bc98779
           path: native-proof-memory
           persist-credentials: false
       - name: Prove actual native transcript against a local synthetic model
@@ -75,7 +75,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aiverse-filmmakers/AI-Verse-Memory
-          ref: 9a17aa72cef9197280ec72056bdf62872e06cc71
+          ref: 735d6ffb9878e61b2f53a46d59d3105c0bc98779
           path: native-proof-memory
           persist-credentials: false
       - name: Prove native Claude transcript against a local synthetic model

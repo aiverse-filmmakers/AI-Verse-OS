@@ -14,6 +14,8 @@ from claude_capture import CaptureBlocked, _supplied_source
 from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES
 
 PROTOCOL = "native-transcript-prospective/v1"
+CODEX_VERSIONS = {"0.167.0", "0.167.0-alpha.3.2"}
+CLAUDE_VERSIONS = {"2.1.316"}
 
 
 def _digest(raw):
@@ -147,6 +149,12 @@ def capture(bridge, event):
             if bridge.harness == "codex":
                 if not rows or rows[0][2].get("type") != "session_meta" or rows[0][2].get("payload", {}).get("id") != session:
                     raise CaptureBlocked("native session metadata mismatch")
+                if rows[0][2]["payload"].get("cli_version") not in CODEX_VERSIONS:
+                    raise CaptureBlocked("native Codex version not qualified")
+            if bridge.harness == "claude":
+                if any(_text(row, "claude") and row.get("version") not in CLAUDE_VERSIONS
+                       for _, _, row in rows):
+                    raise CaptureBlocked("native Claude version not qualified")
             if not boundary:
                 pending = state.get("chat_history_pending")
                 if pending != {"session": session, "scope": scope, "harness": bridge.harness}:

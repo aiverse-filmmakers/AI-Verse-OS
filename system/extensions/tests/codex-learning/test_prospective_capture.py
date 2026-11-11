@@ -40,7 +40,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
                       'source': 'startup'}
         self.source.write_bytes(b'')
     def append(self, role, text, **more):
-        row = {'type': role, 'sessionId': 'session', 'message': {'role': role, 'content': text}, **more}
+        row = {'type': role, 'version': '2.1.316', 'sessionId': 'session', 'message': {'role': role, 'content': text}, **more}
         with self.source.open('ab') as f: f.write(json.dumps(row, ensure_ascii=False).encode() + b'\n')
     def files(self): return list((self.root / 'archives').rglob('*.jsonl'))
     def messages(self):
@@ -75,7 +75,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
     def test_partial_tail_is_retried_without_duplicates(self):
         capture.capture(self.host, self.event)
         self.append('user', 'complete')
-        data = json.dumps({'type': 'assistant', 'sessionId': 'session', 'message': {'role': 'assistant', 'content': 'later'}}).encode()
+        data = json.dumps({'type': 'assistant', 'version': '2.1.316', 'sessionId': 'session', 'message': {'role': 'assistant', 'content': 'later'}}).encode()
         with self.source.open('ab') as f: f.write(data[:15])
         self.event['hook_event_name'] = 'Stop'
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'pending')
@@ -110,7 +110,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.host.harness = 'codex'
         self.source = self.root / 'rollout-session.jsonl'
         self.event['transcript_path'] = str(self.source)
-        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cwd': str(self.root)}}) + '\n')
+        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cli_version': '0.167.0', 'cwd': str(self.root)}}) + '\n')
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
         rows = [
           {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'injected context'}]}},

@@ -3,13 +3,13 @@
   "id": "ai-verse-codex-learning",
   "version": "0.3.0-local",
   "files": {
-    "bridge.py": "4783da688db962398ea5053e9c65059a0304859357f4cc42bec6a2dc43d9e5df",
+    "bridge.py": "a0d1a2851e2195eb5b5824d1bc683d8fb7719b4a68614441df18590ad4e241e0",
     "lifecycle.py": "f3c4bf7096b780aadfa50992c8db19f2828b9ce71c840e658196476982974281",
     "install.py": "3b7546e99e8c52cb88309c20ae33e04e0d88fdf32d3d7257ddac7b4abff21e8b",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",
     "inspect_runtime.py": "1b5810e3e323e0432fb1f9f7db8fe6b31e3c16c3fc11dcd9a6edc0d2ac357538",
-    "INSTRUCTIONS.md": "7c2de6ffa66cb588709e89ba1ce69f2fb613157a64aace421f64678cb8ce9e4d",
-    "README.md": "ab2b8f3cbf9768dfedfea68c2c6861b318f7507dee126bfef7cb0e34ace38230",
+    "INSTRUCTIONS.md": "b6fbf8b09b6bedf4078948ce43c4b539d8e52e4bacc0cb994c2a54ba9be00407",
+    "README.md": "014ca782119fca0f1db1f9067eac06ae09dec4912965f03df27bc7c02b897323",
     "REVIEW-SCHEMA.md": "dab55c2e014be5227d0982d20b04bc3891cff7234e91303acbe0d80579f804ca",
     "SETUP.md": "453eec67ef63afb20d39086af0ef2aeec3cb8dd46a6c245f9f5512ffc74666f5",
     "intent.py": "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49",
@@ -17,8 +17,8 @@
     "INTENT.md": "661cdd1983800d8eb389380d3c4943b56c5f25adff0a7ffde9a8068fa0d4702d",
     "reflect.py": "15d8199874403a71ca785e4b413965328b68f8c8187d88c2ca66ed0fdba7abf0",
     "claude_transcript.py": "d41155882c3399619977563cec302b62c4fcf99d09913f29612bd6bd26727695",
-    "chat_archive.py": "6c9f8eb4778e1f2b5a41bd323a94e70b20c570e058e24c690d871a5d155fe1d0",
+    "chat_archive.py": "3aba0eaa173206a914366f97c50326b9048e3aa908a5c77f443aa8ddb52d9566",
     "claude_capture.py": "a8d49e018e590800037945f203ed2c0a75baf445e47f5b60a4ab4cc8dfb8d0f2",
-    "prospective_capture.py": "e7ddbe4b8024b85cf1ef8bcbff2ea32c43510c516a6dd1347768b95d4cc39a17"
+    "prospective_capture.py": "9dc982effa7e5c30049ab15f15aacb00499191cfbefc673bc219dfbf700e2e77"
   }
 }

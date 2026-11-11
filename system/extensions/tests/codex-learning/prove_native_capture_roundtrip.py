@@ -18,6 +18,7 @@ OS_ROOT = PACKAGE.parents[3]
 sys.path.insert(0, str(PACKAGE))
 import bridge
 from lifecycle import claude_definition
+from native_pending_proof import durable_prompt, kill_before_reply, verify_copied_pending
 
 
 def prepare(root, memory_source):
@@ -63,6 +64,12 @@ def main():
         memory = prepare(root, Path(sys.argv[2]).resolve())
         from native_mock_anthropic import Mock
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Mock)
+        def check_active_prompt():
+            if getattr(server, 'active_prompt_checked', False):
+                return
+            server.active_prompt_checked = True
+            server.active_prompt_saved = durable_prompt(root, 'portable-claude-proof-prompt')
+        server.before_model = check_active_prompt
         threading.Thread(target=server.serve_forever, daemon=True).start()
         home = base / 'home'
         config = base / 'claude'
@@ -90,10 +97,15 @@ def main():
             # user text is a new message, never content-deduplicated history.
             resumed = ['--resume' if arg == '--session-id' else arg for arg in command]
             result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            if result.returncode:
+                raise SystemExit('resumed native conversation failed')
+            crash_prompt = 'durable prompt before killed native reply café 🧪'
+            kill_before_reply([*resumed[:-1], crash_prompt], root, env, server, crash_prompt)
         finally:
             server.shutdown()
         if result.returncode != 0 or 'portable-claude-proof-reply' not in result.stdout:
             raise SystemExit('native synthetic conversation failed')
+        assert getattr(server, 'active_prompt_saved', False), 'first user prompt must be durable in the OS before the model replies'
         files = list((root / 'archives/private-chat-history/v1').rglob('*.jsonl'))
         if len(files) != 1:
             # Content-free diagnostics are sufficient to debug dispatch and permissions.
@@ -103,7 +115,10 @@ def main():
                     print(file.read_text()[-4000:])
             raise SystemExit('native lifecycle did not create exactly one private archive')
         messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
-        assert [row['text'] for row in messages] == ['portable-claude-proof-prompt', 'portable-claude-proof-reply'] * 2
+        assert [row['text'] for row in messages[:4]] == ['portable-claude-proof-prompt', 'portable-claude-proof-reply'] * 2
+        assert len(messages) in {4, 5}
+        if len(messages) == 5:
+            assert messages[4]['role'] == 'user' and messages[4]['text'] == crash_prompt
         copied = base / 'copied-os'
         shutil.copytree(root, copied)
         shutil.rmtree(root)
@@ -123,6 +138,7 @@ source = memory.progressive_recall('portable-claude-proof-reply', depth='source'
 assert source['exact_evidence'] and source['source']['content'] == 'portable-claude-proof-reply'
 """
         subprocess.run([sys.executable, '-c', reader], cwd=copied, env=env, check=True, timeout=30)
+        verify_copied_pending(copied, env, crash_prompt)
         print('PASS: actual native hooks archived the exact chat; Memory read its original reply from a copied folder after provider history removal')
 
 

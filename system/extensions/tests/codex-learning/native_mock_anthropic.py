@@ -15,6 +15,9 @@ class Mock(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"input_tokens":1}')
             return
+        before_model = getattr(self.server, 'before_model', None)
+        if before_model is not None:
+            before_model()
         expected = getattr(self.server, 'expected_context', None)
         if expected:
             self.server.context_features = {

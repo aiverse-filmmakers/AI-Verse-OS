@@ -365,6 +365,19 @@ class Tidy:
                 out["attention"] = attention
         except (self.m.Refused, OSError, ValueError):
             pass
+        if self.b.config.get("chat_history") == "prospective":
+            try:
+                own = turn.get("scope") or state.get("scope") or "operator"
+                previews = []
+                for selected in dict.fromkeys((own, "operator")):
+                    previews.append(self.b.history("list", {"from": selected, "limit": 4}, session, turn_id, token))
+                out["chat_placement"] = {
+                    "previews": previews,
+                    "instruction": "Review these chat homes too. Mixed chats stay here. Propose a different home only "
+                        "when the conversation clearly belongs there, then use history plan and ask the operator to "
+                        "confirm its exact fingerprint before history move. Never move from inference alone."}
+            except (self.m.Refused, OSError, ValueError):
+                out["chat_placement"] = {"status": "unavailable", "changed": False}
         while len(str(out).encode()) > MAX_BYTES and out["items"]:
             out["items"].pop()
             out["truncated"] = True
@@ -732,7 +745,8 @@ class Tidy:
         elsewhere = sum(1 for a in applied["applied"] if not self.can_see(actions[a], turn))
         return {"pass": "all", "checked": planned["checked"], "changed": len(applied["applied"]) - elsewhere,
                 "changed_in_other_projects": elsewhere, "more_to_check": done["more_to_check"],
-                "left_for_later": len(applied["left_for_later"])}
+                "left_for_later": len(applied["left_for_later"]),
+                **({"chat_placement": planned["chat_placement"]} if "chat_placement" in planned else {})}
 
     # ---------------------------------------------------------------- undo
     def undo(self, session, turn_id, token, note_id, item, mode="undo"):

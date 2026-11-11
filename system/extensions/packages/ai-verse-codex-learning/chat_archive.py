@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import stat
+import tempfile
 from typing import Callable, Optional, Tuple
 
 SCHEMA = "ai-verse.chat-archive/v1"
@@ -386,38 +387,13 @@ class ChatArchive:
         # Refuse invalid initial bindings as well as later revocations.
         self._check_authorization()
 
-    def _check_authorization(self) -> None:
-        # The caller supplies an OS-authoritative live checker, not a static
-        # constructor approval. No provider or private OS state is discovered.
-        # The host must bind this checker to its authenticated session.
-        _check_path_ancestors(self.root)
-        _no_symlink(self.root / "AI-VERSE.yaml", kind="file")
-        try:
-            authorized = self.authorization_check(self.scope) is True
-        except Exception:
-            authorized = False
-        if not authorized:
-            raise ArchiveBlocked("current scope authorization denied")
-        if self.scope.startswith("workspace:"):
-            ws = self.scope.partition(":")[2]
-            workspace_root = self.root / "workspaces"
-            _no_symlink(workspace_root, kind="directory")
-            workspace_dir = workspace_root / ws
-            _no_symlink(workspace_dir, kind="directory")
-            manifest = workspace_dir / "WORKSPACE.yaml"
-            _no_symlink(manifest, kind="file")
-            ids = []
-            try:
-                for line in manifest.read_text(encoding="utf-8").splitlines():
-                    match = re.fullmatch(
-                        r"id:\s*['\"]?([a-z0-9][a-z0-9-]{0,127})['\"]?\s*(?:#.*)?", line
-                    )
-                    if match:
-                        ids.append(match.group(1))
-            except (OSError, UnicodeError):
-                raise ArchiveBlocked("workspace manifest is unreadable") from None
-            if ids != [ws]:
-                raise ArchiveBlocked("current workspace manifest ID does not match scope")
+    def _check_authorization(self, *, write=False) -> None:
+        _authorize_scope(self.root, self.scope, self.authorization_check)
+        placement = placement_receipt(self.root, self.archive_id, self.scope)
+        if placement and (placement["status"] != "committed" or placement["to"] != self.scope):
+            raise ArchiveBlocked("archive placement changed or is moving")
+        if placement and write:
+            raise ArchiveBlocked("relocated archive is closed to capture")
 
     def _path(self, *, create: bool) -> Optional[Path]:
         folder = _private_dir(self.root, self.parts, create=create)
@@ -431,9 +407,11 @@ class ChatArchive:
         fd = _regular_open(path, os.O_RDONLY)
         try:
             with os.fdopen(fd, "rb") as stream:
-                messages, torn, _, has_header = _scan(
-                    stream.read(MAX_ARCHIVE_BYTES + 1), self.header
-                )
+                data = stream.read(MAX_ARCHIVE_BYTES + 1)
+                messages, torn, _, has_header = _scan(data, self.header)
+                placement = placement_receipt(self.root, self.archive_id, self.scope)
+                if placement and _sha256(data) != placement["target_sha256"]:
+                    raise ArchiveBlocked("relocated archive was changed")
         except OSError as exc:
             raise ArchiveBlocked("cannot read archive") from exc
         # Recheck after reading and before returning any private content.
@@ -453,7 +431,7 @@ class ChatArchive:
         repeated quadratic full-file scans into one linear scan and fsync per
         callback. The archive remains byte-compatible v1 JSONL.
         """
-        self._check_authorization()
+        self._check_authorization(write=True)
         if not isinstance(events, (tuple, list)) or len(events) > MAX_BATCH_EVENTS:
             raise ArchiveBlocked("invalid or oversized batch")
         payloads = []
@@ -497,7 +475,7 @@ class ChatArchive:
                 return BatchReceipt("saved", self.archive_id, 0, 0, 0, 0, "")
         path = self._path(create=True)
         with _writer_lock(path.with_suffix(".lock")):
-            self._check_authorization()
+            self._check_authorization(write=True)
             if path.exists() or path.is_symlink():
                 fd = _regular_open(path, os.O_RDWR)
                 try:
@@ -528,7 +506,7 @@ class ChatArchive:
                 if new_records:
                     # A validation conflict anywhere in the new suffix was
                     # refused above, before the first write or tail recovery.
-                    self._check_authorization()
+                    self._check_authorization(write=True)
                     wire = (b"" if has_header else _json_bytes(self.header) + b"\n")
                     wire += b"".join(_json_bytes(p) + b"\n" for p in new_records)
                     # Budget failure must not truncate even a torn tail.
@@ -541,7 +519,7 @@ class ChatArchive:
                     os.lseek(fd, 0, os.SEEK_END)
                     _write_all(fd, wire)
                     os.fsync(fd)
-                self._check_authorization()
+                self._check_authorization(write=True)
             except OSError as exc:
                 raise ArchiveBlocked("archive batch write or checkpoint failed") from exc
             finally:
@@ -556,7 +534,7 @@ class ChatArchive:
         )
 
     def append(self, event: ArchiveEvent) -> AppendReceipt:
-        self._check_authorization()
+        self._check_authorization(write=True)
         if not isinstance(event, ArchiveEvent):
             raise ArchiveBlocked("expected a normalized ArchiveEvent")
         _assert_id(event.source_event_id, "source event ID")
@@ -608,7 +586,7 @@ class ChatArchive:
         with _writer_lock(path.with_suffix(".lock")):
             # A queued writer cannot use stale authorization after waiting
             # for another writer. Recheck before any bytes are changed.
-            self._check_authorization()
+            self._check_authorization(write=True)
             if path.exists() or path.is_symlink():
                 fd = _regular_open(path, os.O_RDWR)
                 try:
@@ -670,3 +648,340 @@ class ChatArchive:
                 os.close(fd)
         return AppendReceipt("saved", self.archive_id, event.source_event_id,
                              recovered_torn_tail=bool(torn))
+
+def _authorize_scope(root, scope, authorization_check):
+    # The caller supplies an OS-authoritative live checker, not a static
+    # constructor approval. No provider or private OS state is discovered.
+    # The host must bind this checker to its authenticated session.
+    _check_path_ancestors(root)
+    _no_symlink(root / "AI-VERSE.yaml", kind="file")
+    try:
+        authorized = authorization_check(scope) is True
+    except Exception:
+        authorized = False
+    if not authorized:
+        raise ArchiveBlocked("current scope authorization denied")
+    if scope.startswith("workspace:"):
+        ws = scope.partition(":")[2]
+        workspace_root = root / "workspaces"
+        _no_symlink(workspace_root, kind="directory")
+        workspace_dir = workspace_root / ws
+        _no_symlink(workspace_dir, kind="directory")
+        manifest = workspace_dir / "WORKSPACE.yaml"
+        _no_symlink(manifest, kind="file")
+        ids = []
+        try:
+            for line in manifest.read_text(encoding="utf-8").splitlines():
+                match = re.fullmatch(
+                    r"id:\s*['\"]?([a-z0-9][a-z0-9-]{0,127})['\"]?\s*(?:#.*)?", line
+                )
+                if match:
+                    ids.append(match.group(1))
+        except (OSError, UnicodeError):
+            raise ArchiveBlocked("workspace manifest is unreadable") from None
+        if ids != [ws]:
+            raise ArchiveBlocked("current workspace manifest ID does not match scope")
+
+
+def placement_key(scope, archive_id):
+    _scope_parts(scope)
+    _assert_id(archive_id, "archive ID")
+    return _sha256((scope + "\0" + archive_id).encode("utf-8"))
+
+
+PLACEMENT_SCHEMA = "ai-verse.chat-placement/v1"
+MAX_PLACEMENT_BYTES = 64_000
+
+
+def placement_receipt(root: Path, archive_id: str, scope: str):
+    """Current OS-owned location; a moving receipt denies every disclosure."""
+    _assert_id(archive_id, "archive ID")
+    folder = _private_dir(root, STORE_PARTS + ("placements",), create=False)
+    if folder is None:
+        return None
+    key = placement_key(scope, archive_id)
+    routes = _private_dir(root, STORE_PARTS + ("placements", "routes"), create=False)
+    route_path = routes / (key + ".json") if routes else None
+    if route_path is not None and (route_path.exists() or route_path.is_symlink()):
+        fd = _regular_open(route_path, os.O_RDONLY)
+        with os.fdopen(fd, "rb") as stream:
+            route = _strict_json(stream.read(4097))
+        if (set(route) != {"schema", "scope", "archive_id", "placement_id"}
+                or route["schema"] != "ai-verse.chat-route/v1" or route["scope"] != scope
+                or route["archive_id"] != archive_id or not isinstance(route["placement_id"], str)
+                or not SHA.fullmatch(route["placement_id"])):
+            raise ArchiveBlocked("invalid placement route")
+        key = route["placement_id"]
+    path = folder / (key + ".json")
+    if not path.exists() and not path.is_symlink():
+        return None
+    fd = _regular_open(path, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as stream:
+        data = stream.read(MAX_PLACEMENT_BYTES + 1)
+    if len(data) > MAX_PLACEMENT_BYTES:
+        raise ArchiveBlocked("placement receipt exceeds budget")
+    receipt = _strict_json(data)
+    if (set(receipt) != {"schema", "archive_id", "status", "from", "to", "previous_scopes",
+                         "source_sha256", "target_sha256", "fingerprint", "header", "home_scope", "placement_id"}
+            or receipt["schema"] != PLACEMENT_SCHEMA or receipt["archive_id"] != archive_id
+            or receipt["status"] not in {"moving", "committed"}
+            or not isinstance(receipt["previous_scopes"], list)
+            or any(not isinstance(v, str) or not SCOPE.fullmatch(v)
+                   for v in [receipt["home_scope"], receipt["from"], receipt["to"], *receipt["previous_scopes"]])
+            or any(not isinstance(receipt[k], str) or not SHA.fullmatch(receipt[k])
+                   for k in ("source_sha256", "target_sha256", "fingerprint"))
+            or not isinstance(receipt["header"], dict)
+            or receipt["placement_id"] != key
+            or key != placement_key(receipt["home_scope"], archive_id)
+            or scope not in {receipt["home_scope"], receipt["from"], receipt["to"], *receipt["previous_scopes"]}):
+        raise ArchiveBlocked("invalid placement receipt")
+    return receipt
+
+
+def _atomic_private(path, wire):
+    # Rename within the same verified private directory, then durably commit it.
+    fd, name = tempfile.mkstemp(prefix=".placement-", dir=path.parent)
+    try:
+        _write_all(fd, wire)
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        if path.is_symlink():
+            raise ArchiveBlocked("symlink placement target refused")
+        os.replace(name, path)
+        _sync_directory(path.parent)
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _sync_directory(path):
+    if os.name != "nt":
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def _scope_parts(scope):
+    if not isinstance(scope, str) or not SCOPE.fullmatch(scope):
+        raise ArchiveBlocked("invalid archive scope")
+    return ("operator",) if scope == "operator" else ("workspaces", scope.partition(":")[2])
+
+
+def _move_path(root, scope, archive_id, *, create=False):
+    folder = _private_dir(root, STORE_PARTS + _scope_parts(scope), create=create)
+    return None if folder is None else folder / (archive_id + ".jsonl")
+
+
+def _read_move_file(path):
+    if path is None:
+        raise ArchiveBlocked("archive is absent")
+    fd = _regular_open(path, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as stream:
+        data = stream.read(MAX_ARCHIVE_BYTES + 1)
+    if not data or len(data) > MAX_ARCHIVE_BYTES or not data.endswith(b"\n"):
+        raise ArchiveBlocked("only a complete bounded archive can move")
+    return data
+
+
+def _relocated(data, archive_id, source_scope, destination_scope):
+    header = _strict_json(data.split(b"\n", 1)[0])
+    if (set(header) != {"kind", "schema", "archive_id", "chat_id", "origin", "session_id", "scope"}
+            or header.get("kind") != "header" or header.get("schema") != SCHEMA
+            or header.get("archive_id") != archive_id or header.get("scope") != source_scope):
+        raise ArchiveBlocked("move source identity mismatch")
+    for name in ("archive_id", "chat_id", "origin", "session_id"):
+        _assert_id(header[name], name)
+    messages, torn, _, valid = _scan(data, header)
+    if torn or not valid:
+        raise ArchiveBlocked("incomplete move source")
+    moved_header = {**header, "scope": destination_scope}
+    moved = [_json_bytes(moved_header)]
+    for message in messages:
+        record = {**message, "scope": destination_scope}
+        record.pop("archive_record_sha256")
+        record["archive_record_sha256"] = _sha256(_json_bytes(record))
+        moved.append(_json_bytes(record))
+    wire = b"\n".join(moved) + b"\n"
+    if len(wire) > MAX_ARCHIVE_BYTES:
+        raise ArchiveBlocked("relocated archive exceeds shared size budget")
+    return header, wire, len(messages)
+
+
+def plan_move(root, archive_id, source_scope, destination_scope, authorization_check):
+    """Read-only preview, content-free and bound to exact current source bytes."""
+    root = Path(root).absolute()
+    _assert_id(archive_id, "archive ID")
+    if source_scope == destination_scope:
+        raise ArchiveBlocked("archive already has this home")
+    for scope in (source_scope, destination_scope):
+        _scope_parts(scope)
+        _authorize_scope(root, scope, authorization_check)
+    receipt = placement_receipt(root, archive_id, source_scope)
+    if receipt and (receipt["status"] != "committed" or receipt["to"] != source_scope):
+        raise ArchiveBlocked("archive placement changed or is moving")
+    source = _move_path(root, source_scope, archive_id)
+    data = _read_move_file(source)
+    if receipt and _sha256(data) != receipt["target_sha256"]:
+        raise ArchiveBlocked("relocated archive was changed")
+    header, wire, count = _relocated(data, archive_id, source_scope, destination_scope)
+    destination = _move_path(root, destination_scope, archive_id)
+    if destination is not None and (destination.exists() or destination.is_symlink()):
+        raise ArchiveBlocked("destination archive already exists")
+    plan = {"archive_id": archive_id, "from": source_scope, "to": destination_scope,
+            "source_sha256": _sha256(data), "target_sha256": _sha256(wire), "messages": count}
+    plan["fingerprint"] = _sha256(_json_bytes(plan))
+    for scope in (source_scope, destination_scope):
+        _authorize_scope(root, scope, authorization_check)
+    return plan
+
+
+def move_archive(root, archive_id, source_scope, destination_scope, *,
+                 fingerprint, confirmed, authorization_check):
+    """Confirmed OS move. Source provider files are never inspected or moved."""
+    if confirmed is not True or not isinstance(fingerprint, str) or not SHA.fullmatch(fingerprint):
+        raise ArchiveBlocked("explicit move preview confirmation required")
+    root = Path(root).absolute()
+    _assert_id(archive_id, "archive ID")
+    for scope in (source_scope, destination_scope):
+        _scope_parts(scope)
+        _authorize_scope(root, scope, authorization_check)
+    folder = _private_dir(root, STORE_PARTS + ("placements",), create=True)
+    with _writer_lock(folder / "moves.lock"):
+        source = _move_path(root, source_scope, archive_id)
+        if source is None:
+            raise ArchiveBlocked("archive is absent")
+        with _writer_lock(source.with_suffix(".lock")):
+            plan = plan_move(root, archive_id, source_scope, destination_scope, authorization_check)
+            if plan["fingerprint"] != fingerprint:
+                raise ArchiveBlocked("move preview is stale")
+            data = _read_move_file(source)
+            header, wire, _ = _relocated(data, archive_id, source_scope, destination_scope)
+            if _sha256(data) != plan["source_sha256"] or _sha256(wire) != plan["target_sha256"]:
+                raise ArchiveBlocked("move source changed")
+            previous = placement_receipt(root, archive_id, source_scope)
+            home_scope = previous["home_scope"] if previous else source_scope
+            key = placement_key(home_scope, archive_id)
+            destination_route = placement_receipt(root, archive_id, destination_scope)
+            if destination_route and destination_route["placement_id"] != key:
+                raise ArchiveBlocked("destination identity belongs to another chat")
+            receipt = {k: plan[k] for k in ("archive_id", "from", "to", "source_sha256", "target_sha256", "fingerprint")}
+            receipt.update(schema=PLACEMENT_SCHEMA, status="moving", header=header,
+                           home_scope=home_scope, placement_id=key,
+                           previous_scopes=list(dict.fromkeys([*(previous["previous_scopes"] if previous else []), source_scope])))
+            if len(_json_bytes(receipt)) > MAX_PLACEMENT_BYTES:
+                raise ArchiveBlocked("placement receipt exceeds budget")
+            # First deny both homes. A crash after this point needs explicit recovery.
+            _atomic_private(folder / (key + ".json"), _json_bytes(receipt) + b"\n")
+            routes = _private_dir(root, STORE_PARTS + ("placements", "routes"), create=True)
+            for selected in (source_scope, destination_scope):
+                route = {"schema": "ai-verse.chat-route/v1", "scope": selected,
+                         "archive_id": archive_id, "placement_id": key}
+                _atomic_private(routes / (placement_key(selected, archive_id) + ".json"),
+                                _json_bytes(route) + b"\n")
+            return _finish_move(root, receipt, authorization_check)
+
+
+def _finish_move(root, receipt, authorization_check):
+    for scope in (receipt["from"], receipt["to"]):
+        _authorize_scope(root, scope, authorization_check)
+    routes = _private_dir(root, STORE_PARTS + ("placements", "routes"), create=True)
+    for selected in (receipt["from"], receipt["to"]):
+        old = placement_receipt(root, receipt["archive_id"], selected)
+        if old and old["placement_id"] != receipt["placement_id"]:
+            raise ArchiveBlocked("move recovery route conflict")
+        route = {"schema": "ai-verse.chat-route/v1", "scope": selected,
+                 "archive_id": receipt["archive_id"], "placement_id": receipt["placement_id"]}
+        _atomic_private(routes / (placement_key(selected, receipt["archive_id"]) + ".json"),
+                        _json_bytes(route) + b"\n")
+    source = _move_path(root, receipt["from"], receipt["archive_id"])
+    target = _move_path(root, receipt["to"], receipt["archive_id"], create=True)
+    with _writer_lock(target.with_suffix(".lock")):
+        if source is not None and (source.exists() or source.is_symlink()):
+            data = _read_move_file(source)
+            if _sha256(data) != receipt["source_sha256"]:
+                raise ArchiveBlocked("move recovery source changed")
+            header, wire, _ = _relocated(data, receipt["archive_id"], receipt["from"], receipt["to"])
+            if header != receipt["header"] or _sha256(wire) != receipt["target_sha256"]:
+                raise ArchiveBlocked("move recovery binding changed")
+        elif target.exists() and not target.is_symlink():
+            wire = _read_move_file(target)
+            if _sha256(wire) != receipt["target_sha256"]:
+                raise ArchiveBlocked("move recovery target changed")
+        else:
+            raise ArchiveBlocked("move recovery has no verified source")
+        if target.exists() or target.is_symlink():
+            if _read_move_file(target) != wire:
+                raise ArchiveBlocked("move recovery target conflict")
+        else:
+            _atomic_private(target, wire)
+        for scope in (receipt["from"], receipt["to"]):
+            _authorize_scope(root, scope, authorization_check)
+        if source is not None and source.exists():
+            source.unlink()
+            _sync_directory(source.parent)
+        receipt = {**receipt, "status": "committed"}
+        folder = _private_dir(root, STORE_PARTS + ("placements",), create=False)
+        _atomic_private(folder / (receipt["placement_id"] + ".json"), _json_bytes(receipt) + b"\n")
+        return {"status": "moved", "archive_id": receipt["archive_id"], "scope": receipt["to"]}
+
+
+def recover_move(root, archive_id, *, source_scope, fingerprint, confirmed, authorization_check):
+    """Finish only the exact interrupted, previously confirmed transaction."""
+    if confirmed is not True:
+        raise ArchiveBlocked("explicit move recovery confirmation required")
+    root = Path(root).absolute()
+    _assert_id(archive_id, "archive ID")
+    folder = _private_dir(root, STORE_PARTS + ("placements",), create=False)
+    if folder is None:
+        raise ArchiveBlocked("no interrupted move")
+    with _writer_lock(folder / "moves.lock"):
+        receipt = placement_receipt(root, archive_id, source_scope)
+        if receipt is None or receipt["fingerprint"] != fingerprint or receipt["status"] != "moving":
+            raise ArchiveBlocked("no matching interrupted move")
+        source = _move_path(root, receipt["from"], archive_id)
+        if source is None:
+            raise ArchiveBlocked("move source directory absent")
+        with _writer_lock(source.with_suffix(".lock")):
+            return _finish_move(root, receipt, authorization_check)
+
+
+def list_archives(root, scope, authorization_check, *, limit=12):
+    """Bounded tidy preview for one currently authorized home only."""
+    import itertools
+    root = Path(root).absolute()
+    _scope_parts(scope)
+    _authorize_scope(root, scope, authorization_check)
+    folder = _private_dir(root, STORE_PARTS + _scope_parts(scope), create=False)
+    if folder is None:
+        return {"chats": [], "unavailable": 0, "truncated": False}
+    entries = list(itertools.islice(folder.iterdir(), 513))
+    files = sorted((p for p in entries if p.suffix == ".jsonl" and ID.fullmatch(p.stem)), key=lambda p: p.name)
+    result, unavailable = [], 0
+    for path in files[:max(0, min(limit, 40))]:
+        try:
+            receipt = placement_receipt(root, path.stem, scope)
+            if receipt and (receipt["status"] != "committed" or receipt["to"] != scope):
+                raise ArchiveBlocked("archive is moving")
+            data = _read_move_file(path)
+            header = _strict_json(data.split(b"\n", 1)[0])
+            # Reuse the exact reader rather than treating a directory entry as truth.
+            archive = ChatArchive(root, scope=scope, authorized_scope=scope,
+                archive_id=path.stem, chat_id=header.get("chat_id"), origin=header.get("origin"),
+                session_id=header.get("session_id"), authorization_check=authorization_check)
+            messages = archive.read().messages
+            result.append({"archive_id": path.stem, "scope": scope, "messages": len(messages),
+                           "excerpt": messages[0]["text"][:240] if messages else ""})
+        except (ArchiveBlocked, OSError, UnicodeError):
+            unavailable += 1
+    _authorize_scope(root, scope, authorization_check)
+    for item in result:
+        receipt = placement_receipt(root, item["archive_id"], scope)
+        if receipt and (receipt["status"] != "committed" or receipt["to"] != scope):
+            raise ArchiveBlocked("archive placement changed during preview")
+    return {"chats": result, "unavailable": unavailable,
+            "truncated": len(entries) > 512 or len(files) > len(result) + unavailable}

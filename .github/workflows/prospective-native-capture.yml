@@ -19,6 +19,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p test_prospective_capture.py -v
+      - run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p test_chat_placement.py -v
   real-codex-transcript:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

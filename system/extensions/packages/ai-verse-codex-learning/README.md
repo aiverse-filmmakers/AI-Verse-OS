@@ -195,3 +195,15 @@ These are native CLI source-format tests, not a claim about every desktop UI
 or third-party harness. Initial secure source collection requires POSIX
 no-follow directory descriptors, available on macOS and Linux. Windows source
 collection remains blocked rather than weakening file checks.
+
+
+Chat tidying now includes a bounded placement review of both Personal and the
+current project. Moves remain preview-first and require the operator's explicit
+confirmation of the exact plan. The OS moves one authoritative transcript,
+preserves its exact text and message identities, and immediately revokes the old
+project's access. Memory can follow an existing message reference into the new
+home only when that destination is currently authorized. A moved chat is closed
+to further capture; start a new chat to record more messages. Interrupted moves
+fail closed until the confirmed recovery finishes. Native provider files are
+never moved or deleted. Chats with identical local IDs in unrelated projects
+retain separate namespaces.

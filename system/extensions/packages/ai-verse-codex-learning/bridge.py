@@ -457,7 +457,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "531450cee91f29f9b021bbe76a6f686fe0860292f48f08778dbca36c2c048148"  # refreshed with the package hashes
+REFLECT_SHA256 = "979483bf98f66700dfb679501dcd60d0f367c94ef7fbb1c1279c620ba39abd32"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -1124,6 +1124,55 @@ class Bridge:
                              "scopes": list(scopes or [turn.get("scope", "operator")]),
                              "secret_like": bool(SECRET.search(text)),
                              **proof(text, min(remaining, self.config["source_max_tokens"]))}
+
+    def history(self, action, payload, session, turn_id, token):
+        """Tidy placement uses original-turn evidence, never an inferred move."""
+        if not self.registered():
+            raise Refused("local helpers are disabled")
+        with self.lock(session):
+            state = self.state(session)
+            turn = self.bound_turn(state, turn_id, token)
+            allowed = verify_capability(self, {"session": session, "turn": turn_id, "token": token})
+            archive = load_module(safe(Path(__file__).with_name("chat_archive.py"), self.root, file=True),
+                                  "_aiverse_chat_placement_owner")
+            def authorize(scope):
+                result = self.owner("archive_authorize", {"scope": scope, "session_id": session,
+                    "operation": "chat.archive.read" if action == "list" else "chat.archive.move"})
+                return result.get("scope") == scope and result.get("decision") == "allow"
+            source = payload.get("from", state["scope"])
+            if source not in allowed:
+                raise Refused("chat source is outside this turn")
+            if action == "list":
+                return archive.list_archives(self.root, source, authorize, limit=payload.get("limit", 12))
+            if action == "plan":
+                target = payload.get("to")
+                if target not in allowed:
+                    raise Refused("chat destination needs the operator's explicit project request")
+                plan = archive.plan_move(self.root, payload.get("archive_id"), source, target, authorize)
+                state["chat_placement_plan"] = plan
+                self.save(state)
+                return {**plan, "confirmation_required": True,
+                        "notice": "Moving closes capture for this native chat. Start a new chat to keep recording."}
+            plan = state.get("chat_placement_plan")
+            if not isinstance(plan, dict) or plan.get("fingerprint") != payload.get("fingerprint"):
+                raise Refused("review the current chat move preview first")
+            if plan["from"] not in allowed:
+                raise Refused("chat move is outside this turn")
+            quote = bounded_text(payload.get("quote"), 1200)
+            if payload.get("confirm") is not True or plan["fingerprint"] not in quote:
+                raise Refused("explicit confirmation must include the reviewed move fingerprint")
+            self.evidence(turn, [{"source_id": "user", "quote": quote}])
+            if action == "move":
+                result = archive.move_archive(self.root, plan["archive_id"], plan["from"], plan["to"],
+                    fingerprint=plan["fingerprint"], confirmed=True, authorization_check=authorize)
+            elif action == "recover":
+                result = archive.recover_move(self.root, plan["archive_id"], source_scope=plan["from"], fingerprint=plan["fingerprint"],
+                    confirmed=True, authorization_check=authorize)
+            else:
+                raise Refused("unknown chat placement action")
+            state.pop("chat_placement_plan", None)
+            self.save(state)
+            return result
 
     def hook(self, event):
         try:
@@ -1958,8 +2007,12 @@ def run_owner(bridge, operation, payload):
         # This authorizes the specific local archive operation, not Memory.
         scope = payload["scope"]
         host.read_context(scope)
-        host_action(module, host, scope, "chat.archive.append", {},
-                    "claude-capture:" + digest([payload["session_id"], scope]))
+        operation = payload.get("operation", "chat.archive.append")
+        if operation not in {"chat.archive.read", "chat.archive.append", "chat.archive.move"}:
+            raise Refused("unknown chat archive permission")
+        host_action(module, host, scope, operation, {},
+                    "chat-archive:" + digest([payload["session_id"], scope, operation]),
+                    "read_local" if operation == "chat.archive.read" else "write_local_reversible")
         return {"scope": scope, "decision": "allow"}
     if operation == "profile_read":
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
@@ -2147,6 +2200,11 @@ def main():
     reflect.add_argument("--action-id", help="Apply one planned action only")
     reflect.add_argument("--full", action="store_true", help="all: tidy everything saved, not just the last 7 days")
     reflect.add_argument("--auto", action="store_true", help="all: automatic pass (since the last tidy, full when overdue)")
+    history = commands.add_parser("history")
+    history.add_argument("action", choices=["list", "plan", "move", "recover"])
+    history.add_argument("--session", required=True)
+    history.add_argument("--turn", required=True)
+    history.add_argument("--token", required=True)
     commands.add_parser("status")
     switch = commands.add_parser("set")
     switch.add_argument("--enabled", choices=["true", "false"])
@@ -2165,7 +2223,7 @@ def main():
             if note:
                 return bridge.take_input(note, limit)
             return sys.stdin.read(limit + 1)
-        if args.command in {"hook", "review", "owner", "intent"}:
+        if args.command in {"hook", "review", "owner", "intent", "history"}:
             raw = stdin_text(2_000_000)
             if len(raw.encode()) > 2_000_000:
                 raise Refused("input budget exceeded")
@@ -2176,6 +2234,8 @@ def main():
             result = {"ok": True, "result": run_owner(bridge, args.operation, payload)}
         elif args.command == "intent":
             result = bridge.intent(args.action, args.scope, payload, args.session, args.turn, args.token)
+        elif args.command == "history":
+            result = bridge.history(args.action, payload, args.session, args.turn, args.token)
         elif args.command == "search-words":
             result = bridge.owner("add_search_words", {
                 "auth": {"session": args.session, "turn": args.turn, "token": args.token},

@@ -9,6 +9,9 @@ class Mock(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
+        before_model = getattr(self.server, 'before_model', None)
+        if before_model is not None:
+            before_model()
         expected = getattr(self.server, 'expected_context', None)
         if expected:
             self.server.context_features = {

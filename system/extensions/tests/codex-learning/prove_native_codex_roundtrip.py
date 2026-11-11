@@ -95,6 +95,16 @@ def main():
         env.update(HOME=str(home), CODEX_HOME=str(codex_home))
         approve_fixture(sys.argv[1], root, env)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Mock)
+        def check_active_prompt():
+            if getattr(server, 'active_prompt_checked', False):
+                return
+            server.active_prompt_checked = True
+            active_files = list((root/'archives/private-chat-history/v1').rglob('*.jsonl'))
+            messages = []
+            for path in active_files:
+                messages.extend(json.loads(line) for line in path.read_text().splitlines()[1:])
+            server.active_prompt_saved = any(row.get('role') == 'user' and row.get('text') == 'portable-native-proof-prompt' for row in messages)
+        server.before_model = check_active_prompt
         threading.Thread(target=server.serve_forever, daemon=True).start()
         command = [sys.argv[1], 'exec', '--skip-git-repo-check', '--json',
             '-c', 'features.codex_hooks=true', '-c', 'model="gpt-5.2"',
@@ -112,6 +122,7 @@ def main():
             server.shutdown()
         if result.returncode:
             raise SystemExit('native fixture turn failed')
+        assert getattr(server, 'active_prompt_saved', False), 'first user prompt must be durable in the OS before the model replies'
         files = list((root / 'archives/private-chat-history/v1').rglob('*.jsonl'))
         if len(files) != 1:
             for file in (root / 'runtime').rglob('events.jsonl'):

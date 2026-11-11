@@ -63,6 +63,16 @@ def main():
         memory = prepare(root, Path(sys.argv[2]).resolve())
         from native_mock_anthropic import Mock
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Mock)
+        def check_active_prompt():
+            if getattr(server, 'active_prompt_checked', False):
+                return
+            server.active_prompt_checked = True
+            active_files = list((root/'archives/private-chat-history/v1').rglob('*.jsonl'))
+            messages = []
+            for path in active_files:
+                messages.extend(json.loads(line) for line in path.read_text().splitlines()[1:])
+            server.active_prompt_saved = any(row.get('role') == 'user' and row.get('text') == 'portable-claude-proof-prompt' for row in messages)
+        server.before_model = check_active_prompt
         threading.Thread(target=server.serve_forever, daemon=True).start()
         home = base / 'home'
         config = base / 'claude'
@@ -94,6 +104,7 @@ def main():
             server.shutdown()
         if result.returncode != 0 or 'portable-claude-proof-reply' not in result.stdout:
             raise SystemExit('native synthetic conversation failed')
+        assert getattr(server, 'active_prompt_saved', False), 'first user prompt must be durable in the OS before the model replies'
         files = list((root / 'archives/private-chat-history/v1').rglob('*.jsonl'))
         if len(files) != 1:
             # Content-free diagnostics are sufficient to debug dispatch and permissions.

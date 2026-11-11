@@ -37,8 +37,20 @@ jobs:
           echo "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  $RUNNER_TEMP/codex.tar.gz" | sha256sum --check
           mkdir "$RUNNER_TEMP/native-codex"
           tar -xzf "$RUNNER_TEMP/codex.tar.gz" -C "$RUNNER_TEMP/native-codex"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout the exact Memory reader for native Codex roundtrip
+        uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/AI-Verse-Memory
+          ref: e147eaefb98395d0ec1cdbc9edce0f7d1523fbf6
+          path: native-proof-memory
+          persist-credentials: false
       - name: Prove actual native transcript against a local synthetic model
         run: python3 system/extensions/tests/codex-learning/prove_native_codex_transcript.py "$RUNNER_TEMP/native-codex/codex-x86_64-unknown-linux-musl"
+      - name: Approved native hooks to OS archive to copied-folder exact Memory source
+        run: python3 system/extensions/tests/codex-learning/prove_native_codex_roundtrip.py "$RUNNER_TEMP/native-codex/codex-x86_64-unknown-linux-musl" "$GITHUB_WORKSPACE/native-proof-memory"
   real-claude-transcript:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

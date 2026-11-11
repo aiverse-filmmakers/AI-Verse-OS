@@ -171,7 +171,7 @@ def _scope(bridge, event, session):
     return selected
 
 
-def capture(bridge, event):
+def _capture(bridge, event):
     """Return content-free capture state; never claim complete UI coverage."""
     if bridge.config.get("chat_history") != "prospective":
         return {"status": "disabled"}
@@ -302,14 +302,20 @@ def capture(bridge, event):
                         source_record_bytes=line, block_index=index, message_id=identity,
                         sequence=len(events) + 1, role=role, text=text,
                         record_terminated=True, attachment_availability="not_embedded",
-                        timestamp=row.get("timestamp")))
+                        timestamp=row.get("timestamp"), revision=row.get("uuid"),
+                        branch=row.get("parentUuid")))
             archive_id = _digest(f"{bridge.harness}:{scope}:{session}:{start}".encode())[:40]
             archive = ChatArchive(bridge.root, scope=scope, authorized_scope=scope,
                 archive_id=archive_id, chat_id=archive_id, origin=bridge.harness,
                 session_id=session, authorization_check=lambda selected: selected == _scope(bridge, event, session))
             receipt = archive.append_batch(tuple(events))
-            return {"status": "pending" if snapshot["size"] and not snapshot["terminated"] else "saved",
+            interrupted = event.get("hook_event_name") == "Interrupt"
+            return {"status": "partial" if interrupted else (
+                        "pending" if snapshot["size"] and not snapshot["terminated"] else "saved"),
                     "saved": receipt.saved, "archive_id": archive_id,
+                    "checkpoint_sequence": receipt.checkpoint_sequence,
+                    "source_end_offset": receipt.checkpoint_source_end_offset,
+                    "interrupted": interrupted,
                     "coverage": "native visible text; attachments not embedded"}
     except CaptureBlocked as exc:
         return {"status": "blocked", "reason": str(exc)}
@@ -322,3 +328,23 @@ def _read_codex(path, *, visit=None):
     # Its identity check takes the native stem only; record session identity is
     # independently checked by the prospective boundary and native metadata.
     return _supplied_source(str(path), path.stem, visit=visit)
+
+
+def capture(bridge, event):
+    receipt = _capture(bridge, event)
+    if receipt.get("status") == "disabled":
+        return receipt
+    try:
+        session = event.get("session_id")
+        with bridge.lock(session):
+            scope = _scope(bridge, event, session)
+            state = bridge.state(session)
+            state["chat_history_last"] = {**receipt, "scope": scope,
+                "epoch": bridge.config.get("chat_history_epoch", "initial")}
+            bridge.save(state)
+    except Exception:
+        # A checkpoint write must never be reported as successful if its current
+        # status cannot be retained. Canonical messages already written survive.
+        if receipt.get("status") in {"saved", "partial", "pending"}:
+            return {"status": "blocked", "reason": "capture status could not be retained"}
+    return receipt

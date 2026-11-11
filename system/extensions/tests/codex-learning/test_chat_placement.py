@@ -69,6 +69,19 @@ class ChatPlacementTests(unittest.TestCase):
         self.assertEqual(continued['chats'][0]['excerpt'], 'later Personal chat')
         self.assertNotIn('unrelated hidden music chat', str(page) + str(continued))
 
+    def test_direct_transcript_view_is_exact_paged_and_scoped(self):
+        chat, check, _ = self.prepare()
+        chat.append(event('second', sequence=2, offset=100, end=200, text='second exact reply'))
+        first = a.read_transcript(self.root, 'operator', chat.archive_id, check, limit=1)
+        self.assertEqual(first['messages'][0]['text'], event().text)
+        self.assertEqual(first['next_sequence'], 1)
+        second = a.read_transcript(self.root, 'operator', chat.archive_id, check, after=first['next_sequence'])
+        self.assertEqual(second['transcript'], 'Assistant\n\nsecond exact reply')
+        self.assertIsNone(second['next_sequence'])
+        self.scope_grants['operator'] = False
+        with self.assertRaises(a.ArchiveBlocked):
+            a.read_transcript(self.root, 'operator', chat.archive_id, check)
+
     def test_stale_preview_and_revoked_destination_never_move(self):
         chat, check, plan = self.prepare()
         chat.append(event('later', sequence=2, offset=100, end=200))

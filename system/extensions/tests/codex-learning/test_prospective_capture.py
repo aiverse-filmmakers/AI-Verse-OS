@@ -159,6 +159,18 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
         self.assertEqual(self.files(), [])
 
+    def test_interruption_status_is_partial_with_durable_message_checkpoint(self):
+        capture.capture(self.host, self.event)
+        self.append('user', 'question', uuid='source-message-1', parentUuid='parent-message-0')
+        self.event['hook_event_name'] = 'Interrupt'
+        receipt = capture.capture(self.host, self.event)
+        self.assertEqual(receipt['status'], 'partial')
+        self.assertTrue(receipt['interrupted'])
+        self.assertEqual(receipt['checkpoint_sequence'], 1)
+        self.assertEqual(self.host.saved['chat_history_last']['status'], 'partial')
+        self.assertEqual(self.messages()[0]['revision'], 'source-message-1')
+        self.assertEqual(self.messages()[0]['branch'], 'parent-message-0')
+
     def test_real_config_mode_and_helper_toggles_rotate_consent(self):
         import io
         import bridge

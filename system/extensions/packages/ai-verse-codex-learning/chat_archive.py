@@ -994,3 +994,43 @@ def list_archives(root, scope, authorization_check, *, limit=12, after=None):
     more = len(files) > limit
     return {"chats": result, "unavailable": unavailable, "truncated": more,
             "next_archive": files[limit - 1].stem if more else None}
+
+
+def read_transcript(root, scope, archive_id, authorization_check, *, after=0, limit=8):
+    """Direct bounded view; the full canonical UTF-8 transcript stays on disk."""
+    root = Path(root).absolute()
+    _assert_id(archive_id, "archive ID")
+    _scope_parts(scope)
+    _authorize_scope(root, scope, authorization_check)
+    if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 20:
+        raise ArchiveBlocked("invalid transcript page")
+    path = _move_path(root, scope, archive_id)
+    if path is None:
+        raise ArchiveBlocked("archive is absent")
+    fd = _regular_open(path, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as stream:
+        header_wire = stream.readline(4097)
+    if len(header_wire) > 4096 or not header_wire.endswith(b"\n"):
+        raise ArchiveBlocked("invalid transcript header")
+    header = _strict_json(header_wire)
+    archive = ChatArchive(root, scope=scope, authorized_scope=scope, archive_id=archive_id,
+        chat_id=header.get("chat_id"), origin=header.get("origin"), session_id=header.get("session_id"),
+        authorization_check=authorization_check)
+    result = archive.read()
+    records, views, size = [], [], 0
+    for message in result.messages[after:after + limit]:
+        item = {key: message[key] for key in ("message_id", "sequence", "role", "text", "timestamp", "revision", "branch")}
+        # Large single messages remain exact on disk and through Memory source
+        # excerpts; never silently clip a direct transcript view.
+        if size + len(_json_bytes(item)) > 16_000:
+            break
+        records.append(item)
+        views.append(message["role"].title() + "\n\n" + message["text"])
+        size += len(_json_bytes(item))
+    archive._check_authorization()
+    next_sequence = records[-1]["sequence"] if records else after
+    return {"status": result.status, "archive_id": archive_id, "scope": scope,
+        "messages": records, "transcript": "\n\n".join(views),
+        "full_transcript": path.relative_to(root).as_posix(),
+        "next_sequence": next_sequence if next_sequence < len(result.messages) else None,
+        "source_required": not records and after < len(result.messages)}

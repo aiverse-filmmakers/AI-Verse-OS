@@ -82,3 +82,14 @@ jobs:
         run: python3 system/extensions/tests/codex-learning/prove_native_claude_transcript.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
       - name: Native hooks to OS archive to copied-folder exact Memory source
         run: python3 system/extensions/tests/codex-learning/prove_native_capture_roundtrip.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude" "$GITHUB_WORKSPACE/native-proof-memory"
+
+      - name: Fetch exact Codex for bidirectional native continuity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/cross-codex.tar.gz" https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz
+          echo "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  $RUNNER_TEMP/cross-codex.tar.gz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/cross-native-codex"
+          tar -xzf "$RUNNER_TEMP/cross-codex.tar.gz" -C "$RUNNER_TEMP/cross-native-codex"
+      - name: Claude to copied folder to Codex and back to fresh Claude
+        run: python3 system/extensions/tests/codex-learning/prove_cross_native_continuity.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude" "$RUNNER_TEMP/cross-native-codex/codex-x86_64-unknown-linux-musl" "$GITHUB_WORKSPACE/native-proof-memory"

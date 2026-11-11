@@ -73,3 +73,19 @@ found. A new query starts a fresh scan. Do not use an archive cursor for exact
 source reads. New messages or placements during a scan may require a fresh scan.
 The tidy preview also rotates through scoped chats in bounded pages so it does
 not repeatedly inspect only the first few chats.
+
+
+`history status` with `{}` returns this session's current recording status and
+last durably saved message checkpoint. Saved means complete source records
+through that checkpoint, not future messages or unsupported UI coverage.
+Pending, partial, blocked and unverified are not a fully saved conversation.
+Stop/end callbacks warn when saving is incomplete, except explicitly private
+sessions. Off stays private and re-enabling requires a new chat.
+
+`history read` takes `{"archive_id":"ID","from":"SCOPE","after_sequence":0,
+"limit":8}`. It returns exact messages and a readable transcript page, a relative
+path to the full private canonical transcript, and `next_sequence` for the next
+page. If `source_required` is true, a single message exceeds the view budget;
+use Memory's exact-source excerpts or the authorized local transcript instead
+of retrying the same page or claiming it was empty. Original Claude message UUID
+and parent UUID are preserved as revision/branch metadata when available.

@@ -231,3 +231,14 @@ fresh scan to pick up new messages or placement changes during a scan. Tidying
 also rotates bounded previews through later chats instead of stopping at the
 first few. Old source references pass the OS's permission check using their
 owner-resolved current home, with another Memory check before exact disclosure.
+
+
+The direct history reader provides a bounded readable transcript alongside the
+full private local source path. Current session status records the durable
+message checkpoint, pending/blocked state and interruption status without
+message text in diagnostics. Stop/end callbacks report incomplete saving;
+explicitly private sessions remain quiet. Claude source UUID/parent UUID are
+retained when present. The native acceptance also checks a Claude conversation
+reaching a fresh Codex model's actual context, and then a Codex reply reaching a
+fresh Claude model's context, using copied OS folders after each old provider
+home has been removed. These tests use loopback synthetic providers only.

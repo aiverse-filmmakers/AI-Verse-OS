@@ -1137,11 +1137,25 @@ class Bridge:
                                   "_aiverse_chat_placement_owner")
             def authorize(scope):
                 result = self.owner("archive_authorize", {"scope": scope, "session_id": session,
-                    "operation": "chat.archive.read" if action == "list" else "chat.archive.move"})
+                    "operation": "chat.archive.read" if action in {"list", "read", "status"} else "chat.archive.move"})
                 return result.get("scope") == scope and result.get("decision") == "allow"
             source = payload.get("from", state["scope"])
             if source not in allowed:
                 raise Refused("chat source is outside this turn")
+            if action == "status":
+                if self.config.get("chat_history") != "prospective":
+                    return {"status": "disabled", "mode": self.config.get("chat_history", "off")}
+                last = state.get("chat_history_last")
+                if not last or last.get("epoch") != self.config.get("chat_history_epoch", "initial"):
+                    return {"status": "unverified", "reason": "a new chat is required before recording"}
+                if last.get("scope") != state["scope"]:
+                    raise Refused("chat status belongs to a different project")
+                if not authorize(last["scope"]):
+                    raise Refused("chat status is not currently authorized")
+                return last
+            if action == "read":
+                return archive.read_transcript(self.root, source, payload.get("archive_id"), authorize,
+                    after=payload.get("after_sequence", 0), limit=payload.get("limit", 8))
             if action == "list":
                 return archive.list_archives(self.root, source, authorize, limit=payload.get("limit", 12), after=payload.get("after"))
             if action == "plan":
@@ -1175,8 +1189,10 @@ class Bridge:
             return result
 
     def hook(self, event):
+        result = None
         try:
-            return self._learning_hook(event)
+            result = self._learning_hook(event)
+            return result
         finally:
             # Source persistence is independent of semantic review and all of
             # its early returns. Run only for the same approved local events.
@@ -1188,6 +1204,11 @@ class Bridge:
                         safe(Path(__file__).with_name("prospective_capture.py"), self.root, file=True),
                         "_aiverse_prospective_capture")
                     receipt = collector.capture(self, event)
+                    if (receipt.get("status") in {"blocked", "pending", "partial"}
+                            and event.get("hook_event_name") in {"Stop", "SessionEnd"}
+                            and not receipt.get("reason", "").startswith("private session")
+                            and isinstance(result, dict)):
+                        result["systemMessage"] = "AI-Verse could not finish saving this chat locally. Earlier saved messages are still there. Check chat saving before relying on this conversation elsewhere."
                     self.diagnostic("chat_history", event.get("session_id"),
                                     state=receipt.get("status", "blocked"),
                                     error=receipt.get("reason", ""),
@@ -2202,7 +2223,7 @@ def main():
     reflect.add_argument("--full", action="store_true", help="all: tidy everything saved, not just the last 7 days")
     reflect.add_argument("--auto", action="store_true", help="all: automatic pass (since the last tidy, full when overdue)")
     history = commands.add_parser("history")
-    history.add_argument("action", choices=["list", "plan", "move", "recover"])
+    history.add_argument("action", choices=["list", "read", "status", "plan", "move", "recover"])
     history.add_argument("--session", required=True)
     history.add_argument("--turn", required=True)
     history.add_argument("--token", required=True)

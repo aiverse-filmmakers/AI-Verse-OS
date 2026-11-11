@@ -84,7 +84,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.assertEqual(len(self.messages()), 2)
     def test_startup_before_file_then_exact_first_prompt(self):
         self.source.unlink()
-        self.assertEqual(capture.capture(self.host, self.event)["status"], "blocked")
+        self.assertEqual(capture.capture(self.host, self.event)["status"], "recording")
         self.append("user", "first prompt")
         self.event.update(hook_event_name="UserPromptSubmit", prompt="first prompt")
         self.assertEqual(capture.capture(self.host, self.event)["saved"], 1)

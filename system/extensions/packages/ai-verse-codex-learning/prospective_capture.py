@@ -134,6 +134,25 @@ def capture(bridge, event):
                 bridge.save(state)
             if not isinstance(source, str) or not Path(source).is_absolute():
                 raise CaptureBlocked("host transcript path unavailable")
+            if (not boundary and event.get("hook_event_name") == "SessionStart"
+                    and event.get("source") == "startup"):
+                path = Path(source)
+                expected_name = (path.stem == session if bridge.harness == "claude"
+                                 else path.stem.endswith("-" + session))
+                if not expected_name or path.suffix != ".jsonl" or ".." in path.parts:
+                    raise CaptureBlocked("native transcript identity mismatch")
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    # Both native CLIs may flush the file only after the first
+                    # reply. Absence observed at authorized startup is the
+                    # prospective zero-byte boundary, never an import grant.
+                    state["chat_history_boundary"] = {
+                        "protocol": PROTOCOL, "scope": scope, "source": source,
+                        "start": 0, "prefix_sha256": _digest(b""),
+                        "harness": bridge.harness, "session": session}
+                    bridge.save(state)
+                    return {"status": "recording", "saved": 0}
             # The secure reader requires a native filename matching its session.
             # Codex rollouts include a prefix; validate its exact UUID suffix.
             if bridge.harness == "codex":
@@ -223,7 +242,9 @@ def capture(bridge, event):
             return {"status": "pending" if raw and not raw.endswith(b"\n") else "saved",
                     "saved": receipt.saved, "archive_id": archive_id,
                     "coverage": "native visible text; attachments not embedded"}
-    except (OSError, ValueError, KeyError, TypeError):
+    except CaptureBlocked as exc:
+        return {"status": "blocked", "reason": str(exc)}
+    except Exception:
         return {"status": "blocked", "reason": "native capture validation failed"}
 
 

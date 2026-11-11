@@ -1138,6 +1138,7 @@ class Bridge:
                     receipt = collector.capture(self, event)
                     self.diagnostic("chat_history", event.get("session_id"),
                                     state=receipt.get("status", "blocked"),
+                                    error=receipt.get("reason", ""),
                                     captured=receipt.get("saved", 0))
                 except Exception:
                     pass  # Never replace the lifecycle result with a capture error.

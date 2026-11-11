@@ -240,7 +240,8 @@ def capture(bridge, event):
                         source_end_offset=offset + len(line), source_record_sha256=_digest(line),
                         source_record_bytes=line, block_index=index, message_id=identity,
                         sequence=len(events) + 1, role=role, text=text,
-                        record_terminated=True, attachment_availability="not_embedded"))
+                        record_terminated=True, attachment_availability="not_embedded",
+                        timestamp=row.get("timestamp")))
             archive_id = _digest(f"{bridge.harness}:{scope}:{session}:{start}".encode())[:40]
             archive = ChatArchive(bridge.root, scope=scope, authorized_scope=scope,
                 archive_id=archive_id, chat_id=archive_id, origin=bridge.harness,

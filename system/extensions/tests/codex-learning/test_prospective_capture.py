@@ -48,12 +48,13 @@ class ProspectiveCaptureTests(unittest.TestCase):
     def test_new_boundary_exact_capture_and_replay(self):
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
         text = '  café 中文\n\t  '
-        self.append('user', text)
+        self.append('user', text, timestamp='2026-11-11T10:00:00Z')
         self.append('assistant', 'reply')
         self.event['hook_event_name'] = 'Stop'
         self.assertEqual(capture.capture(self.host, self.event)['saved'], 2)
         self.assertEqual(capture.capture(self.host, self.event)['saved'], 0)
         self.assertEqual([m['text'] for m in self.messages()], [text, 'reply'])
+        self.assertEqual(self.messages()[0]['timestamp'], '2026-11-11T10:00:00Z')
     def test_late_start_and_resumed_history_never_endorsed(self):
         self.append('user', 'old private message')
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
@@ -118,6 +119,23 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.host.config.update(chat_history='prospective', chat_history_epoch='second')
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
         self.assertEqual([m['text'] for m in self.messages()], ['public first'])
+
+    def test_real_config_mode_and_helper_toggles_rotate_consent(self):
+        import io
+        import bridge
+        extension = self.root / '.aiverse/extensions/ai-verse-codex-learning'
+        extension.mkdir(parents=True)
+        config = extension / 'config.json'
+        config.write_text(json.dumps({'enabled': True, 'review_mode': 'off', 'chat_history': 'prospective'}))
+        previous = 'initial'
+        for args in (['--chat-history', 'off'], ['--chat-history', 'prospective'],
+                     ['--enabled', 'false'], ['--enabled', 'true']):
+            with mock.patch.object(sys, 'argv', ['bridge', '--root', str(self.root), 'set', *args]), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(bridge.main(), 0)
+            # Constructor must accept the saved configuration on the next hook.
+            current = bridge.Bridge(self.root).config['chat_history_epoch']
+            self.assertNotEqual(current, previous)
+            previous = current
 
     def test_bridge_dispatch_survives_learning_early_return(self):
         from bridge import Bridge

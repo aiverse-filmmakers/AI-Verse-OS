@@ -2278,7 +2278,10 @@ def main():
         elif args.command == "set":
             config = read_json(bridge.extension / "config.json", bridge.root)
             if args.enabled is not None:
-                config["enabled"] = args.enabled == "true"
+                enabled = args.enabled == "true"
+                if config.get("enabled", True) != enabled:
+                    config["chat_history_epoch"] = secrets.token_hex(16)
+                config["enabled"] = enabled
             if args.review_mode:
                 config["review_mode"] = args.review_mode
             if args.chat_history is not None:

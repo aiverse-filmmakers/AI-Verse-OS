@@ -180,7 +180,7 @@ After installing the accepted package, an operator can explicitly select
 `bridge.py set --chat-history prospective`, then start a new local chat.
 `bridge.py set --chat-history off` stops capture. Native private/incognito
 signals are not assumed. This control applies to the local archive only.
-Changing the mode requires a new chat before capture can restart; messages
+Changing the mode or switching the helpers off and on requires a new chat before capture can restart; messages
 from the disabled interval are never backfilled. An explicit private-session
 event makes that entire session private from that point onwards.
 A missing source, changed scope, modified prefix, credential-like visible text,

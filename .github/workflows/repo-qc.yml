@@ -37,6 +37,9 @@ jobs:
           python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v
           git check-ignore -q archives/private-chat-history/v1/operator/synthetic-chat.jsonl
 
+      - name: Test disabled Claude catch-up and hostile source paths (synthetic)
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_claude_capture.py' -v
+
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 

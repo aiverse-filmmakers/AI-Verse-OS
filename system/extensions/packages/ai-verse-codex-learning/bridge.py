@@ -40,6 +40,8 @@ DEFAULTS = {
     "reflection_enabled": True, "reflect_min_entries": 5, "reflect_max_age_hours": 6,
     "reflect_all_min_saves": 25, "reflect_all_days": 30, "reflect_full_days": 120,
     "maintainer_feedback": False,
+    # Raw transcript archive is opt-in only after reviewed host-coverage proof.
+    "capture_enabled": False, "capture_coverage_verified": False,
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
                "Pending decisions", "Execution state", "Connection state"}
@@ -477,7 +479,8 @@ class Bridge:
             if not isinstance(custom, dict) or set(custom) - set(DEFAULTS):
                 raise Refused("unknown extension configuration fields")
             self.config.update(custom)
-        for name in ("reflection_enabled", "maintainer_feedback"):
+        for name in ("reflection_enabled", "maintainer_feedback",
+                     "capture_enabled", "capture_coverage_verified"):
             if type(self.config[name]) is not bool:
                 raise Refused("invalid extension configuration: " + name)
         if self.config["schema_version"] != 1 or type(self.config["enabled"]) is not bool:
@@ -1265,6 +1268,20 @@ class Bridge:
                         turn["state"] = "session_ended_before_review"
                     self.save(state)
                     result = {}
+        # Keep transcript capture independent of selective learning and OUTSIDE
+        # the learning session lock. Existing installed hooks remain unchanged;
+        # this code path is inert unless both explicit capture gates are true.
+        if self.harness == "claude" and self.config["capture_enabled"]:
+            try:
+                capture = load_module(
+                    safe(Path(__file__).with_name("claude_capture.py"), self.root, file=True),
+                    "_aiverse_claude_capture")
+                snapshot = capture.capture_hook(self, event)
+            except Exception:
+                snapshot = {"status": "blocked"}
+            self.diagnostic("capture", session, scope=state["scope"],
+                            state=snapshot.get("status", "blocked"),
+                            captured=snapshot.get("saved", 0))
         self.diagnostic(kind, session, scope=state["scope"], turn=(state.get("turn") or {}).get("id"),
                         state=(state.get("turn") or {}).get("state"),
                         sources=len((state.get("turn") or {}).get("sources", {})),
@@ -1909,6 +1926,14 @@ def run_owner(bridge, operation, payload):
         return bridge.intent_service().relevant(payload["scope"], payload.get("prompt", ""))
     if operation == "read_context":
         return host.read_context(payload["scope"])
+    if operation == "archive_authorize":
+        # Revalidate current owner scope and the actual OS permission engine.
+        # This authorizes the specific local archive operation, not Memory.
+        scope = payload["scope"]
+        host.read_context(scope)
+        host_action(module, host, scope, "chat.archive.append", {},
+                    "claude-capture:" + digest([payload["session_id"], scope]))
+        return {"scope": scope, "decision": "allow"}
     if operation == "profile_read":
         read = host.request_action(host_action(module, host, payload["scope"], "operator.profile.read", {},
                                                "profile-read:" + secrets.token_hex(8), "read_local"))

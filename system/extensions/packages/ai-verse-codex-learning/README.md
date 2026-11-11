@@ -167,3 +167,28 @@ reviewed consent/secret policy, cross-tool read,
 or member distribution approval has occurred. Filesystem identity checks
 reduce replacement races but do not constitute isolation against a privileged
 local adversary. Keep capture OFF for all members and installations.
+
+## Prospective native local chat history
+
+The new `chat_history` mode uses already approved local lifecycle hooks. It
+requires an observed new session boundary and never attributes older resumed
+messages to today's project. It writes exact visible text to the private v1
+archive. The old experimental full-history gates and the Dashboard experiment
+remain separate and disabled.
+
+After installing the accepted package, an operator can explicitly select
+`bridge.py set --chat-history prospective`, then start a new local chat.
+`bridge.py set --chat-history off` stops capture. Native private/incognito
+signals are not assumed. This control applies to the local archive only.
+A missing source, changed scope, modified prefix, credential-like visible text,
+or unsupported source shape blocks that snapshot and preserves prior records.
+The local diagnostic reports saved, pending or blocked without source text.
+
+Native transcript tests use the real Codex 0.167.0 release and Claude Code
+2.1.316 with isolated homes and local synthetic API replies. They verify visible
+user and assistant text while excluding harness context and hidden reasoning.
+Text blocks are preserved individually. Attachments are marked not embedded.
+These are native CLI source-format tests, not a claim about every desktop UI
+or third-party harness. Initial secure source collection requires POSIX
+no-follow directory descriptors, available on macOS and Linux. Windows source
+collection remains blocked rather than weakening file checks.

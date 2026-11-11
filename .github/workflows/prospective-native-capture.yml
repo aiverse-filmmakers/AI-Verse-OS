@@ -1,0 +1,62 @@
+name: Prospective native chat history
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p test_prospective_capture.py -v
+  real-codex-transcript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch exact official Codex binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/codex.tar.gz" https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz
+          echo "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  $RUNNER_TEMP/codex.tar.gz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/native-codex"
+          tar -xzf "$RUNNER_TEMP/codex.tar.gz" -C "$RUNNER_TEMP/native-codex"
+      - name: Prove actual native transcript against a local synthetic model
+        run: python3 system/extensions/tests/codex-learning/prove_native_codex_transcript.py "$RUNNER_TEMP/native-codex/codex-x86_64-unknown-linux-musl"
+  real-claude-transcript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and install exact official Claude Code in isolated tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(npm view @anthropic-ai/claude-code@2.1.316 dist.integrity)" = 'sha512-i3BpzyDkcCPnsa0CSkWgxGPs7WMsyqDkxkqT0SDxyEC5XMIxEmcUmluWRHG9VSeBY8Vyv+l9X34JvJ/Bj54nBQ=='
+          npm install --prefix "$RUNNER_TEMP/claude-proof" --ignore-scripts @anthropic-ai/claude-code@2.1.316
+      - name: Prove native Claude transcript against a local synthetic model
+        run: python3 system/extensions/tests/codex-learning/prove_native_claude_transcript.py "$RUNNER_TEMP/claude-proof/node_modules/.bin/claude"

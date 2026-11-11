@@ -42,6 +42,7 @@ DEFAULTS = {
     "maintainer_feedback": False,
     # Raw transcript archive is opt-in only after reviewed host-coverage proof.
     "capture_enabled": False, "capture_coverage_verified": False,
+    "chat_history": "off",
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
                "Pending decisions", "Execution state", "Connection state"}
@@ -483,6 +484,8 @@ class Bridge:
                      "capture_enabled", "capture_coverage_verified"):
             if type(self.config[name]) is not bool:
                 raise Refused("invalid extension configuration: " + name)
+        if self.config["chat_history"] not in {"off", "prospective"}:
+            raise Refused("invalid chat history mode")
         if self.config["schema_version"] != 1 or type(self.config["enabled"]) is not bool:
             raise Refused("invalid extension configuration")
         for name, low, high in [
@@ -1120,6 +1123,26 @@ class Bridge:
                              **proof(text, min(remaining, self.config["source_max_tokens"]))}
 
     def hook(self, event):
+        try:
+            return self._learning_hook(event)
+        finally:
+            # Source persistence is independent of semantic review and all of
+            # its early returns. Run only for the same approved local events.
+            if (isinstance(event, dict) and event.get("hook_event_name") in EVENTS
+                    and self.config.get("chat_history") == "prospective"
+                    and self.registered()):
+                try:
+                    collector = load_module(
+                        safe(Path(__file__).with_name("prospective_capture.py"), self.root, file=True),
+                        "_aiverse_prospective_capture")
+                    receipt = collector.capture(self, event)
+                    self.diagnostic("chat_history", event.get("session_id"),
+                                    state=receipt.get("status", "blocked"),
+                                    captured=receipt.get("saved", 0))
+                except Exception:
+                    pass  # Never replace the lifecycle result with a capture error.
+
+    def _learning_hook(self, event):
         if not isinstance(event, dict) or event.get("hook_event_name") not in EVENTS:
             raise Refused("unknown hook event")
         if not self.registered():
@@ -2123,6 +2146,8 @@ def main():
     commands.add_parser("status")
     switch = commands.add_parser("set")
     switch.add_argument("--enabled", choices=["true", "false"])
+    switch.add_argument("--chat-history", choices=["off", "prospective"],
+                        help="Save new local chats from an observed session boundary")
     switch.add_argument("--review-mode", choices=["all", "meaningful", "off"])
     args = parser.parse_args()
     try:
@@ -2252,11 +2277,15 @@ def main():
                 config["enabled"] = args.enabled == "true"
             if args.review_mode:
                 config["review_mode"] = args.review_mode
+            if args.chat_history is not None:
+                config["chat_history"] = args.chat_history
             atomic_json(bridge.extension / "config.json", config, bridge.root)
-            result = {"enabled": config["enabled"], "review_mode": config["review_mode"]}
+            result = {"enabled": config["enabled"], "review_mode": config["review_mode"],
+                      "chat_history": config.get("chat_history", "off")}
         else:
             result = {"extension": ID, "version": VERSION, "enabled": bridge.registered(),
-                      "review_mode": bridge.config["review_mode"], "owners": bridge.owner("describe", {}),
+                      "review_mode": bridge.config["review_mode"], "chat_history": bridge.config["chat_history"],
+                      "owners": bridge.owner("describe", {}),
                       "project_hook_file": str(bridge.root / ".codex/hooks.json"),
                       "hook_definition_present": (bridge.root / ".codex/hooks.json").is_file(),
                       "hook_execution": bridge.execution_summary(),

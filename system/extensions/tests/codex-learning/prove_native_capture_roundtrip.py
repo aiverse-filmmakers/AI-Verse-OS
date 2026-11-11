@@ -84,6 +84,12 @@ def main():
             '--session-id', str(uuid.uuid4()), 'portable-claude-proof-prompt']
         try:
             result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0 or 'portable-claude-proof-reply' not in result.stdout:
+                raise SystemExit('first native synthetic conversation failed')
+            # A separate native process resumes the same session. Identical
+            # user text is a new message, never content-deduplicated history.
+            resumed = ['--resume' if arg == '--session-id' else arg for arg in command]
+            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
         finally:
             server.shutdown()
         if result.returncode != 0 or 'portable-claude-proof-reply' not in result.stdout:
@@ -97,7 +103,7 @@ def main():
                     print(file.read_text()[-4000:])
             raise SystemExit('native lifecycle did not create exactly one private archive')
         messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
-        assert [row['text'] for row in messages] == ['portable-claude-proof-prompt', 'portable-claude-proof-reply']
+        assert [row['text'] for row in messages] == ['portable-claude-proof-prompt', 'portable-claude-proof-reply'] * 2
         copied = base / 'copied-os'
         shutil.copytree(root, copied)
         shutil.rmtree(root)

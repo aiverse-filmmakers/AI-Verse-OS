@@ -104,6 +104,10 @@ def main():
             '-c', 'model_providers.proof.requires_openai_auth=false', 'portable-native-proof-prompt']
         try:
             result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            if result.returncode:
+                raise SystemExit('first native fixture turn failed')
+            resumed = [command[0], 'exec', 'resume', '--last', *command[2:]]
+            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
         finally:
             server.shutdown()
         if result.returncode:
@@ -114,7 +118,7 @@ def main():
                 print(file.read_text()[-5000:])
             raise SystemExit('native Codex hook capture did not produce one archive')
         messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
-        assert [m['text'] for m in messages] == ['portable-native-proof-prompt','portable-native-proof-reply']
+        assert [m['text'] for m in messages] == ['portable-native-proof-prompt','portable-native-proof-reply'] * 2
         copied = base / 'copied-os'
         shutil.copytree(root, copied)
         shutil.rmtree(root)

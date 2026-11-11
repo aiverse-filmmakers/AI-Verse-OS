@@ -11,6 +11,11 @@ class Mock(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         expected = getattr(self.server, 'expected_context', None)
         if expected:
+            self.server.context_features = {
+                "expected_reply": expected.encode() in body,
+                "typed_archive": b'portable_chat_message' in body,
+                "navigation": b'historical_navigation' in body,
+                "body_bytes": len(body), "encoding": self.headers.get('Content-Encoding', '')}
             found = expected.encode() in body and b'portable_chat_message' in body
             self.server.saw_expected_context = getattr(self.server, 'saw_expected_context', False) or found
         text = getattr(self.server, 'reply', 'portable-native-proof-reply')

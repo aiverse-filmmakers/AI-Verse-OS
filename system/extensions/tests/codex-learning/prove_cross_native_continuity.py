@@ -75,6 +75,14 @@ def main():
                 if result.returncode or server.reply not in result.stdout:
                     raise AssertionError('native cross-interface fixture conversation failed')
                 if prior_reply and not getattr(server, 'saw_expected_context', False):
+                    contexts = []
+                    for file in (root/'runtime/codex-learning/sessions').glob('*.json'):
+                        state = json.loads(file.read_text())
+                        delivered = state.get('context_delivery', {})
+                        contexts.append({'bytes': delivered.get('prompt_bytes'),
+                                         'memory_items': len(delivered.get('memory_item_ids', []))})
+                    print(json.dumps({'phase': phase, 'harness': harness, 'contexts': contexts,
+                                      'request': getattr(server, 'context_features', {})}))
                     raise AssertionError('next native model did not receive the exact previous archived reply')
             finally:
                 server.shutdown()

@@ -1072,12 +1072,29 @@ class Bridge:
         budget = limit - len(header.encode())
         encoded = json.dumps(context, ensure_ascii=False)
         if len(encoded.encode()) > budget:
-            context.pop("historical_navigation", None)
-            context["warnings"].append("Historical context omitted under the byte budget; query on demand.")
+            # A verbose instruction must not evict all historical continuity.
+            # Compact derived context and instructions before dropping evidence;
+            # the operator's Communication/Avoid rules remain in `keys`.
             current = context.get("current", {})
             current["current_context"] = current.get("current_context", "")[:1600]
             context["operator_profile"] = {name: small_window(value, prompt, 600) for name, value in profile.items()}
+            nav = context.get("historical_navigation")
+            if isinstance(nav, dict):
+                context["historical_navigation"] = {key: nav[key] for key in (
+                    "api_version", "depth", "scope", "items", "deeper_evidence_available", "archive_page", "truncated") if key in nav}
+                context["historical_navigation"]["context_projection"] = True
+            header = self.short_instruction(view) + "\nBound scope: " + scope + "\nOwner data (JSON):\n"
+            budget = limit - len(header.encode())
             encoded = json.dumps(context, ensure_ascii=False)
+            projected = context.get("historical_navigation", {})
+            while len(encoded.encode()) > budget and len(projected.get("items", [])) > 1:
+                projected["items"].pop()
+                projected["truncated"] = True
+                encoded = json.dumps(context, ensure_ascii=False)
+            if len(encoded.encode()) > budget:
+                context.pop("historical_navigation", None)
+                context["warnings"].append("Historical context omitted under the byte budget; query on demand.")
+                encoded = json.dumps(context, ensure_ascii=False)
         if len((header + encoded).encode()) > limit:
             context = {"scope": scope, **keys, "purpose_intent": context.get("purpose_intent", {}),
                        "warnings": ["Context budget exceeded; query current/profile/Memory owners on demand."]}

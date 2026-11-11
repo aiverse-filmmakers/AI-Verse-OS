@@ -21,7 +21,8 @@ from lifecycle import claude_build, claude_definition, definition, is_ours_claud
 SOURCE = Path(__file__).resolve().parent
 FILES = ("bridge.py", "lifecycle.py", "install.py", "maintenance.py", "inspect_runtime.py",
          "INSTRUCTIONS.md", "README.md", "REVIEW-SCHEMA.md", "SETUP.md", "intent.py", "brain_read.py", "INTENT.md",
-         "reflect.py")
+         "reflect.py", "claude_transcript.py", "chat_archive.py", "claude_capture.py",
+         "prospective_capture.py")
 
 
 def sha(path):

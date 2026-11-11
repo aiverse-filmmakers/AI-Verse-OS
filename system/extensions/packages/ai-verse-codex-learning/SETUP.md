@@ -50,6 +50,6 @@ Use the same Python as the install. Replace the paths with this project's.
 - Check: `install.py claude-doctor --root ROOT --json`. Read only. It says whether the hooks, permissions and memory switch are in place, and whether the hooks match the installed bridge.
 - Switch off for good: `install.py claude-remove --root ROOT`. If nobody else edited the settings file it is restored byte for byte. If it was edited, only our own entries are removed and anything you changed is left in place and listed.
 - Pause without removing: `bridge.py set --enabled false` switches learning off for both apps.
-- After an update: if `claude-doctor` says the build is old, run `claude-install` again to refresh the hooks.
+- After an update: `install` refreshes the Claude hooks when they are already set up. If `claude-doctor` still says the build is old, run `claude-install` again.
 
 Claude Code may ask you once to trust the folder. Claude blocks JSON typed into shell commands, so the assistant saves each review as a small note file in the notes folder and passes it with `--input-file`. The bridge deletes the note as soon as it has read it, whether the review is accepted or refused.

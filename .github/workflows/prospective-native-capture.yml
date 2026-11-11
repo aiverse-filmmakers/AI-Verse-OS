@@ -1,0 +1,95 @@
+name: Prospective native chat history
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p test_prospective_capture.py -v
+      - run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_placement*.py' -v
+  real-codex-transcript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch exact official Codex binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/codex.tar.gz" https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz
+          echo "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  $RUNNER_TEMP/codex.tar.gz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/native-codex"
+          tar -xzf "$RUNNER_TEMP/codex.tar.gz" -C "$RUNNER_TEMP/native-codex"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Checkout the exact Memory reader for native Codex roundtrip
+        uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/AI-Verse-Memory
+          ref: 325bafaaf74d69f09222ffdedf9ec542866100df
+          path: native-proof-memory
+          persist-credentials: false
+      - name: Prove actual native transcript against a local synthetic model
+        run: python3 system/extensions/tests/codex-learning/prove_native_codex_transcript.py "$RUNNER_TEMP/native-codex/codex-x86_64-unknown-linux-musl"
+      - name: Approved native hooks to OS archive to copied-folder exact Memory source
+        run: python3 system/extensions/tests/codex-learning/prove_native_codex_roundtrip.py "$RUNNER_TEMP/native-codex/codex-x86_64-unknown-linux-musl" "$GITHUB_WORKSPACE/native-proof-memory"
+  real-claude-transcript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify and install exact official Claude Code in isolated tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(npm view @anthropic-ai/claude-code-linux-x64@2.1.316 dist.integrity)" = 'sha512-RQDM6N285IjNKcmlPRriayNzpTkEJreAw5/vBU+V0R3qljkQ5z6/pSbzcVUAXvasoOlvub0RIma3NWvSuZA8Cg=='
+          npm install --prefix "$RUNNER_TEMP/claude-proof" --ignore-scripts @anthropic-ai/claude-code-linux-x64@2.1.316
+      - name: Checkout the exact composed Memory reader
+        uses: actions/checkout@v4
+        with:
+          repository: aiverse-filmmakers/AI-Verse-Memory
+          ref: 325bafaaf74d69f09222ffdedf9ec542866100df
+          path: native-proof-memory
+          persist-credentials: false
+      - name: Prove native Claude transcript against a local synthetic model
+        run: python3 system/extensions/tests/codex-learning/prove_native_claude_transcript.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude"
+      - name: Native hooks to OS archive to copied-folder exact Memory source
+        run: python3 system/extensions/tests/codex-learning/prove_native_capture_roundtrip.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude" "$GITHUB_WORKSPACE/native-proof-memory"
+
+      - name: Fetch exact Codex for bidirectional native continuity
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/cross-codex.tar.gz" https://github.com/openai/codex/releases/download/rust-v0.167.0/codex-x86_64-unknown-linux-musl.tar.gz
+          echo "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a  $RUNNER_TEMP/cross-codex.tar.gz" | sha256sum --check
+          mkdir "$RUNNER_TEMP/cross-native-codex"
+          tar -xzf "$RUNNER_TEMP/cross-codex.tar.gz" -C "$RUNNER_TEMP/cross-native-codex"
+      - name: Claude to copied folder to Codex and back to fresh Claude
+        run: python3 system/extensions/tests/codex-learning/prove_cross_native_continuity.py "$RUNNER_TEMP/claude-proof/node_modules/@anthropic-ai/claude-code-linux-x64/claude" "$RUNNER_TEMP/cross-native-codex/codex-x86_64-unknown-linux-musl" "$GITHUB_WORKSPACE/native-proof-memory"

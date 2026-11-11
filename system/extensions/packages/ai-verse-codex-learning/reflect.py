@@ -182,7 +182,14 @@ class Tidy:
                     text += ("\nAI-Verse OS tidying is due. After you finish the operator's request and before your final answer, run "
                              "these three in order and nothing else for tidying: " + base.format("plan") + " ; then "
                              + base.format("apply") + " ; then " + base.format("done")
-                             + " . Do not mention tidying, or what it changed, in your answer: the operator gets a separate tidy note later. "
+                             + " . If plan returns attention: for each search_words_needed memory add 6 to 12 everyday words "
+                             "someone might use to ask about it later with " + base.split(" reflect ")[0] + " search-words --session "
+                             + self.m.shlex.quote(state["session_id"]) + " --turn " + self.m.shlex.quote(turn["id"]) + " --token "
+                             + self.m.shlex.quote(turn["token"]) + " --id ID --words 'a,b,c' ; for possible_repeats that say the same "
+                             "thing, or where one is an older version, save a correction that supersedes the older one through the review "
+                             "(leave pairs that differ); for check_still_true, ask the operator once, in one short line at the end of your "
+                             "answer, whether it is still true. Apart from that question, do not mention tidying, or what it changed, in "
+                             "your answer: the operator gets a separate tidy note later. "
                              "If a command is refused, skip tidying this turn and do not mention it. ")
                 elif self.whole_due(data):
                     text += ("\nAI-Verse OS tidying of everything saved is due. After you finish the operator's request and before your "
@@ -350,6 +357,38 @@ class Tidy:
         if whole:
             out.update({"checked": wl["checked"], "more_to_check": wl["cursor"] is not None or not wl["ok"],
                         "in_other_projects": len(items) - len(seen_here)})
+        try:
+            own = turn.get("scope") or state.get("scope") or "operator"
+            mine = [own[10:]] if own.startswith("workspace:") else []  # detail only for this chat's own project
+            attention = self.owner("reflect_scan", {"projects": mine, "attention": True}).get("attention")
+            if attention and any(attention.values()):
+                out["attention"] = attention
+        except (self.m.Refused, OSError, ValueError):
+            pass
+        if self.b.config.get("chat_history") == "prospective":
+            try:
+                own = turn.get("scope") or state.get("scope") or "operator"
+                previews = []
+                cursors = data.get("chat_review_cursors", {})
+                updated_cursors = {}
+                for selected in dict.fromkeys((own, "operator")):
+                    preview = self.b.history("list", {"from": selected, "limit": 4,
+                        "after": cursors.get(selected)}, session, turn_id, token)
+                    previews.append(preview)
+                    updated_cursors[selected] = preview.get("next_archive")
+                with self.locked():
+                    current = self.load()
+                    lease = current.get("lease") or {}
+                    if (lease.get("session"), lease.get("turn")) == (session, turn_id):
+                        current.setdefault("chat_review_cursors", {}).update(updated_cursors)
+                        self.store(current)
+                out["chat_placement"] = {
+                    "previews": previews,
+                    "instruction": "Review these chat homes too. Mixed chats stay here. Propose a different home only "
+                        "when the conversation clearly belongs there, then use history plan and ask the operator to "
+                        "confirm its exact fingerprint before history move. Never move from inference alone."}
+            except (self.m.Refused, OSError, ValueError):
+                out["chat_placement"] = {"status": "unavailable", "changed": False}
         while len(str(out).encode()) > MAX_BYTES and out["items"]:
             out["items"].pop()
             out["truncated"] = True
@@ -444,7 +483,10 @@ class Tidy:
             if not info or info.get("status") != "active":
                 continue
             names = {project, info["name"], *info.get("aliases", [])}
-            hits = [r for r in records if any(re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", r["text"], re.I)
+            # Match the project by name in the text or in its tags, with hyphens and spaces treated alike.
+            names = {n for name in names if name for n in (name, name.replace("-", " "))}
+            hits = [r for r in records if any(re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)",
+                                                        r["text"] + " " + str(r.get("tags", "")).replace("-", " ").replace(",", " "), re.I)
                                               for n in names if n)][:3]
             hits = [r for r in hits if self.rejected("move", project, [r["id"] + self.m.digest(r["text"])[:12]]) not in refused]
             for flag in (True, False):
@@ -714,7 +756,8 @@ class Tidy:
         elsewhere = sum(1 for a in applied["applied"] if not self.can_see(actions[a], turn))
         return {"pass": "all", "checked": planned["checked"], "changed": len(applied["applied"]) - elsewhere,
                 "changed_in_other_projects": elsewhere, "more_to_check": done["more_to_check"],
-                "left_for_later": len(applied["left_for_later"])}
+                "left_for_later": len(applied["left_for_later"]),
+                **({"chat_placement": planned["chat_placement"]} if "chat_placement" in planned else {})}
 
     # ---------------------------------------------------------------- undo
     def undo(self, session, turn_id, token, note_id, item, mode="undo"):

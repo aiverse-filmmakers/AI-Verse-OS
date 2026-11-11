@@ -79,3 +79,166 @@ The same bridge serves Claude Code as a second adapter (`--harness claude`). `in
 
 - A very large memory store may time out and skip the full tidy.
 - Undo of a tidy is available for the latest 30 tidy notes.
+## Portable chat archive batch checkpoint (slice 1B draft)
+
+`ChatArchive.append_batch(events)` is the recommended interface for a
+synthetic complete session catch-up. Events must be the full ordered visible
+source sequence starting at 1. Under one writer lock it parses and validates
+the canonical archive exactly once, then compares the complete existing prefix
+with current source records before writing **only** the new suffix. A
+`BatchReceipt` reports the verified committed sequence and final source
+record position/hash. The receipt is not a persisted cursor or proof of source
+authorization; the canonical private JSONL is always rechecked after restart.
+A changed/truncated old record or conflict anywhere in the supplied batch
+refuses writes. Crash recovery uses the committed JSONL prefix, and an
+unterminated archive tail is repaired only when there is a validated suffix
+to append.
+
+The wire format remains `ai-verse.chat-archive/v1`, including exact field
+names, content checksums, original source byte offsets, one header, newline
+terminated messages, and the existing private scope directory layout.
+
+**Shared reader/writer capacity contract:** Each canonical archive contains
+at most 40,000 committed messages and 64,000,000 total UTF-8 JSONL bytes.
+Both `append()` and `append_batch()` reject a write that would breach
+either limit before modifying committed data or repairing a torn tail;
+`read()` rejects any existing file outside the bounds. The native Memory
+portable-chat reader uses the same per-file limits, retaining its separate
+40,000-message aggregate discovery budget. Oversized legacy files are
+not silently truncated, imported, or declared compatible.
+Single-event `append()` remains for compatibility. No new sidecar, consumer
+index, configuration switch, installation or host capture is introduced.
+
+## Portable visible-chat capture (slice 1C draft, disabled)
+
+This is experimental source archiving, not the existing learning review. No new
+hooks are installed by this draft. The Claude Code bridge may call
+`claude_capture.py` on its existing lifecycle events only if
+`capture_enabled` is set. The default is `false`. A second configuration
+flag, `capture_coverage_verified`, also defaults to `false`; an independent
+code-level host-admission gate remains **false** until a separately reviewed,
+version-specific pilot proves actual Claude Code coverage. Changing user
+configuration alone cannot override that gate.
+
+The capture reader uses only the callback's explicitly supplied `session_id`,
+`cwd` and `transcript_path`, never a home-directory search. It requires a
+matching source record session, verified physical transcript and directory
+identities, the current OS-bound session and workspace, the OS context owner,
+and its canonical `chat.archive.append` action-permission decision. An
+unfinished JSONL line remains pending, with no durable source cursor ahead of
+the private archive. Under the archive's writer lock, a single batch validates
+the complete canonical prefix once, rejects changed or missing old rows, and
+commits only the new suffix with a durable fsync. Restart/replay always derives
+the verified checkpoint from existing private JSONL, not a saved sidecar.
+Source evidence is transient and raw tools/reasoning
+are excluded by the fixture filter. Only one physically bound scope may be
+captured; ambiguous or mixed-scope turn histories are refused.
+
+**Historical privacy, draft fail-closed gate:** The present `cwd`, current
+workspace or current-turn permission cannot grant access to older events in
+an existing/resumed transcript. Before creating or writing an archive, every
+newline-terminated source record, including excluded tool/sidechain rows,
+must match an OS-owned `capture_scope_provenance` ledger with the original
+session ID, exact source path, immutable byte offset/end, raw record SHA-256
+and **scope attested when the record was first observed**. One missing,
+changed or differently scoped historical record blocks the entire snapshot
+with zero archive writes. Unfinished final lines stay provisional.
+
+No production at-record provenance issuer exists in slice 1C; the code NEVER
+creates an attestation by rereading old text or applying today's scope.
+An independent code-level `_HISTORY_PROVENANCE_ISSUER_ADMITTED = False`
+gate also prevents a retroactively fabricated session-state ledger from
+authorizing any source. It stays closed independently of the Claude host
+coverage gate. Thus existing or resumed transcripts remain refused even if
+capture flags were changed. Synthetic tests mock both gates and create a
+fixture-only ledger solely to exercise the verification contract. A future
+real issuer must be independently reviewed for at-time authenticity and
+historical scope binding before either gate may be admitted.
+
+**Unverified boundaries:** The 1A parser is a synthetic fixture contract, not
+proof of the host's visible UI, event ordering, prompt formatting or tool
+exclusions. The custom `capture_opt_out` flag is a fail-closed input but has
+not been verified as a native Claude Code private-session control. Credential
+recognition is heuristic and cannot establish that arbitrary visible text is
+secret-free. The new per-record historical-scope check blocks unproven
+history but does not itself issue or cryptographically authenticate the
+underlying OS provenance. No local or real host pilot, verified host version,
+reviewed consent/secret policy, cross-tool read,
+or member distribution approval has occurred. Filesystem identity checks
+reduce replacement races but do not constitute isolation against a privileged
+local adversary. Keep capture OFF for all members and installations.
+
+## Prospective native local chat history
+
+The new `chat_history` mode uses already approved local lifecycle hooks. It
+requires an observed new session boundary and never attributes older resumed
+messages to today's project. It writes exact visible text to the private v1
+archive. The old experimental full-history gates and the Dashboard experiment
+remain separate and disabled.
+
+After installing the accepted package, an operator can explicitly select
+`bridge.py set --chat-history prospective`, then start a new local chat.
+`bridge.py set --chat-history off` stops capture. Native private/incognito
+signals are not assumed. This control applies to the local archive only.
+Changing the mode or switching the helpers off and on requires a new chat before capture can restart; messages
+from the disabled interval are never backfilled. An explicit private-session
+event makes that entire session private from that point onwards.
+A missing source, changed scope, modified prefix, credential-like visible text,
+or unsupported source shape blocks that snapshot and preserves prior records.
+The local diagnostic reports saved, pending or blocked without source text.
+
+Native transcript tests use the real Codex 0.167.0 release and Claude Code
+2.1.316 with isolated homes and local synthetic API replies. They verify visible
+user and assistant text while excluding harness context and hidden reasoning.
+Text blocks are preserved individually. Attachments are marked not embedded.
+These are native CLI source-format tests, not a claim about every desktop UI
+or third-party harness. Initial secure source collection requires POSIX
+no-follow directory descriptors, available on macOS and Linux. Windows source
+collection remains blocked rather than weakening file checks.
+
+
+Chat tidying now includes a bounded placement review of both Personal and the
+current project. Moves remain preview-first and require the operator's explicit
+confirmation of the exact plan. The OS moves one authoritative transcript,
+preserves its exact text and message identities, and immediately revokes the old
+project's access. Memory can follow an existing message reference into the new
+home only when that destination is currently authorized. A moved chat is closed
+to further capture; start a new chat to record more messages. Interrupted moves
+fail closed until the confirmed recovery finishes. Native provider files are
+never moved or deleted. Chats with identical local IDs in unrelated projects
+retain separate namespaces.
+
+
+Prospective capture streams complete native JSONL records through the same
+no-follow file descriptors and before/after identity checks. Hidden tool and
+reasoning rows are discarded as they are parsed, so an entire native transcript
+is no longer limited to 8 MB. Individual records remain bounded at 8 MB, visible
+source rows stay within the archive's shared capacity, and partial tails are
+retried without committing provisional text. Prefix integrity is hashed while
+streaming. The older disabled historical import retains its original snapshot
+limit and admission gates.
+
+
+Archive discovery now returns an explicit bounded page and continuation instead
+of rejecting the entire history after 128 chats or 40,000 combined messages.
+Each page keeps those existing content-read bounds. The continuation is bound
+to the same query and currently visible homes; changing either refuses it.
+Individual file-size, integrity and message-count limits still apply. Directory
+names are streamed into a bounded selection heap, and unowned junk entries keep
+a separate refusal budget. Counts describe the current page. Continue until
+`archive_page.complete` before concluding that no saved chat matches. Start a
+fresh scan to pick up new messages or placement changes during a scan. Tidying
+also rotates bounded previews through later chats instead of stopping at the
+first few. Old source references pass the OS's permission check using their
+owner-resolved current home, with another Memory check before exact disclosure.
+
+
+The direct history reader provides a bounded readable transcript alongside the
+full private local source path. Current session status records the durable
+message checkpoint, pending/blocked state and interruption status without
+message text in diagnostics. Stop/end callbacks report incomplete saving;
+explicitly private sessions remain quiet. Claude source UUID/parent UUID are
+retained when present. The native acceptance also checks a Claude conversation
+reaching a fresh Codex model's actual context, and then a Codex reply reaching a
+fresh Claude model's context, using copied OS folders after each old provider
+home has been removed. These tests use loopback synthetic providers only.

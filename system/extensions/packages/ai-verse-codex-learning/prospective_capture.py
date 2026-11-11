@@ -114,8 +114,6 @@ def capture(bridge, event):
     """Return content-free capture state; never claim complete UI coverage."""
     if bridge.config.get("chat_history") != "prospective":
         return {"status": "disabled"}
-    if event.get("capture_opt_out") is True:
-        return {"status": "blocked", "reason": "private session"}
     session = event.get("session_id")
     if not isinstance(session, str) or not session or len(session) > 128:
         return {"status": "blocked", "reason": "invalid session"}
@@ -123,6 +121,14 @@ def capture(bridge, event):
         with bridge.lock(session):
             scope = _scope(bridge, event, session)
             state = bridge.state(session)
+            # A private turn makes the remainder of this native session private.
+            # Replaying its whole source later must never backfill that interval.
+            if event.get("capture_opt_out") is True:
+                state["chat_history_private"] = True
+                bridge.save(state)
+            if state.get("chat_history_private"):
+                raise CaptureBlocked("private session; start a new chat to record")
+            epoch = bridge.config.get("chat_history_epoch", "initial")
             boundary = state.get("chat_history_boundary")
             source = event.get("transcript_path")
             if (event.get("hook_event_name") == "SessionStart"
@@ -130,7 +136,7 @@ def capture(bridge, event):
                 # Native hosts can announce startup before the transcript file
                 # exists. Remember only this authorized prospective start.
                 state["chat_history_pending"] = {"session": session, "scope": scope,
-                                                 "harness": bridge.harness}
+                                                 "harness": bridge.harness, "epoch": epoch}
                 bridge.save(state)
             if not isinstance(source, str) or not Path(source).is_absolute():
                 raise CaptureBlocked("host transcript path unavailable")
@@ -150,7 +156,7 @@ def capture(bridge, event):
                     state["chat_history_boundary"] = {
                         "protocol": PROTOCOL, "scope": scope, "source": source,
                         "start": 0, "prefix_sha256": _digest(b""),
-                        "harness": bridge.harness, "session": session}
+                        "harness": bridge.harness, "session": session, "epoch": epoch}
                     bridge.save(state)
                     return {"status": "recording", "saved": 0}
             # The secure reader requires a native filename matching its session.
@@ -176,7 +182,7 @@ def capture(bridge, event):
                     raise CaptureBlocked("native Claude version not qualified")
             if not boundary:
                 pending = state.get("chat_history_pending")
-                if pending != {"session": session, "scope": scope, "harness": bridge.harness}:
+                if pending != {"session": session, "scope": scope, "harness": bridge.harness, "epoch": epoch}:
                     raise CaptureBlocked("new session boundary required")
                 visible = [(offset, _text(row, bridge.harness)) for offset, _, row in rows
                            if _text(row, bridge.harness)]
@@ -195,14 +201,15 @@ def capture(bridge, event):
                     end = sum(len(line) for _, line, _ in rows)
                 boundary = {"protocol": PROTOCOL, "scope": scope, "source": source,
                             "start": end, "prefix_sha256": _digest(raw[:end]),
-                            "harness": bridge.harness, "session": session}
+                            "harness": bridge.harness, "session": session, "epoch": epoch}
                 state["chat_history_boundary"] = boundary
                 bridge.save(state)
                 if not visible:
                     return {"status": "recording", "saved": 0, "coverage": "native visible text"}
             if (boundary.get("protocol") != PROTOCOL or boundary.get("scope") != scope
                     or boundary.get("source") != source or boundary.get("harness") != bridge.harness
-                    or boundary.get("session") != session):
+                    or boundary.get("session") != session
+                    or boundary.get("epoch", "initial") != epoch):
                 raise CaptureBlocked("native session boundary changed")
             start = boundary["start"]
             if len(raw) < start or _digest(raw[:start]) != boundary["prefix_sha256"]:

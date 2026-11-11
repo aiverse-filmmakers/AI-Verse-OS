@@ -93,6 +93,32 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.assertEqual(capture.capture(self.host, self.event)["saved"], 1)
         self.assertEqual(len(self.messages()), 2)
 
+    def test_private_session_never_backfilled(self):
+        capture.capture(self.host, self.event)
+        self.append('user', 'public first')
+        self.event['hook_event_name'] = 'Stop'
+        capture.capture(self.host, self.event)
+        self.event['capture_opt_out'] = True
+        self.append('user', 'private interval')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        del self.event['capture_opt_out']
+        self.append('assistant', 'still private')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        self.assertEqual([m['text'] for m in self.messages()], ['public first'])
+
+    def test_reenabled_capture_requires_new_chat(self):
+        self.host.config['chat_history_epoch'] = 'first'
+        capture.capture(self.host, self.event)
+        self.append('user', 'public first')
+        self.event['hook_event_name'] = 'Stop'
+        capture.capture(self.host, self.event)
+        self.host.config['chat_history'] = 'off'
+        self.append('user', 'disabled interval')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'disabled')
+        self.host.config.update(chat_history='prospective', chat_history_epoch='second')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        self.assertEqual([m['text'] for m in self.messages()], ['public first'])
+
     def test_bridge_dispatch_survives_learning_early_return(self):
         from bridge import Bridge
         fake = mock.Mock()

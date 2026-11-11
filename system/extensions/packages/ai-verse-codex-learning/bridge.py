@@ -42,7 +42,7 @@ DEFAULTS = {
     "maintainer_feedback": False,
     # Raw transcript archive is opt-in only after reviewed host-coverage proof.
     "capture_enabled": False, "capture_coverage_verified": False,
-    "chat_history": "off",
+    "chat_history": "off", "chat_history_epoch": "initial",
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
                "Pending decisions", "Execution state", "Connection state"}
@@ -484,6 +484,9 @@ class Bridge:
                      "capture_enabled", "capture_coverage_verified"):
             if type(self.config[name]) is not bool:
                 raise Refused("invalid extension configuration: " + name)
+        if (not isinstance(self.config["chat_history_epoch"], str)
+                or not re.fullmatch(r"initial|[0-9a-f]{32}", self.config["chat_history_epoch"])):
+            raise Refused("invalid chat history consent epoch")
         if self.config["chat_history"] not in {"off", "prospective"}:
             raise Refused("invalid chat history mode")
         if self.config["schema_version"] != 1 or type(self.config["enabled"]) is not bool:
@@ -2279,6 +2282,9 @@ def main():
             if args.review_mode:
                 config["review_mode"] = args.review_mode
             if args.chat_history is not None:
+                if config.get("chat_history", "off") != args.chat_history:
+                    # New consent never authorizes a previously private interval.
+                    config["chat_history_epoch"] = secrets.token_hex(16)
                 config["chat_history"] = args.chat_history
             atomic_json(bridge.extension / "config.json", config, bridge.root)
             result = {"enabled": config["enabled"], "review_mode": config["review_mode"],

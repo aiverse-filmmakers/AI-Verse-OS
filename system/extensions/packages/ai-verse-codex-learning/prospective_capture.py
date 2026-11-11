@@ -10,8 +10,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from claude_capture import CaptureBlocked, _supplied_source
-from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES
+from claude_capture import CaptureBlocked, MAX_SOURCE_BYTES, _supplied_source
+from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES, MAX_BATCH_EVENTS
 
 PROTOCOL = "native-transcript-prospective/v1"
 CODEX_VERSIONS = {"0.167.0", "0.167.0-alpha.3.2"}
@@ -95,6 +95,67 @@ def _text(record, harness):
             and isinstance(b.get("text"), str)]
 
 
+
+def _snapshot(stream, size, bridge, event, scope, session, start):
+    """Stream the native source; retain bounded visible rows, never hidden bulk."""
+    rows, prefixes = [], {0: _digest(b"")}
+    hasher = hashlib.sha256()
+    offset, retained, visible_count = 0, 0, 0
+    complete_end, terminated = 0, True
+    seen_meta = False
+    while True:
+        line = stream.readline(MAX_SOURCE_BYTES + 1)
+        if not line:
+            break
+        if len(line) > MAX_SOURCE_BYTES:
+            raise CaptureBlocked("native source record exceeds read budget")
+        if offset == start:
+            prefixes[start] = hasher.hexdigest()
+        if not line.endswith(b"\n"):
+            # A parseable but unflushed tail is still provisional.
+            prefixes[complete_end] = hasher.hexdigest()
+            hasher.update(line)
+            offset += len(line)
+            terminated = False
+            break
+        row = _json(line)
+        visible = _text(row, bridge.harness)
+        payload = row.get("payload", {}) if bridge.harness == "codex" else row
+        if bridge.harness == "codex" and row.get("type") in {"session_meta", "turn_context"}:
+            if payload.get("cwd") and Path(payload["cwd"]).resolve() != Path(event["cwd"]):
+                raise CaptureBlocked("transcript changed workspace")
+            if row["type"] == "session_meta":
+                if seen_meta or offset != 0 or payload.get("id") != session:
+                    raise CaptureBlocked("native session metadata mismatch")
+                seen_meta = True
+        if bridge.harness == "claude":
+            if row.get("cwd"):
+                cwd = Path(row["cwd"])
+                if not cwd.is_absolute() or bridge.scope(str(cwd), "") != scope:
+                    raise CaptureBlocked("Claude transcript changed workspace")
+            if row.get("sessionId") not in {None, session}:
+                raise CaptureBlocked("source session changed")
+        if visible or (bridge.harness == "codex" and row.get("type") == "session_meta"):
+            retained += len(line)
+            visible_count += len(visible)
+            if retained > MAX_ARCHIVE_BYTES or visible_count > MAX_BATCH_EVENTS:
+                raise CaptureBlocked("native visible source capacity exceeded")
+            prefixes[offset] = hasher.hexdigest()
+            rows.append((offset, line, row))
+        hasher.update(line)
+        offset += len(line)
+        complete_end = offset
+    if complete_end == offset:
+        prefixes[complete_end] = hasher.hexdigest()
+    elif start == complete_end:
+        # The boundary can be exactly before a provisional tail.
+        # Its prefix was captured at the start of that tail above.
+        pass
+    if offset != size:
+        raise CaptureBlocked("native source changed during streaming")
+    return {"rows": rows, "prefixes": prefixes, "size": size,
+            "complete_end": complete_end, "terminated": terminated}
+
 def _scope(bridge, event, session):
     cwd = Path(event.get("cwd", ""))
     if not cwd.is_absolute() or not cwd.is_dir() or cwd.resolve() != cwd:
@@ -161,16 +222,16 @@ def capture(bridge, event):
                     return {"status": "recording", "saved": 0}
             # The secure reader requires a native filename matching its session.
             # Codex rollouts include a prefix; validate its exact UUID suffix.
+            visitor = lambda stream, size: _snapshot(stream, size, bridge, event, scope, session,
+                                                     boundary.get("start", 0) if boundary else 0)
             if bridge.harness == "codex":
                 path = Path(source)
                 if not path.stem.endswith("-" + session):
                     raise CaptureBlocked("Codex transcript identity mismatch")
-                raw = _read_codex(path)
+                snapshot = _read_codex(path, visit=visitor)
             else:
-                raw = _supplied_source(source, session)
-            if len(raw) > MAX_ARCHIVE_BYTES:
-                raise CaptureBlocked("native source capacity exceeded")
-            rows = list(_rows(raw))
+                snapshot = _supplied_source(source, session, visit=visitor)
+            rows = snapshot["rows"]
             if bridge.harness == "codex":
                 if not rows or rows[0][2].get("type") != "session_meta" or rows[0][2].get("payload", {}).get("id") != session:
                     raise CaptureBlocked("native session metadata mismatch")
@@ -198,9 +259,9 @@ def capture(bridge, event):
                         raise CaptureBlocked("existing messages require explicit history import")
                     end = visible[0][0]
                 else:
-                    end = sum(len(line) for _, line, _ in rows)
+                    end = snapshot["complete_end"]
                 boundary = {"protocol": PROTOCOL, "scope": scope, "source": source,
-                            "start": end, "prefix_sha256": _digest(raw[:end]),
+                            "start": end, "prefix_sha256": snapshot["prefixes"][end],
                             "harness": bridge.harness, "session": session, "epoch": epoch}
                 state["chat_history_boundary"] = boundary
                 bridge.save(state)
@@ -212,7 +273,7 @@ def capture(bridge, event):
                     or boundary.get("epoch", "initial") != epoch):
                 raise CaptureBlocked("native session boundary changed")
             start = boundary["start"]
-            if len(raw) < start or _digest(raw[:start]) != boundary["prefix_sha256"]:
+            if snapshot["size"] < start or snapshot["prefixes"].get(start) != boundary["prefix_sha256"]:
                 raise CaptureBlocked("native session prefix changed")
             from bridge import SECRET
             events = []
@@ -247,7 +308,7 @@ def capture(bridge, event):
                 archive_id=archive_id, chat_id=archive_id, origin=bridge.harness,
                 session_id=session, authorization_check=lambda selected: selected == _scope(bridge, event, session))
             receipt = archive.append_batch(tuple(events))
-            return {"status": "pending" if raw and not raw.endswith(b"\n") else "saved",
+            return {"status": "pending" if snapshot["size"] and not snapshot["terminated"] else "saved",
                     "saved": receipt.saved, "archive_id": archive_id,
                     "coverage": "native visible text; attachments not embedded"}
     except CaptureBlocked as exc:
@@ -256,8 +317,8 @@ def capture(bridge, event):
         return {"status": "blocked", "reason": "native capture validation failed"}
 
 
-def _read_codex(path):
+def _read_codex(path, *, visit=None):
     # Reuse the exact no-follow reader without renaming or copying native data.
     # Its identity check takes the native stem only; record session identity is
     # independently checked by the prospective boundary and native metadata.
-    return _supplied_source(str(path), path.stem)
+    return _supplied_source(str(path), path.stem, visit=visit)

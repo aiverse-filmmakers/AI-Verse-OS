@@ -68,7 +68,7 @@ def _normal_dir(info):
     return stat.S_ISDIR(info.st_mode)
 
 
-def _supplied_source(path_string: str, session_id: str) -> bytes:
+def _supplied_source(path_string: str, session_id: str, *, visit=None):
     """Read ONLY the session's supplied path through no-follow directory FDs.
 
     Checks every directory inode both before and after opening the file, not
@@ -127,20 +127,30 @@ def _supplied_source(path_string: str, session_id: str) -> bytes:
         initial = os.fstat(fd)
         if not _normal_file(initial) or _file_snapshot(initial) != _file_snapshot(pre):
             raise CaptureBlocked("transcript changed during open")
-        if initial.st_size > MAX_SOURCE_BYTES:
-            raise CaptureBlocked("transcript exceeds fixture read budget")
-        data_parts = []
-        remaining = MAX_SOURCE_BYTES + 1
-        while remaining > 0:
-            block = os.read(fd, min(65536, remaining))
-            if not block:
-                break
-            data_parts.append(block)
-            remaining -= len(block)
-        data = b"".join(data_parts)
+        if visit is None:
+            if initial.st_size > MAX_SOURCE_BYTES:
+                raise CaptureBlocked("transcript exceeds fixture read budget")
+            data_parts = []
+            remaining = MAX_SOURCE_BYTES + 1
+            while remaining > 0:
+                block = os.read(fd, min(65536, remaining))
+                if not block:
+                    break
+                data_parts.append(block)
+                remaining -= len(block)
+            data = b"".join(data_parts)
+            count = len(data)
+            if count > MAX_SOURCE_BYTES:
+                raise CaptureBlocked("transcript exceeds fixture read budget")
+        else:
+            # The prospective reader consumes bounded individual records and
+            # discards hidden source rows. The same open descriptors and final
+            # identity checks still protect the entire native source snapshot.
+            with os.fdopen(os.dup(fd), "rb") as stream:
+                data = visit(stream, initial.st_size)
+            count = os.lseek(fd, 0, os.SEEK_CUR)
         after = os.fstat(fd)
-        if (len(data) > MAX_SOURCE_BYTES or len(data) != initial.st_size
-                or _file_snapshot(after) != _file_snapshot(initial)):
+        if count != initial.st_size or _file_snapshot(after) != _file_snapshot(initial):
             raise CaptureBlocked("transcript changed during read")
         post = path.lstat()
         if _file_snapshot(post) != _file_snapshot(initial) or not _normal_file(post):

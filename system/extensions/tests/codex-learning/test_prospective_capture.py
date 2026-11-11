@@ -120,6 +120,45 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
         self.assertEqual([m['text'] for m in self.messages()], ['public first'])
 
+    def test_long_hidden_source_streams_without_expanding_record_budget(self):
+        hidden = json.dumps({'type': 'tool_result', 'payload': 'hidden trace ' * 90000}).encode() + b'\n'
+        self.source.write_bytes(hidden * 10)
+        self.assertGreater(self.source.stat().st_size, capture.MAX_SOURCE_BYTES)
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
+        text = '  exact late café 🧪\n  '
+        self.append('user', text)
+        self.append('assistant', 'visible reply')
+        self.event['hook_event_name'] = 'Stop'
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 2)
+        self.assertEqual([m['text'] for m in self.messages()], [text, 'visible reply'])
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 0)
+        with self.source.open('r+b') as stream:
+            stream.seek(60)
+            stream.write(b'changed')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        self.assertEqual([m['text'] for m in self.messages()], [text, 'visible reply'])
+
+    def test_stream_visitor_rechecks_source_identity_after_consumption(self):
+        capture.capture(self.host, self.event)
+        self.append('user', 'must not save raced snapshot')
+        self.event['hook_event_name'] = 'Stop'
+        original = capture._snapshot
+        def race(*args):
+            result = original(*args)
+            self.append('assistant', 'concurrent provider write')
+            return result
+        with mock.patch.object(capture, '_snapshot', side_effect=race):
+            self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        self.assertEqual(self.files(), [])
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 2)
+
+    def test_oversized_native_record_still_fails_closed(self):
+        capture.capture(self.host, self.event)
+        self.source.write_bytes(b'x' * (capture.MAX_SOURCE_BYTES + 1) + b'\n')
+        self.event['hook_event_name'] = 'Stop'
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'blocked')
+        self.assertEqual(self.files(), [])
+
     def test_real_config_mode_and_helper_toggles_rotate_consent(self):
         import io
         import bridge

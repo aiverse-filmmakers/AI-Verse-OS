@@ -207,3 +207,13 @@ to further capture; start a new chat to record more messages. Interrupted moves
 fail closed until the confirmed recovery finishes. Native provider files are
 never moved or deleted. Chats with identical local IDs in unrelated projects
 retain separate namespaces.
+
+
+Prospective capture streams complete native JSONL records through the same
+no-follow file descriptors and before/after identity checks. Hidden tool and
+reasoning rows are discarded as they are parsed, so an entire native transcript
+is no longer limited to 8 MB. Individual records remain bounded at 8 MB, visible
+source rows stay within the archive's shared capacity, and partial tails are
+retried without committing provisional text. Prefix integrity is hashed while
+streaming. The older disabled historical import retains its original snapshot
+limit and admission gates.

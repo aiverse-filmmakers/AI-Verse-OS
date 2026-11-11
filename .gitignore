@@ -62,6 +62,9 @@ automations/triggers/*
 automations/policies/*
 !automations/policies/README.md
 
+# Private portable chat source archives (durable, never tracked by Git)
+archives/private-chat-history/
+
 # Disposable runtime state
 runtime/*
 !runtime/README.md

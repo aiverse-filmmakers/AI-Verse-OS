@@ -79,3 +79,32 @@ The same bridge serves Claude Code as a second adapter (`--harness claude`). `in
 
 - A very large memory store may time out and skip the full tidy.
 - Undo of a tidy is available for the latest 30 tidy notes.
+## Portable chat archive batch checkpoint (slice 1B draft)
+
+`ChatArchive.append_batch(events)` is the recommended interface for a
+synthetic complete session catch-up. Events must be the full ordered visible
+source sequence starting at 1. Under one writer lock it parses and validates
+the canonical archive exactly once, then compares the complete existing prefix
+with current source records before writing **only** the new suffix. A
+`BatchReceipt` reports the verified committed sequence and final source
+record position/hash. The receipt is not a persisted cursor or proof of source
+authorization; the canonical private JSONL is always rechecked after restart.
+A changed/truncated old record or conflict anywhere in the supplied batch
+refuses writes. Crash recovery uses the committed JSONL prefix, and an
+unterminated archive tail is repaired only when there is a validated suffix
+to append.
+
+The wire format remains `ai-verse.chat-archive/v1`, including exact field
+names, content checksums, original source byte offsets, one header, newline
+terminated messages, and the existing private scope directory layout.
+
+**Shared reader/writer capacity contract:** Each canonical archive contains
+at most 40,000 committed messages and 64,000,000 total UTF-8 JSONL bytes.
+Both `append()` and `append_batch()` reject a write that would breach
+either limit before modifying committed data or repairing a torn tail;
+`read()` rejects any existing file outside the bounds. The native Memory
+portable-chat reader uses the same per-file limits, retaining its separate
+40,000-message aggregate discovery budget. Oversized legacy files are
+not silently truncated, imported, or declared compatible.
+Single-event `append()` remains for compatibility. No new sidecar, consumer
+index, configuration switch, installation or host capture is introduced.

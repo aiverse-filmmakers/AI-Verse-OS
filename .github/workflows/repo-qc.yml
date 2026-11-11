@@ -29,6 +29,14 @@ jobs:
       - name: Test progressive Memory host bridge contract
         run: python3 scripts/test-progressive-history-bridge.py
 
+      - name: Test Claude transcript JSONL fixture parser
+        run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_claude_transcript.py' -v
+
+      - name: Test OS private portable chat archive fixtures
+        run: |
+          python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_chat_archive.py' -v
+          git check-ignore -q archives/private-chat-history/v1/operator/synthetic-chat.jsonl
+
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 

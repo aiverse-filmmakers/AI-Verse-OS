@@ -242,3 +242,13 @@ retained when present. The native acceptance also checks a Claude conversation
 reaching a fresh Codex model's actual context, and then a Codex reply reaching a
 fresh Claude model's context, using copied OS folders after each old provider
 home has been removed. These tests use loopback synthetic providers only.
+
+
+Prospective recording now durably saves the exact current user prompt to the
+OS's private recovery journal before waiting for the native transcript flush.
+`history pending` lists and reads incomplete prompts, including after copying
+the OS without provider history. Completed native records reconcile the journal
+without duplicating repeated words or inventing native source positions. This
+protects submitted text when a native process dies before answering. It cannot
+save a reply that the app never completed. See INSTRUCTIONS.md for recovery,
+pagination, privacy and movement limits.

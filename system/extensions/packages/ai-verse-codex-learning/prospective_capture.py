@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from claude_capture import CaptureBlocked, MAX_SOURCE_BYTES, _supplied_source
-from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES, MAX_BATCH_EVENTS
+from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES, MAX_BATCH_EVENTS, stage_prompt, reconcile_prompts
 
 PROTOCOL = "native-transcript-prospective/v1"
 CODEX_VERSIONS = {"0.167.0", "0.167.0-alpha.3.2"}
@@ -178,6 +178,7 @@ def _capture(bridge, event):
     session = event.get("session_id")
     if not isinstance(session, str) or not session or len(session) > 128:
         return {"status": "blocked", "reason": "invalid session"}
+    journal_id = None
     try:
         with bridge.lock(session):
             scope = _scope(bridge, event, session)
@@ -192,6 +193,27 @@ def _capture(bridge, event):
             epoch = bridge.config.get("chat_history_epoch", "initial")
             boundary = state.get("chat_history_boundary")
             source = event.get("transcript_path")
+            # The native transcript may not contain the submitted prompt yet.
+            # Preserve the actual hook observation first, under the same fresh
+            # boundary and consent. It makes no native-offset/source-ID claim.
+            if (event.get("hook_event_name") == "UserPromptSubmit" and boundary
+                    and boundary.get("protocol") == PROTOCOL
+                    and boundary.get("scope") == scope and boundary.get("source") == source
+                    and boundary.get("harness") == bridge.harness
+                    and boundary.get("session") == session
+                    and boundary.get("epoch", "initial") == epoch):
+                prompt = event.get("prompt")
+                identity = event.get("turn_id")
+                if isinstance(prompt, str) and prompt and "AI_VERSE_REVIEW_CONTINUATION" not in prompt:
+                    if not isinstance(identity, str) or not identity:
+                        raise CaptureBlocked("prompt observation identity unavailable")
+                    pending_archive_id = _digest(f"{bridge.harness}:{scope}:{session}:{boundary['start']}".encode())[:40]
+                    pending_archive = ChatArchive(bridge.root, scope=scope, authorized_scope=scope,
+                        archive_id=pending_archive_id, chat_id=pending_archive_id,
+                        origin=bridge.harness, session_id=session,
+                        authorization_check=lambda selected: selected == _scope(bridge, event, session))
+                    journal_id = stage_prompt(pending_archive, epoch=epoch,
+                                              observation_id=identity, text=prompt)
             if (event.get("hook_event_name") == "SessionStart"
                     and event.get("source") == "startup" and not boundary):
                 # Native hosts can announce startup before the transcript file
@@ -309,18 +331,22 @@ def _capture(bridge, event):
                 archive_id=archive_id, chat_id=archive_id, origin=bridge.harness,
                 session_id=session, authorization_check=lambda selected: selected == _scope(bridge, event, session))
             receipt = archive.append_batch(tuple(events))
+            pending_count = reconcile_prompts(archive, epoch=epoch)
             interrupted = event.get("hook_event_name") == "Interrupt"
             return {"status": "partial" if interrupted else (
-                        "pending" if snapshot["size"] and not snapshot["terminated"] else "saved"),
+                        "pending" if pending_count or (snapshot["size"] and not snapshot["terminated"]) else "saved"),
                     "saved": receipt.saved, "archive_id": archive_id,
+                    "pending_prompts": pending_count,
                     "checkpoint_sequence": receipt.checkpoint_sequence,
                     "source_end_offset": receipt.checkpoint_source_end_offset,
                     "interrupted": interrupted,
                     "coverage": "native visible text; attachments not embedded"}
     except CaptureBlocked as exc:
-        return {"status": "blocked", "reason": str(exc)}
+        return {"status": "blocked", "reason": str(exc),
+                **({"pending_journal_id": journal_id} if journal_id else {})}
     except Exception:
-        return {"status": "blocked", "reason": "native capture validation failed"}
+        return {"status": "blocked", "reason": "native capture validation failed",
+                **({"pending_journal_id": journal_id} if journal_id else {})}
 
 
 def _read_codex(path, *, visit=None):

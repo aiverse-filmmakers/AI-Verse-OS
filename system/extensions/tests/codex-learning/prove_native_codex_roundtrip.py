@@ -18,6 +18,7 @@ import threading
 from native_mock_openai import Mock
 from prove_native_capture_roundtrip import prepare, PACKAGE
 from lifecycle import definition
+from native_pending_proof import durable_prompt, kill_before_reply, verify_copied_pending
 
 
 def approve_fixture(binary, root, env):
@@ -99,11 +100,7 @@ def main():
             if getattr(server, 'active_prompt_checked', False):
                 return
             server.active_prompt_checked = True
-            active_files = list((root/'archives/private-chat-history/v1').rglob('*.jsonl'))
-            messages = []
-            for path in active_files:
-                messages.extend(json.loads(line) for line in path.read_text().splitlines()[1:])
-            server.active_prompt_saved = any(row.get('role') == 'user' and row.get('text') == 'portable-native-proof-prompt' for row in messages)
+            server.active_prompt_saved = durable_prompt(root, 'portable-native-proof-prompt')
         server.before_model = check_active_prompt
         threading.Thread(target=server.serve_forever, daemon=True).start()
         command = [sys.argv[1], 'exec', '--skip-git-repo-check', '--json',
@@ -118,6 +115,10 @@ def main():
                 raise SystemExit('first native fixture turn failed')
             resumed = [command[0], 'exec', 'resume', '--last', *command[2:]]
             result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            if result.returncode:
+                raise SystemExit('resumed native conversation failed')
+            crash_prompt = 'durable prompt before killed native reply café 🧪'
+            kill_before_reply([*resumed[:-1], crash_prompt], root, env, server, crash_prompt)
         finally:
             server.shutdown()
         if result.returncode:
@@ -129,7 +130,10 @@ def main():
                 print(file.read_text()[-5000:])
             raise SystemExit('native Codex hook capture did not produce one archive')
         messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
-        assert [m['text'] for m in messages] == ['portable-native-proof-prompt','portable-native-proof-reply'] * 2
+        assert [m['text'] for m in messages[:4]] == ['portable-native-proof-prompt','portable-native-proof-reply'] * 2
+        assert len(messages) in {4, 5}
+        if len(messages) == 5:
+            assert messages[4]['role'] == 'user' and messages[4]['text'] == crash_prompt
         copied = base / 'copied-os'
         shutil.copytree(root, copied)
         shutil.rmtree(root)
@@ -149,6 +153,7 @@ source = memory.progressive_recall('portable-native-proof-reply', depth='source'
 assert source['exact_evidence'] and source['source']['content'] == 'portable-native-proof-reply'
 """
         subprocess.run([sys.executable, '-c', reader], cwd=copied, env=env, check=True, timeout=30)
+        verify_copied_pending(copied, env, crash_prompt)
         print('PASS: native Codex approved fixture hooks saved the exact chat and copied-folder Memory retrieved its original reply')
 
 

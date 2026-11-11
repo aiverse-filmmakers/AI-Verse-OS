@@ -931,6 +931,8 @@ class Bridge:
                             "plain sentence, no numbers, links, names or facts from any project>\"},\"evidence\":[...his words...]}. ")
         if tidy:
             instruction += self.tidy_text(state)
+        if self.config.get("chat_history") == "prospective":
+            instruction += "Unfinished local chat prompts: use history pending as documented in " + str(self.extension / "INSTRUCTIONS.md") + ". "
         return instruction
 
     def tidy_text(self, state):
@@ -972,6 +974,8 @@ class Bridge:
             text += "Save to: " + ", ".join(turn.get("allowed") or [turn.get("scope", "operator")]) + " (candidate scope). "
             if tidy:
                 text += self.reflect_short(state)
+        if self.config.get("chat_history") == "prospective":
+            text += "Unfinished local prompts: history pending; see " + str(self.extension / "INSTRUCTIONS.md") + ". "
         return text
 
     def reflect_short(self, state):
@@ -1158,7 +1162,7 @@ class Bridge:
                                   "_aiverse_chat_placement_owner")
             def authorize(scope):
                 result = self.owner("archive_authorize", {"scope": scope, "session_id": session,
-                    "operation": "chat.archive.read" if action in {"list", "read", "status"} else "chat.archive.move"})
+                    "operation": "chat.archive.read" if action in {"list", "read", "status", "pending"} else "chat.archive.move"})
                 return result.get("scope") == scope and result.get("decision") == "allow"
             source = payload.get("from", state["scope"])
             if source not in allowed:
@@ -1174,6 +1178,9 @@ class Bridge:
                 if not authorize(last["scope"]):
                     raise Refused("chat status is not currently authorized")
                 return last
+            if action == "pending":
+                return archive.pending_prompts(self.root, source, authorize,
+                    journal_id=payload.get("journal_id"), after=payload.get("after"), limit=payload.get("limit", 8))
             if action == "read":
                 return archive.read_transcript(self.root, source, payload.get("archive_id"), authorize,
                     after=payload.get("after_sequence", 0), limit=payload.get("limit", 8))
@@ -2244,7 +2251,7 @@ def main():
     reflect.add_argument("--full", action="store_true", help="all: tidy everything saved, not just the last 7 days")
     reflect.add_argument("--auto", action="store_true", help="all: automatic pass (since the last tidy, full when overdue)")
     history = commands.add_parser("history")
-    history.add_argument("action", choices=["list", "read", "status", "plan", "move", "recover"])
+    history.add_argument("action", choices=["list", "read", "status", "pending", "plan", "move", "recover"])
     history.add_argument("--session", required=True)
     history.add_argument("--turn", required=True)
     history.add_argument("--token", required=True)

@@ -821,6 +821,7 @@ def plan_move(root, archive_id, source_scope, destination_scope, authorization_c
     for scope in (source_scope, destination_scope):
         _scope_parts(scope)
         _authorize_scope(root, scope, authorization_check)
+    _refuse_pending_move(root, source_scope, archive_id)
     receipt = placement_receipt(root, archive_id, source_scope)
     if receipt and (receipt["status"] != "committed" or receipt["to"] != source_scope):
         raise ArchiveBlocked("archive placement changed or is moving")
@@ -1034,3 +1035,209 @@ def read_transcript(root, scope, archive_id, authorization_check, *, after=0, li
         "full_transcript": path.relative_to(root).as_posix(),
         "next_sequence": next_sequence if next_sequence < len(result.messages) else None,
         "source_required": not records and after < len(result.messages)}
+
+
+PENDING_SCHEMA = "ai-verse.chat-pending/v1"
+MAX_PENDING_BYTES = 8_000_000
+
+
+def _pending_path(root, scope, journal_id, *, create=False):
+    _assert_id(journal_id, "pending journal ID")
+    folder = _private_dir(Path(root), STORE_PARTS + _scope_parts(scope) + (".pending",), create=create)
+    return None if folder is None else folder / (journal_id + ".json")
+
+
+def _pending_read(path, scope, journal_id):
+    if path is None or (not path.exists() and not path.is_symlink()):
+        return None
+    fd = _regular_open(path, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as stream:
+        wire = stream.read(MAX_PENDING_BYTES + 1)
+    if len(wire) > MAX_PENDING_BYTES:
+        raise ArchiveBlocked("pending prompt capacity exceeded")
+    value = _strict_json(wire)
+    checksum = value.pop("sha256", None)
+    if checksum != _sha256(_json_bytes(value)):
+        raise ArchiveBlocked("pending prompt integrity changed")
+    if (set(value) != {"schema", "scope", "journal_id", "archive_id", "origin", "session_id", "epoch", "observations"}
+            or value["schema"] != PENDING_SCHEMA or value["scope"] != scope or value["journal_id"] != journal_id
+            or value["origin"] not in {"codex", "claude"}):
+        raise ArchiveBlocked("invalid pending prompt journal")
+    for field in ("archive_id", "session_id"):
+        _assert_id(value[field], field)
+    if not isinstance(value["epoch"], str) or len(value["epoch"]) > 128:
+        raise ArchiveBlocked("invalid pending consent epoch")
+    observations = value["observations"]
+    if not isinstance(observations, list) or len(observations) > MAX_ARCHIVE_MESSAGES:
+        raise ArchiveBlocked("invalid pending observations")
+    seen = set()
+    for item in observations:
+        if not isinstance(item, dict) or set(item) not in (
+                {"id", "text", "text_sha256", "after_sequence"},
+                {"id", "text_sha256", "after_sequence", "resolved_sequence"}):
+            raise ArchiveBlocked("invalid pending observation")
+        _assert_id(item["id"], "observation ID")
+        if item["id"] in seen or not isinstance(item["text_sha256"], str) or not SHA.fullmatch(item["text_sha256"]):
+            raise ArchiveBlocked("invalid pending observation identity")
+        seen.add(item["id"])
+        if type(item["after_sequence"]) is not int or item["after_sequence"] < 0:
+            raise ArchiveBlocked("invalid pending checkpoint")
+        if "text" in item:
+            if (not isinstance(item["text"], str)
+                    or _sha256(item["text"].encode("utf-8")) != item["text_sha256"]):
+                raise ArchiveBlocked("pending prompt text changed")
+        elif type(item["resolved_sequence"]) is not int or item["resolved_sequence"] <= item["after_sequence"]:
+            raise ArchiveBlocked("invalid pending reconciliation")
+    return value
+
+
+def _pending_write(path, value):
+    wire = _json_bytes({**value, "sha256": _sha256(_json_bytes(value))})
+    if len(wire) > MAX_PENDING_BYTES:
+        raise ArchiveBlocked("pending prompt capacity exceeded")
+    _atomic_private(path, wire)
+
+
+def stage_prompt(archive, *, epoch, observation_id, text):
+    """Durable hook observation, never a fabricated native transcript record.
+
+    Caller must establish prospective consent and a fresh native boundary first.
+    Resolved entries retain only replay hashes, never a duplicate raw transcript.
+    """
+    from bridge import SECRET
+    _assert_id(observation_id, "observation ID")
+    if archive.origin not in {"codex", "claude"}:
+        raise ArchiveBlocked("unsupported pending observation origin")
+    if (not isinstance(text, str) or not text or len(text.encode("utf-8")) > 1_000_000
+            or SECRET.search(text) or "AI_VERSE_REVIEW_CONTINUATION" in text):
+        raise ArchiveBlocked("prompt is not eligible for pending capture")
+    if not isinstance(epoch, str) or len(epoch) > 128:
+        raise ArchiveBlocked("invalid pending consent epoch")
+    archive._check_authorization(write=True)
+    journal_id = _sha256(_json_bytes({"origin": archive.origin, "scope": archive.scope,
+                                     "session": archive.session_id, "epoch": epoch}))
+    path = _pending_path(archive.root, archive.scope, journal_id, create=True)
+    with _writer_lock(archive._path(create=True).with_suffix(".lock")), _writer_lock(path.with_suffix(".lock")):
+        value = _pending_read(path, archive.scope, journal_id)
+        if value is None:
+            value = {"schema": PENDING_SCHEMA, "scope": archive.scope, "journal_id": journal_id,
+                     "archive_id": archive.archive_id, "origin": archive.origin,
+                     "session_id": archive.session_id, "epoch": epoch, "observations": []}
+        if value["archive_id"] != archive.archive_id:
+            raise ArchiveConflict("pending native boundary changed")
+        checksum = _sha256(text.encode("utf-8"))
+        for old in value["observations"]:
+            if old["id"] == observation_id:
+                if old["text_sha256"] != checksum:
+                    raise ArchiveConflict("pending observation identity changed")
+                return journal_id
+        if len(value["observations"]) >= MAX_ARCHIVE_MESSAGES:
+            raise ArchiveBlocked("pending observation capacity exceeded")
+        baseline = len(archive.read().messages)
+        value["observations"].append({"id": observation_id, "text": text,
+                                       "text_sha256": checksum, "after_sequence": baseline})
+        archive._check_authorization(write=True)
+        _pending_write(path, value)
+        archive._check_authorization(write=True)
+    return journal_id
+
+
+def reconcile_prompts(archive, *, epoch):
+    """Remove staged text only after a matching canonical message is durable."""
+    archive._check_authorization(write=True)
+    journal_id = _sha256(_json_bytes({"origin": archive.origin, "scope": archive.scope,
+                                     "session": archive.session_id, "epoch": epoch}))
+    path = _pending_path(archive.root, archive.scope, journal_id)
+    if path is None or (not path.exists() and not path.is_symlink()):
+        return 0
+    with _writer_lock(path.with_suffix(".lock")):
+        value = _pending_read(path, archive.scope, journal_id)
+        if value["archive_id"] != archive.archive_id:
+            raise ArchiveConflict("pending native boundary changed")
+        messages = archive.read().messages
+        cursor, changed = 0, False
+        for item in value["observations"]:
+            if "resolved_sequence" in item:
+                cursor = max(cursor, item["resolved_sequence"])
+                continue
+            match = next((row for row in messages if row["sequence"] > max(cursor, item["after_sequence"])
+                          and row["role"] == "user" and row["text"] == item["text"]), None)
+            if match is None:
+                # Preserve ordering, including repeated identical prompts.
+                break
+            cursor = item["resolved_sequence"] = match["sequence"]
+            del item["text"]
+            changed = True
+        archive._check_authorization(write=True)
+        if changed:
+            _pending_write(path, value)
+        return sum("text" in item for item in value["observations"])
+
+
+def pending_prompts(root, scope, authorization_check, *, journal_id=None, limit=8, after=None):
+    """Bounded private recovery view; observations are explicitly incomplete.
+
+    No application history or runtime session state is needed to read a copied
+    folder. Omitting journal_id lists metadata; supplying it reads exact text.
+    """
+    import heapq
+    root = Path(root)
+    _authorize_scope(root, scope, authorization_check)
+    if type(limit) is not int or not 1 <= limit <= 32:
+        raise ArchiveBlocked("invalid pending page limit")
+    if after is not None:
+        _assert_id(after, "pending page cursor")
+    if journal_id is not None:
+        path = _pending_path(root, scope, journal_id)
+        value = _pending_read(path, scope, journal_id)
+        if value is None:
+            raise ArchiveBlocked("pending journal is absent")
+        rows = [item for item in value["observations"] if "text" in item]
+        start = 0
+        if after is not None:
+            positions = [i for i, item in enumerate(rows) if item["id"] == after]
+            if not positions:
+                raise ArchiveBlocked("pending cursor changed; start a fresh page")
+            start = positions[0] + 1
+        remaining = rows[start:]
+        # Exact large prompts remain in the source, never silently clipped.
+        selected, size = [], 0
+        for item in remaining:
+            encoded = len(item["text"].encode("utf-8"))
+            if len(selected) >= limit or size + encoded > 24000:
+                break
+            selected.append({"observation_id": item["id"], "role": "user", "text": item["text"],
+                             "after_sequence": item["after_sequence"]})
+            size += encoded
+        result = {"schema": PENDING_SCHEMA, "status": "incomplete", "scope": scope,
+                  "journal_id": journal_id, "archive_id": value["archive_id"], "messages": selected,
+                  "source": str(path.relative_to(root)), "pending_count": len(rows),
+                  "source_required": bool(remaining and not selected),
+                  "next_cursor": selected[-1]["observation_id"] if selected and len(selected) < len(remaining) else None}
+    else:
+        folder = _private_dir(root, STORE_PARTS + _scope_parts(scope) + (".pending",), create=False)
+        paths = [] if folder is None else heapq.nsmallest(limit + 1,
+            (p.name for p in folder.iterdir() if p.suffix == ".json" and (after is None or p.stem > after)))
+        items = []
+        for name in paths[:limit]:
+            path = folder / name
+            value = _pending_read(path, scope, path.stem)
+            count = sum("text" in item for item in value["observations"])
+            items.append({"journal_id": path.stem, "archive_id": value["archive_id"],
+                          "pending_count": count, "source": str(path.relative_to(root)),
+                          "status": "incomplete" if count else "reconciled"})
+        result = {"schema": PENDING_SCHEMA, "scope": scope, "items": items,
+                  "next_cursor": paths[limit - 1][:-5] if len(paths) > limit else None}
+    _authorize_scope(root, scope, authorization_check)
+    return result
+
+
+def _refuse_pending_move(root, scope, archive_id):
+    # Never strand unmatched original words under a chat's former project.
+    folder = _private_dir(Path(root), STORE_PARTS + _scope_parts(scope) + (".pending",), create=False)
+    if folder is not None:
+        for path in folder.iterdir():
+            if path.suffix == ".json":
+                value = _pending_read(path, scope, path.stem)
+                if value["archive_id"] == archive_id and any("text" in item for item in value["observations"]):
+                    raise ArchiveBlocked("chat has unreconciled prompts; complete recovery before moving")

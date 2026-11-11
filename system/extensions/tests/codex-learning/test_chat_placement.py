@@ -27,6 +27,19 @@ class ChatPlacementTests(unittest.TestCase):
         return a.move_archive(self.root, chat.archive_id, plan['from'], plan['to'],
             fingerprint=plan['fingerprint'], confirmed=True, authorization_check=check)
 
+    def test_unreconciled_original_words_prevent_confirmed_move(self):
+        self.workspace('film')
+        chat = self.archive(origin='claude')
+        chat.append(event())
+        check = lambda scope: self.scope_grants.get(scope, True)
+        plan = a.plan_move(self.root, chat.archive_id, 'operator', 'workspace:film', check)
+        a.stage_prompt(chat, epoch='initial', observation_id='unfinished-turn', text='not yet in native transcript')
+        with self.assertRaises(a.ArchiveBlocked):
+            self.move(chat, check, plan)
+        self.assertTrue(self.path(chat).exists())
+        page = a.pending_prompts(self.root, 'operator', check)
+        self.assertEqual(page['items'][0]['pending_count'], 1)
+
     def test_move_preserves_messages_closes_original_capture_and_can_move_again(self):
         chat, check, plan = self.prepare()
         original = chat.read().messages[0]

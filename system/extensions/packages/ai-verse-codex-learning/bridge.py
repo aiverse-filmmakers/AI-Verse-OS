@@ -1217,6 +1217,11 @@ class Bridge:
             return result
 
     def hook(self, event):
+        # Normalize once for BOTH consumers. Claude supplies no turn ID; a
+        # private copy created only inside learning left capture without one.
+        if (self.harness == "claude" and isinstance(event, dict)
+                and event.get("hook_event_name") in EVENTS and self.registered()):
+            event = normalize_claude_event(self, event)
         result = None
         try:
             result = self._learning_hook(event)

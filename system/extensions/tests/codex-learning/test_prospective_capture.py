@@ -306,6 +306,25 @@ class ProspectiveCaptureTests(unittest.TestCase):
             self.assertEqual(Bridge.hook(fake, self.event), {"original": "result"})
         collector.capture.assert_called_once_with(fake, self.event)
 
+    def test_claude_learning_and_capture_receive_the_same_observation_identity(self):
+        from bridge import Bridge
+        fake = mock.Mock()
+        fake.harness = 'claude'
+        fake.config = {'chat_history': 'prospective'}
+        fake.root = self.root
+        fake.registered.return_value = True
+        fake._learning_hook.return_value = {}
+        collector = mock.Mock()
+        collector.capture.return_value = {'status': 'saved', 'saved': 1}
+        original = {**self.event, 'hook_event_name': 'UserPromptSubmit', 'prompt': 'native words'}
+        with mock.patch('bridge.safe', return_value=PACKAGE / 'prospective_capture.py'), mock.patch('bridge.load_module', return_value=collector):
+            Bridge.hook(fake, original)
+        learning_event = fake._learning_hook.call_args.args[0]
+        archive_event = collector.capture.call_args.args[1]
+        self.assertEqual(learning_event['turn_id'], archive_event['turn_id'])
+        self.assertTrue(archive_event['turn_id'].startswith('claude-'))
+        self.assertNotIn('turn_id', original)
+
     def test_native_codex_excludes_harness_context_and_analysis(self):
         self.host.harness = 'codex'
         self.source = self.root / 'rollout-session.jsonl'

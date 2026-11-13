@@ -97,5 +97,28 @@ try {
     assert.deepEqual(run({ operation: 'adjustments-list', scope: 'workspace:beta' }).adjustments, ['local--copywriting', 'marketing']);
     assert.equal(run({ operation: 'adjustments-remove', scope: 'workspace:beta', name: 'marketing' }).state, 'removed');
   });
+  test('a note saved under the plain skill name reaches the qualified skill', () => {
+    removeAdjustment({ osRoot: root, scope: 'workspace:beta', name: 'local:copywriting' });
+    saveAdjustment({ osRoot: root, scope: 'workspace:beta', name: 'copywriting', text: 'Plain name note.' });
+    const picked = selectCapability({ ...options, scope: 'workspace:beta', qualifiedId: 'local:copywriting' });
+    assert.equal(picked.project_adjustments?.text, 'Plain name note.\n');
+    saveAdjustment({ osRoot: root, scope: 'workspace:beta', name: 'local:copywriting', text: 'Full name note.' });
+    assert.equal(selectCapability({ ...options, scope: 'workspace:beta', qualifiedId: 'local:copywriting' }).project_adjustments?.text, 'Full name note.\n', 'the full name note wins');
+    removeAdjustment({ osRoot: root, scope: 'workspace:beta', name: 'copywriting' });
+  });
+  test('a lock left by a crashed save is cleared after a minute, a fresh one still blocks', () => {
+    const dir = path.join(root, 'workspaces/alpha/context/skill-adjustments');
+    const lock = path.join(dir, 'seo-audit.md.lock');
+    fs.writeFileSync(lock, '');
+    assert.throws(() => saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'seo-audit', text: 'x' }), /being saved elsewhere/);
+    const old = new Date(Date.now() - 120_000);
+    fs.utimesSync(lock, old, old);
+    assert.equal(saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'seo-audit', text: 'x' }).state, 'saved');
+    assert.equal(fs.existsSync(lock), false);
+  });
+  test('ordinary words like token are allowed, a real looking key is not', () => {
+    assert.equal(saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'ad-creative', text: 'Design token: brand-red for buttons.' }).state, 'saved');
+    assert.throws(() => saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'ad-creative', text: 'api key: a8f3k29dk3mz71q' }), /never store/);
+  });
   console.log(`skill adjustment checks passed: ${checks}`);
 } finally { fs.rmSync(base, { recursive: true, force: true }); }

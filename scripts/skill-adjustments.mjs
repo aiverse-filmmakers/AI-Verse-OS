@@ -10,6 +10,9 @@ export const ADJUSTMENT_RULE = "Where these project adjustments disagree with th
 export const SAVED_MESSAGE = 'Saved for this project only. Want this in the skill itself too?';
 const SEGMENT = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_BYTES = 16384;
+const STALE_LOCK_MS = 60_000;
+// Any password value, or a key, secret or token value that looks real (12+ characters mixing letters and digits).
+const SECRET_ASSIGNMENT = /\b(?:pass(?:word|code)\b\s*[:=]\s*\S+|(?:api[_ -]?key|secret|token)\b\s*[:=]\s*(?=\S*[A-Za-z])(?=\S*\d)\S{12,})/i;
 
 function projectDirectory(osRoot, scope) {
   const id = typeof scope === 'string' && scope.startsWith('workspace:') ? scope.slice(10) : '';
@@ -61,13 +64,21 @@ export function saveAdjustment({ osRoot, scope, name, text }) {
   if (text.includes('\u0000')) throw new Error('adjustments must be plain text');
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('adjustments are too long; keep them under 16 KB');
   assertNoRawSecrets(text);
-  if (/\b(password|passcode|api[_ -]?key|secret|token)\b\s*[:=]\s*\S+/i.test(text)) throw new Error('never store passwords, keys or tokens in adjustments; use a Connection reference');
+  if (SECRET_ASSIGNMENT.test(text)) throw new Error('never store passwords, keys or tokens in adjustments; use a Connection reference');
   const target = fileFor(osRoot, scope, name);
   fs.mkdirSync(target.directory, { recursive: true, mode: 0o700 });
   const lock = `${target.file}.lock`;
   let fd;
   try { fd = fs.openSync(lock, 'wx', 0o600); }
-  catch { throw new Error('these adjustments are being saved elsewhere; try again'); }
+  catch {
+    // A lock left by a save that crashed is cleared after a minute instead of blocking saves forever.
+    let stale = false;
+    try { stale = Date.now() - fs.lstatSync(lock).mtimeMs > STALE_LOCK_MS; } catch { stale = false; }
+    if (!stale) throw new Error('these adjustments are being saved elsewhere; try again');
+    fs.unlinkSync(lock);
+    try { fd = fs.openSync(lock, 'wx', 0o600); }
+    catch { throw new Error('these adjustments are being saved elsewhere; try again'); }
+  }
   const temporary = `${target.file}.${process.pid}.tmp`;
   try {
     const output = fs.openSync(temporary, 'wx', 0o600);
@@ -93,7 +104,10 @@ export function removeAdjustment({ osRoot, scope, name }) {
 export function projectAdjustmentsFor(osRoot, scope, qualifiedId) {
   if (typeof scope !== 'string' || !scope.startsWith('workspace:')) return {};
   try {
-    const found = readAdjustment(osRoot, scope, qualifiedId);
+    let found = readAdjustment(osRoot, scope, qualifiedId);
+    // Notes saved under the plain skill name ("copywriting") also apply to "aiverse-skills:copywriting".
+    const bare = typeof qualifiedId === 'string' && qualifiedId.includes(':') ? qualifiedId.slice(qualifiedId.lastIndexOf(':') + 1) : null;
+    if (found.text === null && bare) found = readAdjustment(osRoot, scope, bare);
     return found.text === null ? {} : { project_adjustments: { scope, name: found.name, text: found.text, rule: ADJUSTMENT_RULE, permission_granted: false } };
   } catch (error) {
     return { project_adjustments: { scope, status: 'unreadable', reason: error.message, permission_granted: false } };

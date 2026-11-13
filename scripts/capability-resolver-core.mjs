@@ -6,6 +6,7 @@ import { readMemberLibrary } from './member-skill-library.mjs';
 import { capabilityConfiguration } from './capability-configuration.mjs';
 import { externalSources } from './capability-external-sources.mjs';
 import { readBindings } from './capability-bindings.mjs';
+import { projectAdjustmentsFor } from './skill-adjustments.mjs';
 
 export const PROVIDER_CONTRACT = 'aiverse-capability-provider-v1';
 export const DISTRIBUTED_PROVIDER = 'aiverse-skills';
@@ -564,7 +565,8 @@ export function selectCapability(options = {}) {
       candidate = revision;
     }
     return { status: 'selected', selection: candidate, providers, ...extra,
-      ...(binding ? { workspace_binding: { ...binding, scope, permission_granted: false } } : {}) };
+      ...(binding ? { workspace_binding: { ...binding, scope, permission_granted: false } } : {}),
+      ...projectAdjustmentsFor(root, scope, candidate.id) };
   };
   if (explicit) {
     const discovery = discoverCapabilities({ ...options, qualifiedId: explicit, query: options.query || explicit, limit: 200 });

@@ -46,4 +46,5 @@ jobs:
         run: |
           node scripts/test-member-skill-library.mjs
           node scripts/test-capability-bindings.mjs
+          node scripts/test-skill-adjustments.mjs
           node scripts/test-member-skills-privacy.mjs

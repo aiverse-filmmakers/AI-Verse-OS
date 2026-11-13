@@ -27,13 +27,18 @@ export function bindingPath(osRoot, scope) {
 
 function record(value) { return value && typeof value === 'object' && !Array.isArray(value); }
 
+const SECRET_TEXT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9_]{30,}|\bxox[baprs]-[A-Za-z0-9-]{20,}|\bAKIA[0-9A-Z]{16}\b/;
+export function assertNoRawSecrets(text) {
+  if (SECRET_TEXT.test(text)) throw new Error('raw secret material is forbidden in skill inputs');
+}
+
 export function validateInputs(inputs) {
   if (!record(inputs) || Buffer.byteLength(JSON.stringify(inputs)) > 8192) throw new Error('skill inputs must be a bounded object');
   const walk = (value, depth = 0) => {
     if (depth > 6) throw new Error('skill inputs are nested too deeply');
     if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('non-finite skill input');
     if (typeof value === 'string') {
-      if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bgh[pousr]_[A-Za-z0-9_]{30,}|\bxox[baprs]-[A-Za-z0-9-]{20,}|\bAKIA[0-9A-Z]{16}\b/.test(value)) throw new Error('raw secret material is forbidden in skill inputs');
+      assertNoRawSecrets(value);
     } else if (value && typeof value === 'object') {
       for (const [key, item] of Object.entries(value)) {
         if (/^(password|secret|token|api[_-]?key|credential|private[_-]?key)$/i.test(key)) throw new Error('store a Connection reference instead of raw credentials');

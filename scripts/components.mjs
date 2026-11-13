@@ -447,7 +447,7 @@ function actionFor(item, report) {
       component: item.id,
       kind: 'setup',
       automatic: false,
-      command: 'run the AI-Verse Skills owner setup/doctor for the installed immutable generation',
+      command: 'run the AI-Verse Skills owner update with --expose-default, then its doctor; this lists every skill in the Claude and Codex skill folders',
       reason: 'Skills owns immutable generations and readiness verification.',
     };
   }

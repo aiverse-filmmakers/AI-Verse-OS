@@ -14,6 +14,7 @@ import {
   planCapabilityPromotion,
   selectCapability,
 } from './capability-resolver.mjs';
+import { readAdjustment, listAdjustments, saveAdjustment, removeAdjustment } from './skill-adjustments.mjs';
 
 function fail(message) {
   process.stderr.write(`capability-resolver-cli: ${message}\n`);
@@ -59,7 +60,7 @@ const request = await readPayload();
 const allowed = new Set([
   'operation', 'scope', 'skills_root', 'local_skills_root', 'query', 'qualified_id', 'limit',
   'placement', 'context_label', 'capability_id', 'source_qualified_id',
-  'expected_source_generation_id', 'expected_source_digest', 'alias', 'binding', 'plan',
+  'expected_source_generation_id', 'expected_source_digest', 'alias', 'binding', 'plan', 'name', 'text',
 ]);
 for (const key of Object.keys(request)) {
   if (!allowed.has(key)) fail(`unknown request field: ${key}`);
@@ -89,6 +90,14 @@ if (operation === 'scope-check') {
     qualifiedId: request.qualified_id,
   });
   process.stdout.write(`${JSON.stringify(result)}\n`);
+} else if (operation === 'adjustments-read') {
+  process.stdout.write(`${JSON.stringify(readAdjustment(root, options.scope, request.name ?? request.qualified_id))}\n`);
+} else if (operation === 'adjustments-list') {
+  process.stdout.write(`${JSON.stringify(listAdjustments(root, options.scope))}\n`);
+} else if (operation === 'adjustments-save') {
+  process.stdout.write(`${JSON.stringify(saveAdjustment({ osRoot: root, scope: options.scope, name: request.name ?? request.qualified_id, text: request.text }))}\n`);
+} else if (operation === 'adjustments-remove') {
+  process.stdout.write(`${JSON.stringify(removeAdjustment({ osRoot: root, scope: options.scope, name: request.name ?? request.qualified_id }))}\n`);
 } else if (operation === 'plan-binding') {
   process.stdout.write(`${JSON.stringify(planCapabilityBinding({ ...options, qualifiedId: request.qualified_id, alias: request.alias, binding: request.binding }))}\n`);
 } else if (operation === 'apply-binding') {

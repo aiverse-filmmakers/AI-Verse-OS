@@ -25,6 +25,9 @@ capabilities:
   - id: migration-drop
     scope: universal
     purpose: "Automatically classify and safely migrate accumulated prior-assistant context into existing AI-Verse owners."
+  - id: skill
+    scope: universal
+    purpose: "Make, bring in, inspect or change a skill through the one shared build standard that /learn also uses."
   - id: link
     scope: universal
     purpose: "Create durable routes to important sources without duplication."

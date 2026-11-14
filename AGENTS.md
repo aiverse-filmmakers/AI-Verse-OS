@@ -249,6 +249,7 @@ Use `SKILL-AUTHORING.md` when creating or promoting a capability.
 - `/workspace`: create or evolve a universal isolated workspace.
 - `/learn`: review the current conversation chronologically and route durable learning through its existing owners.
 - `/grill-me`: capture knowledge still in the operator's head without mixing confirmed facts and exploration.
+- `/skill`: make, bring in, inspect or change a skill using the shared build standard.
 - `/link`: make a source findable without duplicating it.
 - `/audit`: verify architecture, Four Cs, routing, freshness, isolation, and evidence.
 - `/level-up`: use the Three Ms to ship one useful improvement.

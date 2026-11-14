@@ -65,6 +65,8 @@ For Brain-owned strategic intent, use `brain.intent.read` (`read_local`, empty p
 
 Reuse an existing skill when it matches. Propose only the focused change supported by the conversation; a read or a single unrelated task does not prove a successful method. A skill proposal must state its trigger, inputs, steps, verification, and failure behavior. Let the Skills owner apply its existing approval and activation policy.
 
+Build every skill candidate by following [the skill build standard](../skill/references/build-standard.md), the same file `/skill` uses. In particular, split the general method from project details and, when project details exist, ask its one "exact or general" question before proposing. Use the conversation's own requests as the test requests.
+
 If an owner or required action is unavailable, keep that item unsaved and report what is missing. Do not substitute the generic inbox for a successful Memory, profile, goal, or Skills write. Never claim saved from a proposal, queued request, or unverified tool call.
 
 ## 4. Make repeated and partial runs safe

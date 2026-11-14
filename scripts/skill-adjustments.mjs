@@ -8,13 +8,27 @@ import { assertNoRawSecrets } from './capability-bindings.mjs';
 export const ADJUSTMENT_CONTRACT = 'aiverse-skill-adjustments-v1';
 export const ADJUSTMENT_RULE = "Where these project adjustments disagree with the skill's instructions, follow the project adjustments.";
 export const SAVED_MESSAGE = 'Saved for this project only. Want this in the skill itself too?';
+export const SAVED_EVERYWHERE_MESSAGE = 'Saved for every project. A project that has its own note for this skill still follows its own note.';
 const SEGMENT = /^[a-z0-9][a-z0-9-]*$/;
 const MAX_BYTES = 16384;
 const STALE_LOCK_MS = 60_000;
 // Any password value, or a key, secret or token value that looks real (12+ characters mixing letters and digits).
 const SECRET_ASSIGNMENT = /\b(?:pass(?:word|code)\b\s*[:=]\s*\S+|(?:api[_ -]?key|secret|token)\b\s*[:=]\s*(?=\S*[A-Za-z])(?=\S*\d)\S{12,})/i;
 
+// "Apply everywhere": notes saved for the operator scope apply to every project. A project's own note wins.
+function overallDirectory(osRoot) {
+  const root = fs.realpathSync(osRoot);
+  const operator = path.join(root, 'operator');
+  if (!fs.existsSync(operator) || fs.realpathSync(operator) !== operator) throw new Error('untrusted operator folder');
+  const context = path.join(operator, 'context');
+  if (existsEntry(context) && fs.realpathSync(context) !== context) throw new Error('operator context is redirected');
+  const directory = path.join(context, 'skill-adjustments');
+  if (existsEntry(directory) && (fs.lstatSync(directory).isSymbolicLink() || fs.realpathSync(directory) !== directory)) throw new Error('adjustments folder is redirected');
+  return directory;
+}
+
 function projectDirectory(osRoot, scope) {
+  if (scope === 'operator') return overallDirectory(osRoot);
   const id = typeof scope === 'string' && scope.startsWith('workspace:') ? scope.slice(10) : '';
   if (!SEGMENT.test(id)) throw new Error('project adjustments belong to one project; choose a workspace scope');
   const root = fs.realpathSync(osRoot);
@@ -90,7 +104,8 @@ export function saveAdjustment({ osRoot, scope, name, text }) {
     fs.unlinkSync(lock);
     if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
   }
-  return { contract: ADJUSTMENT_CONTRACT, state: 'saved', scope, name: target.name, applies_to: 'this project only', message: SAVED_MESSAGE, permission_granted: false };
+  const everywhere = scope === 'operator';
+  return { contract: ADJUSTMENT_CONTRACT, state: 'saved', scope, name: target.name, applies_to: everywhere ? 'every project' : 'this project only', message: everywhere ? SAVED_EVERYWHERE_MESSAGE : SAVED_MESSAGE, permission_granted: false };
 }
 
 export function removeAdjustment({ osRoot, scope, name }) {
@@ -101,14 +116,29 @@ export function removeAdjustment({ osRoot, scope, name }) {
 }
 
 // Used by the resolver: nothing for the operator scope, never throws into skill selection.
+function noteFor(osRoot, scope, qualifiedId) {
+  let found = readAdjustment(osRoot, scope, qualifiedId);
+  // Notes saved under the plain skill name ("copywriting") also apply to "aiverse-skills:copywriting".
+  const bare = typeof qualifiedId === 'string' && qualifiedId.includes(':') ? qualifiedId.slice(qualifiedId.lastIndexOf(':') + 1) : null;
+  if (found.text === null && bare) found = readAdjustment(osRoot, scope, bare);
+  return found;
+}
+
 export function projectAdjustmentsFor(osRoot, scope, qualifiedId) {
-  if (typeof scope !== 'string' || !scope.startsWith('workspace:')) return {};
+  if (typeof scope !== 'string' || (!scope.startsWith('workspace:') && scope !== 'operator')) return {};
   try {
-    let found = readAdjustment(osRoot, scope, qualifiedId);
-    // Notes saved under the plain skill name ("copywriting") also apply to "aiverse-skills:copywriting".
-    const bare = typeof qualifiedId === 'string' && qualifiedId.includes(':') ? qualifiedId.slice(qualifiedId.lastIndexOf(':') + 1) : null;
-    if (found.text === null && bare) found = readAdjustment(osRoot, scope, bare);
-    return found.text === null ? {} : { project_adjustments: { scope, name: found.name, text: found.text, rule: ADJUSTMENT_RULE, permission_granted: false } };
+    const project = scope === 'operator' ? { text: null } : noteFor(osRoot, scope, qualifiedId);
+    let overall = { text: null };
+    try { overall = noteFor(osRoot, 'operator', qualifiedId); } catch { overall = { text: null }; }
+    if (project.text === null && overall.text === null) return {};
+    let text = project.text;
+    if (overall.text !== null) {
+      text = project.text === null
+        ? overall.text
+        : `For every project:\n${overall.text.trim()}\n\nFor this project (wins where they differ):\n${project.text.trim()}\n`;
+    }
+    const name = (project.text !== null ? project : overall).name;
+    return { project_adjustments: { scope, name, text, rule: ADJUSTMENT_RULE, everywhere: overall.text !== null, permission_granted: false } };
   } catch (error) {
     return { project_adjustments: { scope, status: 'unreadable', reason: error.message, permission_granted: false } };
   }

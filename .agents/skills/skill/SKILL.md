@@ -26,6 +26,10 @@ Ask only when the answer changes what gets built.
 - Plain words. Say "just this project" and "change the skill itself". Never say "globally".
 - When a change is saved for one project, say so in one line: "Saved for this
   project only. Want this in the skill itself too?"
+- If the answer is yes for a shipped skill, save the same note with the
+  `operator` scope (`adjustments-save` in `scripts/capability-resolver-cli.mjs`).
+  Every project then gets it, and a project's own note still wins. Say: "Saved
+  for every project." For the operator's own skill, change the skill itself.
 - Hide internal files and JSON. The operator never writes them by hand.
 - Say plainly what is untested or only proposed.
 

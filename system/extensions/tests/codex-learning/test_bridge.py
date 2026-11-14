@@ -505,6 +505,22 @@ class AdapterTests(unittest.TestCase):
         result = self.review(self.payload([candidate]))
         self.assertEqual(result["effects"][0]["result"]["result"]["memory_capture"]["state"], "captured")
 
+    def test_opening_a_skill_in_a_project_chat_attaches_that_projects_notes(self):
+        folder = self.root / "workspaces" / "alpha" / "context" / "skill-adjustments"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "copywriting.md").write_text("Dry tone, no hype, price 99.", encoding="utf-8")
+        (folder / "marketing.md").write_text("Audience: filmmakers.", encoding="utf-8")
+        self.start("Work on workspace:alpha now.")
+        self.assertEqual(self.bridge.state(self.session)["scope"], "workspace:alpha")
+        response = self.bridge.hook(self.event("PostToolUse", tool_use_id="skill-1", tool_name="Skill",
+                                               tool_input={"skill": "copywriting"}, tool_response={"output": "ok"}))
+        context = response["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("Dry tone, no hype, price 99.", context)
+        self.assertIn("also has notes on: marketing", context)
+        again = self.bridge.hook(self.event("PostToolUse", tool_use_id="skill-2", tool_name="Skill",
+                                            tool_input={"skill": "copywriting"}, tool_response={"output": "ok"}))
+        self.assertNotIn("Dry tone", json.dumps(again))
+
     def test_brain_skills_proposal_uses_actual_owner_and_preserves_activation_policy(self):
         configured_entrypoint = os.environ.get("AIVERSE_TEST_SKILLS_ENTRYPOINT")
         if configured_entrypoint:

@@ -187,9 +187,9 @@ class Tidy:
                              + self.m.shlex.quote(state["session_id"]) + " --turn " + self.m.shlex.quote(turn["id"]) + " --token "
                              + self.m.shlex.quote(turn["token"]) + " --id ID --words 'a,b,c' ; for possible_repeats that say the same "
                              "thing, or where one is an older version, save a correction that supersedes the older one through the review "
-                             "(leave pairs that differ); for check_still_true, ask the operator once, in one short line at the end of your "
-                             "answer, whether it is still true. Apart from that question, do not mention tidying, or what it changed, in "
-                             "your answer: the operator gets a separate tidy note later. "
+                             "(leave pairs that differ); leave check_still_true alone: never ask the operator about old notes in an answer to "
+                             "something else (they are asked only when the operator runs a tidy themselves). Do not mention tidying, "
+                             "or what it changed, in your answer: the operator gets a separate tidy note later. "
                              "If a command is refused, skip tidying this turn and do not mention it. ")
                 elif self.whole_due(data):
                     text += ("\nAI-Verse OS tidying of everything saved is due. After you finish the operator's request and before your "

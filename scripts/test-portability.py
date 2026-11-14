@@ -40,10 +40,10 @@ with tempfile.TemporaryDirectory() as tmp:
     stack = str(base / ".ai-verse-tools" / "abc")
 
     # Renamed: the old folder is gone.
-    old = base / "AI-Verse OS | Mine"
+    old = base / "AI-Verse OS Mine"
     make_os(old, stack)
     run(old, "record")
-    new = base / "AI-Verse OS | Renamed"
+    new = base / "AI-Verse OS Renamed"
     old.rename(new)
     ok(json.loads(run(new, "check").stdout)["ready"] is False, "a moved OS is not ready until repaired")
     result = json.loads(run(new, "repair").stdout)

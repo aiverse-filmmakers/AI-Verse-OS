@@ -18,6 +18,11 @@ finished work into a skill, so both paths produce the same result.
 | Bring one in from elsewhere | Run the read only skill check on it, show anything flagged, then sections 3, 4, 7 and 9 |
 | See how a skill is set up | Find it, then explain in plain words: what it does, who owns it (shipped or theirs), what it needs, and the current project's adjustments |
 | Change a skill | Ask one question: "just this project" or "change the skill itself". Then follow section 6 or 7 |
+| List skills | Run `node scripts/skills-list.mjs` (add `--scope workspace:<id>` inside a project) and show its two groups: "Skills" and "My skills" |
+
+After a skill of the operator's own is saved, changed or removed, run
+`node scripts/sync-my-skills.mjs` so Claude and Codex in this OS folder see it
+(or stop seeing it) in the next chat.
 
 Ask only when the answer changes what gets built.
 
@@ -26,6 +31,10 @@ Ask only when the answer changes what gets built.
 - Plain words. Say "just this project" and "change the skill itself". Never say "globally".
 - When a change is saved for one project, say so in one line: "Saved for this
   project only. Want this in the skill itself too?"
+- If the answer is yes for a shipped skill, save the same note with the
+  `operator` scope (`adjustments-save` in `scripts/capability-resolver-cli.mjs`).
+  Every project then gets it, and a project's own note still wins. Say: "Saved
+  for every project." For the operator's own skill, change the skill itself.
 - Hide internal files and JSON. The operator never writes them by hand.
 - Say plainly what is untested or only proposed.
 

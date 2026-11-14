@@ -48,6 +48,7 @@ jobs:
           node scripts/test-member-skill-library.mjs
           node scripts/test-capability-bindings.mjs
           node scripts/test-skill-adjustments.mjs
+          python3 scripts/test-reality-check.py
           node scripts/test-member-skills-privacy.mjs
 
   personal-tool-placement:

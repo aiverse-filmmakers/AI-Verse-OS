@@ -23,6 +23,8 @@ Read:
 
 Run `bash scripts/check-architecture.sh` when the script is available. Treat its result as evidence, not as the entire audit.
 
+Also run `python3 scripts/reality-check.py` (plain words) or with `--json`. It checks that the helpers can run and ran recently, that chat summaries and memories are being saved, that every memory has search words, that memory search has not got worse, and that AI-Verse's own files have no unsaved edits. Report each FIX line in everyday words.
+
 Do not modify the inspected system merely to improve its score. The default write is the audit report.
 
 ## Step 1 - define scope

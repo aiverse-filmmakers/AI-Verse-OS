@@ -1471,13 +1471,13 @@ class Bridge:
                     if skill and skill not in turn.setdefault("skills_used", []):
                         turn["skills_used"].append(skill)
                         record_skill_use(self.config, skill)
+                        notes = project_skill_notes(self.root, state.get("scope"), skill)
                     answered = question_answers(event)
                     if answered:
                         # A question box answer is the operator's own choice, like a typed reply.
                         user = turn["sources"].get("user") or {}
                         self.add_source(turn, "answer", "user", answered,
                                         scopes=user.get("scopes") or [turn.get("scope", "operator")])
-                        notes = project_skill_notes(self.root, state.get("scope"), skill)
                     tool_id = event.get("tool_use_id")
                     if isinstance(tool_id, str) and len(tool_id) <= 200:
                         response = event.get("tool_response", {})

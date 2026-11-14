@@ -144,6 +144,41 @@ NETWORK_COMMAND = re.compile(r"\b(?:curl|wget|gh\s+api|git\s+(?:clone|pull|fetch
 OUTSIDE_LABEL = "Unconfirmed, from outside content: "
 
 
+SKILL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+SKILL_FILE = re.compile(r"(?:^|[/\\\s'\"=])\.(?:claude|agents)[/\\]skills[/\\]([A-Za-z0-9][A-Za-z0-9._-]{0,99})[/\\]SKILL\.md")
+
+
+def used_skill(event):
+    """The skill a tool call opened: Claude's Skill tool, or a read of a chat folder SKILL.md (Codex)."""
+    name = event.get("tool_name")
+    tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
+    if name == "Skill":
+        skill = tool_input.get("skill") or tool_input.get("command") or ""
+        skill = str(skill).strip().lstrip("/")
+        return skill if SKILL_ID.match(skill) else None
+    for key in ("file_path", "path", "command", "cmd"):
+        value = tool_input.get(key)
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value)
+        if isinstance(value, str):
+            found = SKILL_FILE.search(value)
+            if found:
+                return found.group(1)
+    return None
+
+
+def record_skill_use(config, skill):
+    """Best effort usage counter in the Skills owner; never blocks or fails the chat."""
+    entrypoint, root = config.get("skills_entrypoint"), config.get("skills_root")
+    if not skill or not entrypoint or not Path(entrypoint).is_file():
+        return False
+    argv = [sys.executable, str(entrypoint)] + (["--root", str(root)] if root else []) + ["usage", "record", skill, "--json"]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=10, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def outside_event(event):
     """True when a tool result came from the web, a connector or a network command."""
     tool_input = event.get("tool_input")
@@ -1334,6 +1369,10 @@ class Bridge:
                 if kind == "PostToolUse":
                     if turn["state"] not in {"active", "review_requested"}:
                         return {}
+                    skill = used_skill(event)
+                    if skill and skill not in turn.setdefault("skills_used", []):
+                        turn["skills_used"].append(skill)
+                        record_skill_use(self.config, skill)
                     tool_id = event.get("tool_use_id")
                     if isinstance(tool_id, str) and len(tool_id) <= 200:
                         response = event.get("tool_response", {})

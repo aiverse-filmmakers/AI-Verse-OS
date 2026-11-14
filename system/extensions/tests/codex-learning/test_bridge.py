@@ -131,6 +131,38 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(turn["allowed"], ["operator"])
         self.assertEqual(turn["ambiguous"], [{"name": "workspace:missing", "could_mean": []}])
 
+    def test_yes_to_a_save_suggestion_allows_that_project_without_naming_it(self):
+        self.start("The launch date moved to the second week of March.")
+        self.assertEqual(self.bridge.state(self.session)["turn"]["allowed"], ["operator"])
+        self.bridge.hook(self.event("Stop", last_assistant_message=(
+            "That sounds like Beta Study news. Save this to the Beta Study project (workspace:beta)?")))
+        self.bridge.hook(self.event("Stop", stop_hook_active=True))
+        self.start("yes", turn_id="turn-2")
+        turn = self.bridge.state(self.session)["turn"]
+        self.assertIn("workspace:beta", turn["allowed"])
+        self.assertIn("workspace:beta", turn["sources"]["user"]["scopes"])
+        self.start("not now", turn_id="turn-3")
+        self.assertNotIn("workspace:beta", self.bridge.state(self.session)["turn"]["allowed"])
+
+    def test_a_yes_button_answer_allows_the_suggested_project_in_this_turn(self):
+        self.start("The launch date moved to the second week of March.")
+        self.bridge.hook(self.event("PostToolUse", tool_use_id="ask-1", tool_name="AskUserQuestion",
+            tool_input={"questions": [{"question": "Save this to the Beta Study project (workspace:beta)?"}]},
+            tool_response={"answers": {"Save this to the Beta Study project (workspace:beta)?": "Yes, save it"}}))
+        turn = self.bridge.state(self.session)["turn"]
+        self.assertIn("workspace:beta", turn["allowed"])
+        self.assertIn("workspace:beta", turn["sources"]["user"]["scopes"])
+
+    def test_a_suggestion_naming_two_projects_or_a_no_allows_nothing(self):
+        self.start("Some news.")
+        self.bridge.hook(self.event("Stop", last_assistant_message="Save this to workspace:alpha or workspace:beta?"))
+        self.bridge.hook(self.event("Stop", stop_hook_active=True))
+        self.start("yes", turn_id="turn-2")
+        self.assertEqual(self.bridge.state(self.session)["turn"]["allowed"], ["operator"])
+        self.bridge.hook(self.event("PostToolUse", turn_id="turn-2", tool_use_id="ask-2", tool_name="AskUserQuestion",
+            tool_response={"answers": {"Save this to the Beta Study project (workspace:beta)?": "No"}}))
+        self.assertEqual(self.bridge.state(self.session)["turn"]["allowed"], ["operator"])
+
     def test_physical_cwd_binding_and_outside_noop(self):
         response = self.start("Continue.", cwd=str(self.root / "workspaces/alpha"))
         self.assertIn("workspace:alpha", response["hookSpecificOutput"]["additionalContext"])

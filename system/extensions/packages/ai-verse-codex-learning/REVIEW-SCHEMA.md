@@ -123,6 +123,8 @@ Profile correction (both apps). Read the exact current line first with `query --
 
 Each turn has its own list of destinations, shown in the instructions as "Where this turn may save". It comes from the folder the chat runs in plus any project the operator named in his own typed words (exact project id, name or alias). Names inside pasted, quoted or code blocks never count. Nothing carries over to the next turn.
 
+When something clearly belongs to a project the operator did not name, do not save it there. Ask instead, as the last line of the reply, in exactly this shape: `Save this to the <project name> project (workspace:<id>)?` (one project only), or ask the same question with a question box whose yes option starts with "Yes". If the operator's next message is a plain yes ("yes", "ok", "save it") or he picks that yes option, that project is added to this turn's destinations and his yes supports writes there; save it then and say where it went. A no, any other answer, or a question naming two projects adds nothing.
+
 - A candidate may carry a top level `"scope": "workspace:<id>"` (or `"operator"`). Without it a `profile` candidate goes to the operator profile and every other route to the turn's main destination.
 - Two candidates in one review may go to two destinations. A review that spans destinations does not save a session digest.
 - Evidence can only support a write to a destination it came from. The operator's own words support every destination they named. Tool and assistant text supports only the turn's main destination.

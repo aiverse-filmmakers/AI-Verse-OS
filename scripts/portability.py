@@ -80,10 +80,10 @@ def program_folder_id(root: Path):
     return None
 
 
-def record(root: Path) -> dict:
+def record(root: Path, keep_id: bool = True) -> dict:
     # A permanent ID so the updater finds this OS's program folder even after a rename.
     id_file = root / ".aiverse/os/install-id"
-    if not id_file.exists():
+    if keep_id and not id_file.exists():
         found = program_folder_id(root)
         if found:
             id_file.parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,13 @@ def repair(root: Path) -> dict:
                 shutil.copy2(path, backup / rel)
                 os.replace(path, path.with_name(path.name + ".paused-copy"))
                 paused.append(rel)
-    record(root)
+        # The original's permanent ID must not travel with a copy, or both would share one program folder.
+        id_file = root / ".aiverse/os/install-id"
+        if id_file.is_file():
+            (backup / ".aiverse/os").mkdir(parents=True, exist_ok=True)
+            os.replace(id_file, backup / ".aiverse/os/install-id")
+            paused.append(".aiverse/os/install-id")
+    record(root, keep_id=not copied)
     if copied:
         message = (f"This folder is a copy of {old}. It now points only at itself, and its chat helpers are paused "
                    "so they cannot touch the original. Run the AI-Verse installer in this folder to give the copy "

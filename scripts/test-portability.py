@@ -66,12 +66,17 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Copied: the original still exists.
     copy = base / "Copy of OS"
+    (new / ".aiverse/os").mkdir(parents=True, exist_ok=True)
+    (new / ".aiverse/os/install-id").write_text("0123456789abcdef\n")
     shutil.copytree(new, copy)
+    ok((copy / ".aiverse/os/install-id").is_file(), "the copy starts with the original's ID, as a real copy would")
     result = json.loads(run(copy, "repair").stdout)
     ok(result["state"] == "copied", result)
     ok(str(new) not in (copy / ".aiverse/brain-host.json").read_text(), "the copy never names the original")
     ok(not (copy / ".claude/settings.local.json").exists() and (copy / ".claude/settings.local.json.paused-copy").exists(),
        "the copy's chat helpers are paused")
+    ok(not (copy / ".aiverse/os/install-id").exists(), "the copy does not keep the original's program folder ID")
+    ok((new / ".aiverse/os/install-id").is_file(), "the original keeps its program folder ID")
     ok((new / ".claude/settings.local.json").exists(), "the original is untouched")
 
 with tempfile.TemporaryDirectory() as tmp:

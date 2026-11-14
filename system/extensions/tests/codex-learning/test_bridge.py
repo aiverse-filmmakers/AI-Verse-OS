@@ -131,6 +131,18 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(turn["allowed"], ["operator"])
         self.assertEqual(turn["ambiguous"], [{"name": "workspace:missing", "could_mean": []}])
 
+    def test_a_question_box_answer_counts_as_the_operators_own_words(self):
+        self.start("Help me think about my priorities.")
+        self.bridge.hook(self.event("PostToolUse", tool_use_id="ask-goal", tool_name="AskUserQuestion",
+            tool_input={"questions": [{"question": "Save 'reach 3k monthly revenue' as your overall goal?"}]},
+            tool_response={"answers": {"Save 'reach 3k monthly revenue' as your overall goal?": "Yes, save it"}}))
+        turn = self.bridge.state(self.session)["turn"]
+        self.assertEqual(turn["sources"]["answer"]["kind"], "user")
+        refs, kinds = self.bridge.evidence(turn, [{"source_id": "answer", "quote": "Yes, save it"}])
+        self.assertEqual(kinds, ["user"])
+        with self.assertRaises(Refused):
+            self.bridge.evidence(turn, [{"source_id": "answer", "quote": "No"}])
+
     def test_physical_cwd_binding_and_outside_noop(self):
         response = self.start("Continue.", cwd=str(self.root / "workspaces/alpha"))
         self.assertIn("workspace:alpha", response["hookSpecificOutput"]["additionalContext"])

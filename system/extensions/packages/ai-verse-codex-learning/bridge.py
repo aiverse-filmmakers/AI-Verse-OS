@@ -144,6 +144,35 @@ NETWORK_COMMAND = re.compile(r"\b(?:curl|wget|gh\s+api|git\s+(?:clone|pull|fetch
 OUTSIDE_LABEL = "Unconfirmed, from outside content: "
 
 
+SAVE_SUGGESTION = re.compile(r"\bsave\b[^?\n]{0,200}?\(?\bworkspace:([a-z0-9][a-z0-9-]{0,127})\b\)?[^?\n]{0,80}\?", re.I)
+YES = re.compile(r"^\s*(?:yes|yes please|yep|yeah|y|ok|okay|sure|do it|save it|go ahead|please do|yes,? save( it)?(?: there)?)[\s.!]*$", re.I)
+
+
+def suggested_save(text):
+    """The one project a reply asked to save into, written as 'Save ... (workspace:<id>)?'."""
+    found = {m.group(1) for m in SAVE_SUGGESTION.finditer(text or "")}
+    named = set(re.findall(r"\bworkspace:([a-z0-9][a-z0-9-]{0,127})\b", text or ""))
+    return "workspace:" + found.pop() if len(found) == 1 and named == found else None
+
+
+def approved_save(event):
+    """A yes button answering a 'Save ... (workspace:<id>)?' question in this turn."""
+    if event.get("tool_name") != "AskUserQuestion":
+        return None
+    tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
+    response = event.get("tool_response")
+    answers = {}
+    if isinstance(response, dict) and isinstance(response.get("answers"), dict):
+        answers = response["answers"]
+    elif isinstance(tool_input.get("answers"), dict):
+        answers = tool_input["answers"]
+    for question, answer in answers.items():
+        scope = suggested_save(str(question))
+        if scope and isinstance(answer, str) and (YES.match(answer) or answer.strip().lower().startswith(("yes", "save"))):
+            return scope
+    return None
+
+
 SKILL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
 SKILL_FILE = re.compile(r"(?:^|[/\\\s'\"=])\.(?:claude|agents)[/\\]skills[/\\]([A-Za-z0-9][A-Za-z0-9._-]{0,99})[/\\]SKILL\.md")
 
@@ -530,7 +559,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "15d8199874403a71ca785e4b413965328b68f8c8187d88c2ca66ed0fdba7abf0"  # refreshed with the package hashes
+REFLECT_SHA256 = "8a25ecad825bc60bee29b2374e1e168a21317e5e0f20f524e4711bc0c52c695a"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -1370,6 +1399,12 @@ class Bridge:
                 else:
                     try:
                         dest = self.destinations(event["cwd"], prompt)
+                        suggestion = (old or {}).get("suggested_save")
+                        if (suggestion and SCOPE.fullmatch(suggestion) and YES.match(prompt)
+                                and suggestion not in dest["allowed"]
+                                and (self.root / "workspaces" / suggestion.split(":", 1)[1]).is_dir()):
+                            self.manifest(suggestion.split(":", 1)[1])
+                            dest["allowed"] = dest["allowed"] + [suggestion]
                         state["scope"] = dest["primary"]
                     except Refused:
                         if old:
@@ -1415,6 +1450,17 @@ class Bridge:
                 if kind == "PostToolUse":
                     if turn["state"] not in {"active", "review_requested"}:
                         return {}
+                    approved = approved_save(event)
+                    if (approved and SCOPE.fullmatch(approved) and approved not in turn.get("allowed", [])
+                            and (self.root / "workspaces" / approved.split(":", 1)[1]).is_dir()):
+                        try:
+                            self.manifest(approved.split(":", 1)[1])
+                            turn.setdefault("allowed", [turn.get("scope", "operator")]).append(approved)
+                            user = turn["sources"].get("user")
+                            if user is not None and approved not in user.get("scopes", []):
+                                user["scopes"] = list(user.get("scopes", [])) + [approved]
+                        except Refused:
+                            pass
                     skill = used_skill(event)
                     notes = None
                     if skill and skill not in turn.setdefault("skills_used", []):
@@ -1444,6 +1490,8 @@ class Bridge:
                 elif kind == "Stop":
                     message = event.get("last_assistant_message") or ""
                     self.add_source(turn, "assistant", "assistant", message)
+                    if message.strip():
+                        turn["suggested_save"] = suggested_save(message)
                     try:
                         self.tidy().acknowledge(state, message)
                     except (Refused, OSError, ValueError, ImportError):

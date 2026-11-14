@@ -509,9 +509,14 @@ class AdapterTests(unittest.TestCase):
         configured_entrypoint = os.environ.get("AIVERSE_TEST_SKILLS_ENTRYPOINT")
         if configured_entrypoint:
             entrypoint = Path(configured_entrypoint)
-        else:
+        elif (EXT / "config.json").is_file():
             actual_config = json.loads((EXT / "config.json").read_text())
             entrypoint = Path(actual_config["skills_entrypoint"])
+        else:
+            self.skipTest("needs an AI-Verse-Skills checkout: set AIVERSE_TEST_SKILLS_ENTRYPOINT "
+                          "(CI sets it in four-repo-acceptance) or install the learning extension")
+        if not entrypoint.is_file():
+            self.skipTest(f"AI-Verse-Skills entrypoint not found: {entrypoint}")
         sys.path.insert(0, str(entrypoint.parent.parent))
         from installer import aiverse_skills as skills
         provider = self.root / "skills"

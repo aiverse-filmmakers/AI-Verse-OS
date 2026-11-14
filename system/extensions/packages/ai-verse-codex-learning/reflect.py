@@ -335,7 +335,7 @@ class Tidy:
                 truncated = len(pending) > MAX_PENDING
                 scan = self.owner("reflect_scan", {"projects": projects, "limit": MAX_RECORDS}) if projects else {
                     "records": [], "workspaces": {}, "ventures": [], "truncated": False}
-                found = self.detect(data, scan, projects)
+                found = self.detect(data, scan, projects) + self.outdated(data, scan, projects)
                 truncated = truncated or bool(scan.get("truncated")) or len(found) > MAX_ACTIONS
             items = []
             for item in found:
@@ -512,6 +512,47 @@ class Tidy:
                               "reason": "you have a project for it, but you never said you still run it", "title": ""})
         return items
 
+    @staticmethod
+    def subject(text):
+        """The first four plain words, ignoring numbers and money: two notes about the same thing share it."""
+        words = [w for w in re.sub(r"[^a-z\s]+", " ", text.lower()).split() if len(w) > 1]
+        return " ".join(words[:4]) if len(words) >= 4 else None
+
+    @staticmethod
+    def numbers(text):
+        return set(re.findall(r"\d+(?:[.,]\d+)?", text))
+
+    def outdated(self, data, scan, projects):
+        """A newer note about the same thing with different numbers makes the older one out of date."""
+        refused = {r["key"] for r in data["rejected"]}
+        readable = {"operator", *("workspace:" + p for p in projects)}
+        groups = {}
+        for r in scan.get("records", []):
+            if (r.get("scope") not in readable or r.get("status") != "active" or r.get("type") not in {"fact", "state"}
+                    or not r.get("created") or not self.numbers(r["text"])):
+                continue
+            key = self.subject(r["text"])
+            if key:
+                groups.setdefault((r["scope"], key), []).append(r)
+        items = []
+        for (scope, _key), records in sorted(groups.items()):
+            records.sort(key=lambda r: r["created"])
+            newest = records[-1]
+            for old in records[:-1]:
+                if self.numbers(old["text"]) == self.numbers(newest["text"]) or old["text"] == newest["text"]:
+                    continue
+                project = scope[10:] if scope.startswith("workspace:") else "operator"
+                if self.rejected("old", project, [old["id"]]) in refused:
+                    continue
+                name = (scan.get("workspaces", {}).get(project) or {}).get("name", "") if project != "operator" else ""
+                items.append({"id": "od" + self.m.digest(["old", old["id"], newest["id"]])[:10], "kind": "old",
+                              "project": project, "scope": scope, "name": name, "traced": False,
+                              "records": [old], "facts": [old["text"], newest["text"]], "newer_id": newest["id"],
+                              "reason": "a newer note about the same thing has different numbers", "title": ""})
+                if len(items) >= 3:
+                    return items
+        return items
+
     # ---------------------------------------------------------------- apply
     def payload(self, state, turn, route, scope, params, refs, effect):
         return {"scope": scope, "session_id": state["session_id"], "turn_id": turn["id"], "route": route,
@@ -524,10 +565,12 @@ class Tidy:
         refs_tidy = [f"tidy:{aid}"]
         if action["kind"] == "goals":
             return []  # a suggestion only: nothing is changed
-        if action["kind"] == "dup":
+        if action["kind"] in {"dup", "old"}:
             record = action["records"][0]
+            why = ("this repeated an earlier saved note" if action["kind"] == "dup"
+                   else "a newer note replaced it: " + action["facts"][1][:200])
             return [{"name": "pointer0", "payload": self.payload(state, turn, "memory", action["scope"], {
-                "type": "correction", "text": f"Set aside by AI-Verse OS: this repeated an earlier saved note (tidy {aid}).",
+                "type": "correction", "text": f"Set aside by AI-Verse OS: {why} (tidy {aid}).",
                 "confidence": .9, "admission": dict(ADMISSION), "supersedes": record["id"], "tags": "tidy,pointer"},
                 (record.get("evidence_refs") or [])[:25] + refs_tidy, f"tidy:{aid}:pointer0")}]
         if action["kind"] == "move":
@@ -639,7 +682,7 @@ class Tidy:
             action["comp"] = comp
             return
         template = action["ops"][0]["payload"]
-        if action["kind"] == "dup":
+        if action["kind"] in {"dup", "old"}:
             record = action["records"][0]
             pointer = action["results"]["pointer0"]["result"]["memory_capture"].get("memory_id")
             # The owner only lets a correction supersede, so the record comes back as a correction that keeps its words,
@@ -688,6 +731,11 @@ class Tidy:
             action["detail"] = ["What: " + action["facts"][0][:160],
                                 "Where: " + (f"your {name} project" if name else "what I know about you"),
                                 "I removed the repeat and kept the first copy."]
+        elif action["kind"] == "old":
+            action["title"] = "⚠️ A guess: something you saved was out of date, so I set the old version aside"
+            action["detail"] = ["Old: " + action["facts"][0][:160], "Newer: " + action["facts"][1][:160],
+                                "Where: " + (f"your {name} project" if name else "what I know about you"),
+                                "Why: " + action["reason"] + ". Say undo if the old one is still right."]
         elif action["kind"] == "goals":
             action["title"] = "⚠️ A guess: some of your goals may be the same goal"
             action["detail"] = ["Maybe the same: " + "; ".join(action["facts"]),

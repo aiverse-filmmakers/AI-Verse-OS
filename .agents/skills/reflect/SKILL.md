@@ -22,7 +22,7 @@ This capability runs one bounded tidy pass through the learning helpers. It neve
 
 ## Method
 
-1. Run `reflect plan`. It is read only. It lists what it would tidy: facts saved in the general place that belong to a project, project notes that are out of date, and projects missing from what AI-Verse OS knows about what the operator runs. Each item says whether it traces to the operator's own words or is a guess.
+1. Run `reflect plan`. It is read only. It lists what it would tidy: facts saved in the general place that belong to a project, project notes that are out of date, older facts that a newer note about the same thing has replaced (different numbers, always marked as a guess and set aside, never deleted), and projects missing from what AI-Verse OS knows about what the operator runs. Each item says whether it traces to the operator's own words or is a guess.
 2. Run `reflect apply`. It applies at most five changes through the normal owners and records how to reverse each one. Guesses are applied too, but they are marked as guesses everywhere they are stored.
 3. Run `reflect done`. It closes the pass and queues the tidy note.
 4. Do not mention the tidy to the operator until the note is delivered. The note is shown once, at the start of a later reply, never in the middle of an answer. Copy it exactly as it is given.

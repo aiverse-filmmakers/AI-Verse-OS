@@ -66,7 +66,28 @@ def read_location(root: Path):
     return None
 
 
+def program_folder_id(root: Path):
+    """The 16 character name of this OS's program folder, read from its own settings."""
+    import re
+    for rel in SETTINGS:
+        try:
+            text = (root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        found = re.search(r"\.ai-verse-tools[/\\]+([0-9a-f]{16})(?=[/\\\"'])", text)
+        if found:
+            return found.group(1)
+    return None
+
+
 def record(root: Path) -> dict:
+    # A permanent ID so the updater finds this OS's program folder even after a rename.
+    id_file = root / ".aiverse/os/install-id"
+    if not id_file.exists():
+        found = program_folder_id(root)
+        if found:
+            id_file.parent.mkdir(parents=True, exist_ok=True)
+            id_file.write_text(found + "\n", encoding="utf-8")
     path = root / LOCATION
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {"schema_version": 1, "root": str(root), "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -179,7 +200,8 @@ def repair(root: Path) -> dict:
                    "so they cannot touch the original. Run the AI-Verse installer in this folder to give the copy "
                    "its own program folder.")
     else:
-        message = f"This OS moved from {old}. Its settings now point here and its helpers keep working."
+        message = (f"This OS moved from {old}. Its settings now point here and its helpers keep working. "
+                   "Next, run 'aiverse project-rebind' here so updates know the new place too.")
     return {"state": "copied" if copied else "moved", "from": old, "changed": changed, "paused": paused,
             "backup": str(backup.relative_to(root)) if changed or paused else None, "message": message}
 

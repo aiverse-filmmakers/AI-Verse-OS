@@ -92,4 +92,11 @@ with tempfile.TemporaryDirectory() as tmp:
     ok(json.loads(run(root, "check").stdout)["ready"] is True, "now ready to move")
     ok(json.loads(run(root, "move-skills").stdout)["state"] == "already", "running it again changes nothing")
 
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp).resolve()
+    root = base / "OS"
+    make_os(root, str(base / ".ai-verse-tools" / "0123456789abcdef"))
+    run(root, "record")
+    ok((root / ".aiverse/os/install-id").read_text().strip() == "0123456789abcdef", "the program folder ID is kept inside the OS")
+
 print(f"portability checks passed: {checks}")

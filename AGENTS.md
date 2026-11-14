@@ -78,6 +78,8 @@ When a scope is Brain-owned, raw OS goals, priorities, objectives, and other str
 
 Do not load the entire OS just because it exists. Prefer scoped retrieval and progressive disclosure.
 
+- Portability: when the operator asks whether the OS is ready to move, run `python3 scripts/portability.py check`. If helpers fail or name another folder after the OS folder was renamed, moved or copied, run `python3 scripts/portability.py repair` and report its one line result. To bring the operator's own skills into the folder, use `python3 scripts/portability.py move-skills` only after he asks. Guide: `docs/MOVING-YOUR-OS.md`.
+
 ## Universal architecture
 
 AI-Verse OS separates concerns deliberately:

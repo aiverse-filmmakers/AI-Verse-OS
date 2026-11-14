@@ -173,6 +173,79 @@ def approved_save(event):
     return None
 
 
+SKILL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")
+SKILL_FILE = re.compile(r"(?:^|[/\\\s'\"=])\.(?:claude|agents)[/\\]skills[/\\]([A-Za-z0-9][A-Za-z0-9._-]{0,99})[/\\]SKILL\.md")
+
+
+def used_skill(event):
+    """The skill a tool call opened: Claude's Skill tool, or a read of a chat folder SKILL.md (Codex)."""
+    name = event.get("tool_name")
+    tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
+    if name == "Skill":
+        skill = tool_input.get("skill") or tool_input.get("command") or ""
+        skill = str(skill).strip().lstrip("/")
+        return skill if SKILL_ID.match(skill) else None
+    for key in ("file_path", "path", "command", "cmd"):
+        value = tool_input.get(key)
+        if isinstance(value, list):
+            value = " ".join(str(item) for item in value)
+        if isinstance(value, str):
+            found = SKILL_FILE.search(value)
+            if found:
+                return found.group(1)
+    return None
+
+
+def record_skill_use(config, skill):
+    """Best effort usage counter in the Skills owner; never blocks or fails the chat."""
+    entrypoint, root = config.get("skills_entrypoint"), config.get("skills_root")
+    if not skill or not entrypoint or not Path(entrypoint).is_file():
+        return False
+    argv = [sys.executable, str(entrypoint)] + (["--root", str(root)] if root else []) + ["usage", "record", skill, "--json"]
+    try:
+        return subprocess.run(argv, capture_output=True, timeout=10, check=False).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+NOTE_NAME = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+NOTE_RULE = "Where these project adjustments disagree with the skill's instructions, follow the project adjustments."
+
+
+def project_skill_notes(root, scope, skill):
+    """This project's notes for a skill, plus the names of its other notes. Read only, bounded, never raises."""
+    if not isinstance(scope, str) or not scope.startswith("workspace:") or not skill:
+        return None
+    project = scope[len("workspace:"):]
+    if not NOTE_NAME.match(project):
+        return None
+    try:
+        base = Path(root) / "workspaces" / project
+        folder = base / "context" / "skill-adjustments"
+        if not (base / "WORKSPACE.yaml").is_file() or not folder.is_dir() or folder.is_symlink():
+            return None
+        if folder.resolve() != folder.absolute().resolve() or base.resolve() not in folder.resolve().parents:
+            return None
+        names = sorted(p.stem for p in folder.glob("*.md") if NOTE_NAME.match(p.stem) and p.is_file() and not p.is_symlink())
+        name = skill.strip().lower().replace(":", "--")
+        text = None
+        candidate = folder / f"{name}.md"
+        if name in names and candidate.stat().st_size <= 16384:
+            text = candidate.read_text(encoding="utf-8")
+        others = [n for n in names if n != name]
+        if text is None and not others:
+            return None
+        lines = [f"Project notes for this chat's project ({project}):"]
+        if text is not None:
+            lines += [f"Notes for {skill}:", text.strip(), NOTE_RULE]
+        if others:
+            lines.append("This project also has notes on: " + ", ".join(others)
+                         + ". Read the ones that fit this task with the capability resolver (adjustments-read).")
+        return "\n".join(lines)
+    except (OSError, ValueError):
+        return None
+
+
 def outside_event(event):
     """True when a tool result came from the web, a connector or a network command."""
     tool_input = event.get("tool_input")
@@ -1380,6 +1453,12 @@ class Bridge:
                                 user["scopes"] = list(user.get("scopes", [])) + [approved]
                         except Refused:
                             pass
+                    skill = used_skill(event)
+                    notes = None
+                    if skill and skill not in turn.setdefault("skills_used", []):
+                        turn["skills_used"].append(skill)
+                        record_skill_use(self.config, skill)
+                        notes = project_skill_notes(self.root, state.get("scope"), skill)
                     tool_id = event.get("tool_use_id")
                     if isinstance(tool_id, str) and len(tool_id) <= 200:
                         response = event.get("tool_response", {})
@@ -1391,13 +1470,15 @@ class Bridge:
                                         response.get("output", response) if isinstance(response, dict) else response,
                                         success, outside=outside_event(event))
                     self.save(state)
+                    parts = []
                     if not turn.get("review_reminded"):
                         turn["review_reminded"] = True
                         self.save(state)
-                        result = {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                  "additionalContext": self.review_reminder(state)}}
-                    else:
-                        result = {}
+                        parts.append(self.review_reminder(state))
+                    if notes:
+                        parts.append(notes)
+                    result = ({"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                               "additionalContext": "\n\n".join(parts)}} if parts else {})
                 elif kind == "Stop":
                     message = event.get("last_assistant_message") or ""
                     self.add_source(turn, "assistant", "assistant", message)

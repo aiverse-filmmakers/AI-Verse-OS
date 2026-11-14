@@ -18,6 +18,11 @@ finished work into a skill, so both paths produce the same result.
 | Bring one in from elsewhere | Run the read only skill check on it, show anything flagged, then sections 3, 4, 7 and 9 |
 | See how a skill is set up | Find it, then explain in plain words: what it does, who owns it (shipped or theirs), what it needs, and the current project's adjustments |
 | Change a skill | Ask one question: "just this project" or "change the skill itself". Then follow section 6 or 7 |
+| List skills | Run `node scripts/skills-list.mjs` (add `--scope workspace:<id>` inside a project) and show its two groups: "Skills" and "My skills" |
+
+After a skill of the operator's own is saved, changed or removed, run
+`node scripts/sync-my-skills.mjs` so Claude and Codex in this OS folder see it
+(or stop seeing it) in the next chat.
 
 Ask only when the answer changes what gets built.
 

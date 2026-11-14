@@ -48,6 +48,8 @@ jobs:
           node scripts/test-member-skill-library.mjs
           node scripts/test-capability-bindings.mjs
           node scripts/test-skill-adjustments.mjs
+          node scripts/test-skills-list.mjs
+          node scripts/test-sync-my-skills.mjs
           python3 scripts/test-reality-check.py
           node scripts/test-member-skills-privacy.mjs
 

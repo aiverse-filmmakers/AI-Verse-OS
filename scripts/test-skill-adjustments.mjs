@@ -55,9 +55,8 @@ try {
     assert.match(selectCapability({ ...options, scope: 'workspace:beta', qualifiedId: 'local:copywriting' }).project_adjustments.text, /bakery/);
   });
   test('the skill files are byte for byte unchanged', () => assert.equal(hashTree(path.join(local, 'copywriting')), skillHash));
-  test('operator scope has no project adjustments and cannot save any', () => {
+  test('operator scope has nothing until a note is saved for every project', () => {
     assert.equal(selectCapability({ ...options, scope: 'operator', qualifiedId: 'local:copywriting' }).project_adjustments, undefined);
-    assert.throws(() => saveAdjustment({ osRoot: root, scope: 'operator', name: 'local:copywriting', text: 'x' }), /one project/);
   });
   test('a shared topic works for several skills', () => {
     saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'marketing', text: 'Audience: indie filmmakers.' });
@@ -119,6 +118,20 @@ try {
   test('ordinary words like token are allowed, a real looking key is not', () => {
     assert.equal(saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'ad-creative', text: 'Design token: brand-red for buttons.' }).state, 'saved');
     assert.throws(() => saveAdjustment({ osRoot: root, scope: 'workspace:alpha', name: 'ad-creative', text: 'api key: a8f3k29dk3mz71q' }), /never store/);
+  });
+  test('yes to everywhere saves one note that every project gets, and a project note still wins', () => {
+    fs.mkdirSync(path.join(root, 'operator'), { recursive: true });
+    const saved = saveAdjustment({ osRoot: root, scope: 'operator', name: 'copywriting', text: 'Never use exclamation marks.' });
+    assert.equal(saved.applies_to, 'every project');
+    assert.match(saved.message, /every project/);
+    assert.ok(fs.existsSync(path.join(root, 'operator/context/skill-adjustments/copywriting.md')));
+    assert.equal(selectCapability({ ...options, scope: 'operator', qualifiedId: 'local:copywriting' }).project_adjustments.text, 'Never use exclamation marks.\n');
+    const alpha = selectCapability({ ...options, scope: 'workspace:alpha', qualifiedId: 'local:copywriting' }).project_adjustments;
+    assert.match(alpha.text, /For every project:\nNever use exclamation marks\./);
+    assert.match(alpha.text, /For this project \(wins where they differ\):/);
+    assert.equal(alpha.everywhere, true);
+    removeAdjustment({ osRoot: root, scope: 'operator', name: 'copywriting' });
+    assert.equal(selectCapability({ ...options, scope: 'operator', qualifiedId: 'local:copywriting' }).project_adjustments, undefined);
   });
   console.log(`skill adjustment checks passed: ${checks}`);
 } finally { fs.rmSync(base, { recursive: true, force: true }); }

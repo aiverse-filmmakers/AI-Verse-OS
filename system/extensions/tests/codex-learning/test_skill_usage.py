@@ -42,5 +42,51 @@ class SkillUsageTests(unittest.TestCase):
             self.assertEqual(log.read_text().strip(), "--root /r usage record copywriting --json")
 
 
+
+class ProjectSkillNotesTests(unittest.TestCase):
+    def project(self, tmp, notes):
+        root = Path(tmp)
+        base = root / "workspaces" / "alpha"
+        folder = base / "context" / "skill-adjustments"
+        folder.mkdir(parents=True)
+        (base / "WORKSPACE.yaml").write_text("id: alpha\n")
+        for name, text in notes.items():
+            (folder / f"{name}.md").write_text(text)
+        return root
+
+    def test_skill_note_and_other_note_names_are_attached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.project(tmp, {"copywriting": "Dry tone, no hype.", "marketing": "Price 99."})
+            text = bridge.project_skill_notes(root, "workspace:alpha", "copywriting")
+            self.assertIn("Dry tone, no hype.", text)
+            self.assertIn("follow the project adjustments", text)
+            self.assertIn("also has notes on: marketing", text)
+            self.assertNotIn("Price 99.", text)
+
+    def test_other_notes_are_named_even_without_a_skill_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.project(tmp, {"marketing": "Price 99."})
+            text = bridge.project_skill_notes(root, "workspace:alpha", "social-content")
+            self.assertIn("also has notes on: marketing", text)
+
+    def test_no_project_or_no_notes_attaches_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.project(tmp, {})
+            self.assertIsNone(bridge.project_skill_notes(root, "workspace:alpha", "copywriting"))
+            self.assertIsNone(bridge.project_skill_notes(root, "operator", "copywriting"))
+            self.assertIsNone(bridge.project_skill_notes(root, "workspace:../x", "copywriting"))
+            self.assertIsNone(bridge.project_skill_notes(root, "workspace:missing", "copywriting"))
+
+    def test_a_redirected_notes_folder_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as elsewhere:
+            root = Path(tmp)
+            base = root / "workspaces" / "alpha"
+            (base / "context").mkdir(parents=True)
+            (base / "WORKSPACE.yaml").write_text("id: alpha\n")
+            (Path(elsewhere) / "copywriting.md").write_text("secret")
+            (base / "context" / "skill-adjustments").symlink_to(elsewhere)
+            self.assertIsNone(bridge.project_skill_notes(root, "workspace:alpha", "copywriting"))
+
+
 if __name__ == "__main__":
     unittest.main()

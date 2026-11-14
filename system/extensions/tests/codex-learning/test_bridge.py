@@ -131,7 +131,6 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(turn["allowed"], ["operator"])
         self.assertEqual(turn["ambiguous"], [{"name": "workspace:missing", "could_mean": []}])
 
-<<<<<<< HEAD
     def test_a_question_box_answer_counts_as_the_operators_own_words(self):
         self.start("Help me think about my priorities.")
         self.bridge.hook(self.event("PostToolUse", tool_use_id="ask-goal", tool_name="AskUserQuestion",
@@ -143,7 +142,6 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(kinds, ["user"])
         with self.assertRaises(Refused):
             self.bridge.evidence(turn, [{"source_id": "answer", "quote": "No"}])
-=======
     def test_yes_to_a_save_suggestion_allows_that_project_without_naming_it(self):
         self.start("The launch date moved to the second week of March.")
         self.assertEqual(self.bridge.state(self.session)["turn"]["allowed"], ["operator"])
@@ -175,7 +173,6 @@ class AdapterTests(unittest.TestCase):
         self.bridge.hook(self.event("PostToolUse", turn_id="turn-2", tool_use_id="ask-2", tool_name="AskUserQuestion",
             tool_response={"answers": {"Save this to the Beta Study project (workspace:beta)?": "No"}}))
         self.assertEqual(self.bridge.state(self.session)["turn"]["allowed"], ["operator"])
->>>>>>> origin/main
 
     def test_physical_cwd_binding_and_outside_noop(self):
         response = self.start("Continue.", cwd=str(self.root / "workspaces/alpha"))

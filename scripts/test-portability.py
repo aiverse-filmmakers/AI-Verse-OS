@@ -66,6 +66,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Copied: the original still exists.
     copy = base / "Copy of OS"
+    (new / ".aiverse/os").mkdir(parents=True, exist_ok=True)
+    (new / ".aiverse/os/install-id").write_text("0123456789abcdef\n")
     shutil.copytree(new, copy)
     ok((copy / ".aiverse/os/install-id").is_file(), "the copy starts with the original's ID, as a real copy would")
     result = json.loads(run(copy, "repair").stdout)

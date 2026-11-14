@@ -146,3 +146,5 @@ Not in this build: merging two goals that mean the same, linking a goal to a pro
 ## Maintainer feedback (the upgrade list)
 
 Only when `maintainer_feedback` is true in the extension configuration. A remark about how AI-Verse OS itself behaves may be saved with `{"route":"upgrade","parameters":{"text":"..."},"evidence":[...the operator's own words...]}`. The text holds the request only and is refused if it names another project. With the switch off the candidate is ignored. `reflect list` rebuilds the derived view `workspaces/ai-verse-os-development/knowledge/AI-VERSE-OS-UPGRADE-LIST.md`.
+
+`history locate` with `{"from":"<scope>","ref":"<a memory evidence ref>"}` finds the saved chat message a memory came from (same chat session, exact same words) when private chat saving is on, and returns its `archive_id` and `sequence` for `history read`. Read only; returns `not-saved` when that chat was not saved.

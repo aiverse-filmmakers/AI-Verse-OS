@@ -997,6 +997,43 @@ def list_archives(root, scope, authorization_check, *, limit=12, after=None):
             "next_archive": files[limit - 1].stem if more else None}
 
 
+def locate_message(root, scope, session_id, text_sha256, authorization_check, *, role="user", max_archives=400):
+    """Find the saved message a memory came from: same chat session, same exact words (SHA-256 of the text).
+    Read only and bounded; returns None when the chat was not saved or the words differ."""
+    import hashlib
+    root = Path(root).absolute()
+    _scope_parts(scope)
+    _authorize_scope(root, scope, authorization_check)
+    if not isinstance(session_id, str) or not session_id or len(session_id) > 200:
+        raise ArchiveBlocked("invalid session")
+    if not isinstance(text_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", text_sha256):
+        raise ArchiveBlocked("invalid message fingerprint")
+    folder = _private_dir(root, STORE_PARTS + _scope_parts(scope), create=False)
+    if folder is None:
+        return None
+    paths = sorted(p for p in folder.iterdir() if p.suffix == ".jsonl" and ID.fullmatch(p.stem))[:max_archives]
+    for path in paths:
+        try:
+            fd = _regular_open(path, os.O_RDONLY)
+            with os.fdopen(fd, "rb") as stream:
+                header_wire = stream.readline(4097)
+            if len(header_wire) > 4096 or not header_wire.endswith(b"\n"):
+                continue
+            header = _strict_json(header_wire)
+            if header.get("session_id") != session_id:
+                continue
+            archive = ChatArchive(root, scope=scope, authorized_scope=scope, archive_id=path.stem,
+                chat_id=header.get("chat_id"), origin=header.get("origin"), session_id=header.get("session_id"),
+                authorization_check=authorization_check)
+            for message in archive.read().messages:
+                if message.get("role") == role and hashlib.sha256(message.get("text", "").encode("utf-8")).hexdigest() == text_sha256:
+                    return {"archive_id": path.stem, "scope": scope, "sequence": message["sequence"],
+                            "message_id": message["message_id"], "timestamp": message.get("timestamp")}
+        except (ArchiveBlocked, OSError, UnicodeError, KeyError):
+            continue
+    return None
+
+
 def read_transcript(root, scope, archive_id, authorization_check, *, after=0, limit=8):
     """Direct bounded view; the full canonical UTF-8 transcript stays on disk."""
     root = Path(root).absolute()

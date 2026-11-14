@@ -42,6 +42,35 @@ def event(event_id="u-1", *, sequence=1, offset=0, end=100,
     )
 
 
+class LocateMessageTests(unittest.TestCase):
+    """A memory's evidence (session plus exact words) leads back to the saved chat message."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="synthetic-chat-locate-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(os.path.realpath(self.tmp.name)) / "os"
+        self.root.mkdir()
+        (self.root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n", encoding="utf-8")
+
+    def test_finds_the_exact_user_message_of_that_session_only(self):
+        allow = lambda selected: True
+        chat = a.ChatArchive(self.root, scope="operator", authorized_scope="operator", archive_id="portable-chat-a",
+                             chat_id="chat-a", origin="claude-code", session_id="session-a", authorization_check=allow)
+        words = "My freelance post rate is 350 pounds per post."
+        chat.append(event("u-1", sequence=1, text=words, message_id="m-1"))
+        fingerprint = hashlib.sha256(words.encode("utf-8")).hexdigest()
+        found = a.locate_message(self.root, "operator", "session-a", fingerprint, allow)
+        self.assertEqual((found["archive_id"], found["sequence"], found["message_id"]), ("portable-chat-a", 1, "m-1"))
+        self.assertIsNone(a.locate_message(self.root, "operator", "session-b", fingerprint, allow), "another chat")
+        other = hashlib.sha256(b"different words").hexdigest()
+        self.assertIsNone(a.locate_message(self.root, "operator", "session-a", other, allow), "other words")
+        with self.assertRaises(a.ArchiveBlocked):
+            a.locate_message(self.root, "operator", "session-a", "not-a-hash", allow)
+
+    def test_nothing_saved_returns_none(self):
+        self.assertIsNone(a.locate_message(self.root, "operator", "session-a", "0" * 64, lambda selected: True))
+
+
 class ArchiveFixtureTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="synthetic-chat-archive-")

@@ -1301,6 +1301,14 @@ class Bridge:
                     after=payload.get("after_sequence", 0), limit=payload.get("limit", 8))
             if action == "list":
                 return archive.list_archives(self.root, source, authorize, limit=payload.get("limit", 12), after=payload.get("after"))
+            if action == "locate":
+                # A memory's evidence ref "<label>:<session>:<turn>:user#sha256:<hex>" -> its saved chat message.
+                found = re.fullmatch(r"[a-z-]+:([A-Za-z0-9._-]{1,200}):[A-Za-z0-9._:-]{1,200}:user#sha256:([0-9a-f]{64})",
+                                     str(payload.get("ref", "")))
+                if not found:
+                    raise Refused("locate needs a memory evidence ref from a chat")
+                where = archive.locate_message(self.root, source, found.group(1), found.group(2), authorize)
+                return {"status": "found", **where} if where else {"status": "not-saved"}
             if action == "plan":
                 target = payload.get("to")
                 if target not in allowed:

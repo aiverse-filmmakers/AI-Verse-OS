@@ -179,6 +179,20 @@ def record_skill_use(config, skill):
         return False
 
 
+def question_answers(event):
+    """'question / answer' text when the operator answered a question box, else None."""
+    if event.get("tool_name") != "AskUserQuestion":
+        return None
+    response = event.get("tool_response")
+    tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
+    answers = response.get("answers") if isinstance(response, dict) else None
+    if not isinstance(answers, dict):
+        answers = tool_input.get("answers") if isinstance(tool_input.get("answers"), dict) else {}
+    lines = [f"{question}\n{answer}" for question, answer in answers.items()
+             if isinstance(question, str) and isinstance(answer, str) and answer.strip()]
+    return "\n\n".join(lines)[:4000] if lines else None
+
+
 def outside_event(event):
     """True when a tool result came from the web, a connector or a network command."""
     tool_input = event.get("tool_input")
@@ -683,7 +697,8 @@ class Bridge:
                 raise Refused("Strategic writes are disabled in plan mode")
             quote = bounded_text(payload.get("quote"), 1200)
             no_secrets(quote)
-            self.evidence(turn, [{"source_id": "user", "quote": quote}])
+            quote_source = "answer" if payload.get("quote_source") == "answer" else "user"
+            self.evidence(turn, [{"source_id": quote_source, "quote": quote}])
             if scope not in {state["scope"], "operator"}:
                 raise Refused("Intent write outside bound scope")
             if scope == "operator" and state["scope"] != "operator" and payload.get("explicit_operator_scope") is not True:
@@ -702,7 +717,7 @@ class Bridge:
                 turn.setdefault("intent_effects", []).append(result)
                 self.save(state)
                 return result
-            source_ref = f"{self.labels['ref']}:{session}:{turn_id}:user#sha256:{turn['sources']['user']['sha256']}"
+            source_ref = f"{self.labels['ref']}:{session}:{turn_id}:{quote_source}#sha256:{turn['sources'][quote_source]['sha256']}"
             operation = self.labels["intent_operation"] + ":" + digest(json.dumps([session, turn_id, action, payload.get("operation_key", "default")]))
             try:
                 service = self.intent_service()
@@ -1373,6 +1388,12 @@ class Bridge:
                     if skill and skill not in turn.setdefault("skills_used", []):
                         turn["skills_used"].append(skill)
                         record_skill_use(self.config, skill)
+                    answered = question_answers(event)
+                    if answered:
+                        # A question box answer is the operator's own choice, like a typed reply.
+                        user = turn["sources"].get("user") or {}
+                        self.add_source(turn, "answer", "user", answered,
+                                        scopes=user.get("scopes") or [turn.get("scope", "operator")])
                     tool_id = event.get("tool_use_id")
                     if isinstance(tool_id, str) and len(tool_id) <= 200:
                         response = event.get("tool_response", {})

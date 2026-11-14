@@ -3,7 +3,7 @@
   "id": "ai-verse-codex-learning",
   "version": "0.3.0-local",
   "files": {
-    "bridge.py": "f0c741865f1a66cc0bf555c721b5ea9720863bdcd720cda32d3b8103f5e02cf8",
+    "bridge.py": "c69fd96478cf73f886b8d74335012a7ef8fc7d7381522250a7937d79ccb9e5cd",
     "lifecycle.py": "f3c4bf7096b780aadfa50992c8db19f2828b9ce71c840e658196476982974281",
     "install.py": "3b7546e99e8c52cb88309c20ae33e04e0d88fdf32d3d7257ddac7b4abff21e8b",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",
@@ -14,7 +14,7 @@
     "SETUP.md": "453eec67ef63afb20d39086af0ef2aeec3cb8dd46a6c245f9f5512ffc74666f5",
     "intent.py": "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49",
     "brain_read.py": "be53f0eebbb312570079d474e8b8156375ede0c68ee2ca0301378b2a2a8cead1",
-    "INTENT.md": "661cdd1983800d8eb389380d3c4943b56c5f25adff0a7ffde9a8068fa0d4702d",
+    "INTENT.md": "2cd30c4aa95644d75d4b70ef2ec2bfe4a11aab5995d223edc78613cda72ebaa7",
     "reflect.py": "15d8199874403a71ca785e4b413965328b68f8c8187d88c2ca66ed0fdba7abf0",
     "claude_transcript.py": "d41155882c3399619977563cec302b62c4fcf99d09913f29612bd6bd26727695",
     "chat_archive.py": "3aba0eaa173206a914366f97c50326b9048e3aa908a5c77f443aa8ddb52d9566",

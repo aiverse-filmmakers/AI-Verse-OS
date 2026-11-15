@@ -95,7 +95,9 @@ class TidyTests(TidyBase):
             state = sc.bridge.tidy().load()
             state["entries"][0]["at"] = time.time() - 7 * 3600
             sc.bridge.tidy().store(state)
-            self.assertIn("tidying is due", sc.prompt("Hello again."))
+            due_prompt = sc.prompt("Hello again.")
+            self.assertIn("tidying is due", due_prompt)
+            self.assertIn("never ask the operator about old notes", due_prompt)
         self.each(body)
 
     def test_one_pass_fixes_the_traced_items_flags_a_guess_and_the_note_matches(self):

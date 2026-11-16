@@ -277,5 +277,68 @@ class SemanticMigrationClarificationTests(unittest.TestCase):
         self.assertIn("foreign runtime/system instructions", row["reason"])
 
 
+class MigrationSecretFilterTests(unittest.TestCase):
+    SECRETS = [
+        "password: hunter2secret",
+        "api_key=abcdefghijk",
+        "secret = s3cr3tvalue",
+        "client_secret: abcdef123456",
+        "API key: abcdefghijk",
+        "DB_PASSWORD=\"correct-horse\"",
+        "sk-abcdefghijklmnopqrstuvwxyz123",
+        "my-api_key=abcdefghijk",
+        "Authorization: Bearer abcdefghijklmnopqrst1234",
+        "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+        "github_pat_11ABCDEFG0abcdefghijklmnop_qrstuvwxyz",
+        "AKIAIOSFODNN7EXAMPLE",
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijkl",
+        "xoxb-1234567890-abcdefghij",
+        "AIzaSyA1234567890abcdefghijklmnopqrstuv",
+        "postgres://admin:p4ssw0rd@db.example.com:5432/app",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIE",
+    ]
+    ORDINARY = [
+        "I prefer short answers and a calm tone.",
+        "My password manager is great, I use it daily.",
+        "Please keep the API key rotation on my to do list.",
+        "Visit https://example.com/docs for the guide.",
+        "The secret to good pasta is salty water.",
+        "Meeting with Sky about the token economy paper on Friday.",
+        "Call me at the office, ask for Alex@Studio.",
+    ]
+
+    def test_secret_shapes_are_detected(self):
+        for text in self.SECRETS:
+            with self.subTest(text=text):
+                self.assertTrue(host_module.AIverseOSHost._migration_secret_like(text))
+
+    def test_ordinary_text_is_not_flagged(self):
+        for text in self.ORDINARY:
+            with self.subTest(text=text):
+                self.assertFalse(host_module.AIverseOSHost._migration_secret_like(text))
+
+    def test_hostile_long_input_is_fast(self):
+        import time
+
+        for unit in ("a-", "password", "sk-", "a://", "a:b" ):
+            text = unit * 100000
+            start = time.monotonic()
+            host_module.AIverseOSHost._migration_secret_like(text)
+            self.assertLess(time.monotonic() - start, 1.0, unit)
+
+    def test_secret_excerpt_is_not_persisted_but_ref_is_kept(self):
+        host = host_module.AIverseOSHost.__new__(host_module.AIverseOSHost)
+        source = "Bogdan likes tea. password: hunter2secret"
+        refs, persisted = host._migration_verified_spans(
+            source_text=source,
+            source_digest="abc",
+            spans=["Bogdan likes tea.", "password: hunter2secret"],
+            label="test",
+            persist_text=True,
+        )
+        self.assertEqual(len(refs), 2)
+        self.assertEqual(persisted, ["Bogdan likes tea."])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -279,4 +279,33 @@ function baseRequest() {
   assert.equal(ok.state, 'created');
 }
 
+// A busy lock and a write the system refuses both exit 75 (retry later); a validation refusal does not.
+{
+  const root = fixture();
+  const evidence = { stable: true, explicit_or_strong: true, reason: 'Exit codes.' };
+  const lock = path.join(root, 'operator', 'profile', '.profile-owner.lock');
+  fs.writeFileSync(lock, `${process.pid}:someoneelse\n`);
+  const busy = spawnSync(process.execPath, [script, 'ensure', '--root', root], {
+    input: JSON.stringify({ identity: { notes: ['blocked'] }, evidence, provenance: { trigger_ref: 'exit-1' } }),
+    encoding: 'utf8', env: { ...process.env, AIVERSE_PROFILE_LOCK_WAIT_MS: '300' } });
+  assert.equal(busy.status, 75, busy.stderr);
+  assert.equal(busy.stdout.trim(), '');
+  fs.rmSync(lock);
+  const bad = spawnSync(process.execPath, [script, 'ensure', '--root', root], { input: 'not json', encoding: 'utf8' });
+  assert.equal(bad.status, 4, bad.stderr);
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const profileDir = path.join(root, 'operator', 'profile');
+    fs.chmodSync(profileDir, 0o500);
+    try {
+      const denied = spawnSync(process.execPath, [script, 'ensure', '--root', root], {
+        input: JSON.stringify({ identity: { notes: ['denied'] }, evidence, provenance: { trigger_ref: 'exit-2' } }),
+        encoding: 'utf8' });
+      assert.equal(denied.status, 75, denied.stderr);
+      assert.equal(denied.stdout.trim(), '');
+    } finally {
+      fs.chmodSync(profileDir, 0o700);
+    }
+  }
+}
+
 process.stdout.write('Operator profile owner acceptance: PASS\n');

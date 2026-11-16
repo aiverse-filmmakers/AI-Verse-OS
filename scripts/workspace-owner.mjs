@@ -8,6 +8,12 @@ const SCHEMA_VERSION = 1;
 const PROVENANCE_FILE = 'context/AUTO-ORGANIZATION.json';
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
+const TEMPORARY_ERROR_CODES = new Set(['EACCES', 'EPERM', 'ENOSPC', 'EBUSY', 'EAGAIN', 'EIO', 'EMFILE', 'ENFILE', 'EROFS', 'ETIMEDOUT', 'EDQUOT']);
+// Exit 75 (EX_TEMPFAIL) tells the host this failure may succeed on a later try.
+function temporaryExit(error) {
+  return TEMPORARY_ERROR_CODES.has(error && error.code) ? 75 : null;
+}
+
 function fail(message, code = 4) {
   process.stderr.write(`workspace-owner: ${message}\n`);
   process.exit(code);
@@ -494,4 +500,4 @@ async function main() {
   }, null, 2)}\n`);
 }
 
-main().catch((error) => fail(error.message, 4));
+main().catch((error) => fail(error.message, temporaryExit(error) ?? 4));

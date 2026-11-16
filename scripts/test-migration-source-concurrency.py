@@ -310,6 +310,37 @@ class MigrationSourceConcurrencyTests(unittest.TestCase):
         self.assertEqual(state["state"], "committed")
         self.assertIn(state["plan_sha256"], {plan_digest(plan_a), plan_digest(plan_b)})
 
+    def test_temporary_owner_failure_reopens_source_and_retries_only_failed_item(self):
+        base, root, effects = self.make_case()
+        module = load_host_module()
+        host = module.AIverseOSHost(root)
+        host.authorize_action = lambda request: {"decision": "allow"}
+        plan = workspace_plan("client-alpha-a")
+        plan["workspaces"].append(workspace_plan("client-alpha-b")["workspaces"][0])
+        state = {"fail_once": True, "calls": 0}
+
+        def workspace_action(request, scope, parameters):
+            state["calls"] += 1
+            if parameters["workspace"]["id"] == "client-alpha-b" and state["fail_once"]:
+                state["fail_once"] = False
+                raise OSError("write failed once")
+            return atomic_owner_effect(effects, request, parameters, False, 0)
+
+        host._request_workspace_ensure = workspace_action
+        first = host.request_action(request_for(module, plan))["result"]["migration_import"]
+        self.assertEqual(first["state"], "partial")
+        self.assertEqual(first["workspaces"][1]["status"], "failed-temporary")
+        self.assertEqual(first["workspaces"][0]["status"], "succeeded")
+        self.assertEqual(len(list(effects.glob("*.json"))), 1)
+
+        second = host.request_action(request_for(module, plan))["result"]["migration_import"]
+        self.assertEqual(second["state"], "complete")
+        self.assertEqual([row["status"] for row in second["workspaces"]], ["succeeded", "succeeded"])
+        self.assertEqual(len(list(effects.glob("*.json"))), 2)
+        self.assertEqual(state["calls"], 3)
+        self.assertEqual(len(self.migration_rows(root)), 1)
+        self.assertEqual(self.source_state(root)["state"], "committed")
+
     def test_crashed_source_reservation_requires_bound_plan_recovery_then_replays(self):
         base, root, effects = self.make_case()
         plan_a = workspace_plan("client-alpha-a")

@@ -44,6 +44,12 @@ const WRITE_OPERATIONS = new Set([
 ]);
 const DELETE_OPERATIONS = new Set(['data.record.delete']);
 
+const TEMPORARY_ERROR_CODES = new Set(['EACCES', 'EPERM', 'ENOSPC', 'EBUSY', 'EAGAIN', 'EIO', 'EMFILE', 'ENFILE', 'EROFS', 'ETIMEDOUT', 'EDQUOT']);
+// Exit 75 (EX_TEMPFAIL) tells the host this failure may succeed on a later try.
+function temporaryExit(error) {
+  return TEMPORARY_ERROR_CODES.has(error && error.code) ? 75 : null;
+}
+
 function fail(message, code = 2) {
   const error = new Error(message);
   error.exitCode = code;
@@ -401,6 +407,6 @@ const invoked = process.argv[1]
 if (invoked) {
   main().catch((error) => {
     process.stderr.write(`data-host: ${error.message}\n`);
-    process.exitCode = Number(error?.exitCode ?? 2);
+    process.exitCode = Number(error?.exitCode ?? temporaryExit(error) ?? 2);
   });
 }

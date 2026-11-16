@@ -94,6 +94,25 @@ class AdapterError(RuntimeError):
     pass
 
 
+class TemporaryAdapterError(AdapterError):
+    """A failure that can succeed on a later try (owner crash, lock, disk or I/O problem).
+
+    Owner command line tools exit 75 (EX_TEMPFAIL) when a system level error such as a
+    busy lock or a full disk stopped them. A crash (exit 1) or a killed process (signal)
+    is also treated as temporary. Exit 2 and 4 are the owners' own validation refusals.
+    """
+
+
+_OWNER_TEMPORARY_EXIT_CODES = frozenset({1, 75})
+
+
+def _owner_exit_error(label: str, returncode: int, detail: str) -> AdapterError:
+    message = f"{label} failed: {detail}"
+    if returncode < 0 or returncode in _OWNER_TEMPORARY_EXIT_CODES:
+        return TemporaryAdapterError(message)
+    return AdapterError(message)
+
+
 def _json_object(raw: str, label: str) -> Dict[str, Any]:
     try:
         value = json.loads(raw)
@@ -115,7 +134,7 @@ def _run_json(command: Iterable[str], payload: Mapping[str, Any], label: str) ->
     )
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-        raise AdapterError(f"{label} failed: {detail}")
+        raise _owner_exit_error(label, proc.returncode, detail)
     return _json_object(proc.stdout, label)
 
 
@@ -1327,7 +1346,7 @@ class AIverseOSHost:
         )
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-            raise AdapterError(f"OS workspace owner failed: {detail}")
+            raise _owner_exit_error("OS workspace owner", proc.returncode, detail)
         organized = _json_object(proc.stdout, "OS workspace owner")
         state = organized.get("state")
         accepted = state in {"created", "evolved", "existing", "ignored-trivial"}
@@ -1385,7 +1404,7 @@ class AIverseOSHost:
         )
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-            raise AdapterError(f"OS operator profile owner failed: {detail}")
+            raise _owner_exit_error("OS operator profile owner", proc.returncode, detail)
         organized = _json_object(proc.stdout, "OS operator profile owner")
         state = organized.get("state")
         accepted = state in {
@@ -1432,7 +1451,7 @@ class AIverseOSHost:
         )
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-            raise AdapterError(f"OS operator profile owner failed: {detail}")
+            raise _owner_exit_error("OS operator profile owner", proc.returncode, detail)
         snapshot = _json_object(proc.stdout, "OS operator profile owner")
         if snapshot.get("operation") != "read" or snapshot.get("state") != "ready":
             raise AdapterError("OS operator profile owner returned an invalid read result")
@@ -1474,7 +1493,7 @@ class AIverseOSHost:
         )
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
-            raise AdapterError(f"OS operator profile owner failed: {detail}")
+            raise _owner_exit_error("OS operator profile owner", proc.returncode, detail)
         corrected = _json_object(proc.stdout, "OS operator profile owner")
         state = corrected.get("state")
         accepted = state in {"created", "evolved", "existing", "stale", "ignored-weak", "needs-clarification", "blocked-secret"}
@@ -2391,6 +2410,12 @@ class AIverseOSHost:
         prior_plan_digest = prior.get("plan_sha256")
         exact = prior_plan_digest == incoming_plan_digest
         migration_import = {**dict(prior), "replayed": True, "replay_match": "source-and-plan" if exact else "source"}
+        if prior.get("state") == "partial" and not exact:
+            migration_import["member_message"] = (
+                "Some items from this source could not be imported yet, and this run did not retry them "
+                "because the import plan changed. Nothing new was imported. To retry them, run the import "
+                "again with the same plan as before."
+            )
         binding: Dict[str, Any] = {
             "request_fingerprint": _fingerprint(request),
             "scope": scope,
@@ -2434,6 +2459,22 @@ class AIverseOSHost:
                 state.get("import_key") != prior_import_key or state.get("plan_sha256") != prior_plan_digest
             ):
                 raise AdapterError("migration source reservation conflicts with the committed source receipt")
+            if prior.get("state") == "partial" and prior_plan_digest == plan_digest and prior_import_key == import_key:
+                # Some items could not be imported last time: reopen the source so only those are retried.
+                reopened = {
+                    "schema_version": _MIGRATION_SOURCE_STATE_VERSION,
+                    "owner": "ai-verse-os",
+                    "operation": "migration.import.source-reservation",
+                    "state": "in-progress",
+                    "source_sha256": source_digest,
+                    "plan_sha256": prior_plan_digest,
+                    "import_key": prior_import_key,
+                    "started_at": (state or {}).get("started_at") or prior.get("completed_at") or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "recovery_count": (state or {}).get("recovery_count", 0) + 1,
+                    "last_recovery_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+                self._migration_atomic_json(state_path, reopened)
+                return reopened, None
             committed = {
                 "schema_version": _MIGRATION_SOURCE_STATE_VERSION,
                 "owner": "ai-verse-os",
@@ -2627,6 +2668,35 @@ class AIverseOSHost:
         if executor is not None:
             return executor(subrequest, scope, dict(parameters))
         return self.request_action(subrequest)
+
+    @staticmethod
+    def _migration_failure_row(index: int, exc: BaseException) -> Dict[str, Any]:
+        """Permanent refusals stay "rejected"; anything else is a temporary failure to retry."""
+        if isinstance(exc, (AdapterError, ValueError)) and not isinstance(exc, TemporaryAdapterError):
+            return {"index": index, "status": "rejected", "reason": str(exc)[:500]}
+        return {
+            "index": index,
+            "status": "failed-temporary",
+            "retryable": True,
+            "reason": f"temporary failure ({type(exc).__name__}): {exc}"[:500],
+        }
+
+    @staticmethod
+    def _migration_carried_row(prior: Optional[Mapping[str, Any]], section: str, index: int) -> Optional[Dict[str, Any]]:
+        """On a retry, a row that already finished (or was correctly rejected) is kept as is."""
+        if not prior:
+            return None
+        rows = prior.get(section)
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            if (
+                isinstance(row, Mapping)
+                and row.get("index") == index
+                and row.get("status") != "failed-temporary"
+            ):
+                return dict(row)
+        return None
 
     @staticmethod
     def _compact_migration_result(kind: str, index: int, result: Mapping[str, Any]) -> Dict[str, Any]:
@@ -3017,10 +3087,14 @@ class AIverseOSHost:
         import_key = hashlib.sha256(f"{source_digest}:{plan_digest}".encode("utf-8")).hexdigest()
         receipts_root = self._migration_receipts_root()
         receipt_path = receipts_root / f"{import_key}.json"
+        prior_receipt: Optional[Dict[str, Any]] = None
         if receipt_path.exists():
             existing = self._migration_load_receipt(receipt_path)
             if existing.get("source_sha256") != source_digest or existing.get("plan_sha256") != plan_digest:
                 raise AdapterError("migration import idempotency receipt does not match its source/plan")
+            if existing.get("state") == "partial":
+                prior_receipt = existing
+        if receipt_path.exists() and prior_receipt is None:
             return {
                 "status": "succeeded",
                 "effect_occurred": False,
@@ -3041,7 +3115,7 @@ class AIverseOSHost:
         # merely because the generated plan changed. Clarification-answer
         # imports are exempt because the same short answer can legitimately
         # resolve different pending questions.
-        if not resolution_items and not source_reserved:
+        if not resolution_items and not source_reserved and prior_receipt is None:
             prior_source_receipts: list[tuple[float, Path, Dict[str, Any]]] = []
             for prior_path in receipts_root.glob("*.json"):
                 if prior_path == receipt_path or prior_path.is_symlink() or not prior_path.is_file():
@@ -3086,7 +3160,10 @@ class AIverseOSHost:
         resolution_updates: list[tuple[Path, Dict[str, Any], int, Dict[str, Any]]] = []
         any_effect = False
 
-        if profile is not None:
+        carried_profile = self._migration_carried_row(prior_receipt, "profile", 0) if profile is not None else None
+        if carried_profile is not None:
+            profile_results.append(carried_profile)
+        elif profile is not None:
             allowed_profile = {"identity", "preferences", "evidence", "evidence_spans"}
             if set(profile) - allowed_profile or "evidence" not in profile or "evidence_spans" not in profile:
                 profile_results.append({
@@ -3133,9 +3210,13 @@ class AIverseOSHost:
                     any_effect = any_effect or compact["effect_occurred"]
                     profile_results.append(compact)
                 except Exception as exc:
-                    profile_results.append({"index": 0, "status": "rejected", "reason": str(exc)[:500]})
+                    profile_results.append(self._migration_failure_row(0, exc))
 
         for index, raw in enumerate(workspaces):
+            carried = self._migration_carried_row(prior_receipt, "workspaces", index)
+            if carried is not None:
+                workspace_results.append(carried)
+                continue
             if not isinstance(raw, Mapping):
                 workspace_results.append({"index": index, "status": "rejected", "reason": "workspace plan item must be an object"})
                 continue
@@ -3161,9 +3242,13 @@ class AIverseOSHost:
                 any_effect = any_effect or compact["effect_occurred"]
                 workspace_results.append(compact)
             except Exception as exc:
-                workspace_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+                workspace_results.append(self._migration_failure_row(index, exc))
 
         for index, raw in enumerate(memories):
+            carried = self._migration_carried_row(prior_receipt, "memories", index)
+            if carried is not None:
+                memory_results.append(carried)
+                continue
             if not isinstance(raw, Mapping):
                 memory_results.append({"index": index, "status": "rejected", "reason": "memory plan item must be an object"})
                 continue
@@ -3199,9 +3284,13 @@ class AIverseOSHost:
                 any_effect = any_effect or compact["effect_occurred"]
                 memory_results.append(compact)
             except Exception as exc:
-                memory_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+                memory_results.append(self._migration_failure_row(index, exc))
 
         for index, raw in enumerate(data_items):
+            carried = self._migration_carried_row(prior_receipt, "data", index)
+            if carried is not None:
+                data_results.append(carried)
+                continue
             if not isinstance(raw, Mapping):
                 data_results.append({"index": index, "status": "rejected", "reason": "Data plan item must be an object"})
                 continue
@@ -3272,9 +3361,17 @@ class AIverseOSHost:
                 any_effect = any_effect or compact["effect_occurred"]
                 data_results.append(compact)
             except Exception as exc:
-                data_results.append({"index": index, "status": "rejected", "reason": str(exc)[:500]})
+                data_results.append(self._migration_failure_row(index, exc))
 
-        for index, raw in enumerate(clarification_items):
+        if prior_receipt is not None:
+            # A retry only redoes failed items; questions already asked stay exactly as recorded.
+            clarifications.extend(
+                dict(row) for row in prior_receipt.get("clarifications", []) if isinstance(row, Mapping)
+            )
+            resolutions.extend(
+                dict(row) for row in prior_receipt.get("resolutions", []) if isinstance(row, Mapping)
+            )
+        for index, raw in enumerate([] if prior_receipt is not None else clarification_items):
             clarifications.append(
                 self._migration_clarification(
                     raw=raw,
@@ -3284,7 +3381,7 @@ class AIverseOSHost:
                 )
             )
 
-        for index, raw in enumerate(resolution_items):
+        for index, raw in enumerate([] if prior_receipt is not None else resolution_items):
             result, update = self._migration_resolution(
                 raw=raw,
                 index=index,
@@ -3309,7 +3406,9 @@ class AIverseOSHost:
             })
             prior["clarifications"][match_index] = item
             prior["state"] = (
-                "needs-clarification"
+                "partial"
+                if prior.get("retry_pending")
+                else "needs-clarification"
                 if any(
                     isinstance(row, Mapping) and row.get("status") == "pending"
                     for row in prior.get("clarifications", [])
@@ -3321,11 +3420,45 @@ class AIverseOSHost:
 
         pending_count = sum(1 for row in clarifications if row.get("status") == "pending")
         owner_rows = [*profile_results, *workspace_results, *memory_results, *data_results]
+        prior_attempts = {
+            (entry.get("section"), entry.get("index")): entry.get("attempts", 1)
+            for entry in (prior_receipt or {}).get("retry_pending", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("attempts", 1), int)
+        }
+        retry_pending = [
+            {
+                "section": section,
+                "index": row.get("index"),
+                "attempts": prior_attempts.get((section, row.get("index")), 0) + 1,
+            }
+            for section, rows in (
+                ("profile", profile_results),
+                ("workspaces", workspace_results),
+                ("memories", memory_results),
+                ("data", data_results),
+            )
+            for row in rows
+            if row.get("status") == "failed-temporary"
+        ]
+        if retry_pending:
+            import_state = "partial"
+            member_message = (
+                f"{len(retry_pending)} item(s) could not be imported yet because of a temporary problem. "
+                "Everything else was imported. Run the import again with the same source and only those items will be retried. "
+                "If the same items fail again, something on this computer needs attention (disk space, permissions, "
+                "or another program using the files), so ask for help."
+            )
+        elif pending_count:
+            import_state = "needs-clarification"
+            member_message = None
+        else:
+            import_state = "complete"
+            member_message = None
         receipt = {
             "schema_version": "1.1",
             "owner": "ai-verse-os",
             "operation": "migration.import",
-            "state": "needs-clarification" if pending_count else "complete",
+            "state": import_state,
             "source_kind": source_kind.strip(),
             "source_label": source_label.strip() if isinstance(source_label, str) else None,
             "source_sha256": source_digest,
@@ -3356,6 +3489,10 @@ class AIverseOSHost:
             ),
             "replayed": False,
         }
+        if retry_pending:
+            receipt["retry_pending"] = retry_pending
+            receipt["member_message"] = member_message
+            receipt["counts"]["retry_pending_items"] = len(retry_pending)
         self._migration_atomic_json(receipt_path, receipt)
 
         return {

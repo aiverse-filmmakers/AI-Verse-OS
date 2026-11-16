@@ -46,11 +46,21 @@ DEFAULTS = {
 }
 OPERATIONAL = {"Current state", "Current facts", "Next useful actions",
                "Pending decisions", "Execution state", "Connection state"}
+# Secret shapes. Every repeat is bounded so a hostile input cannot make the filter slow.
 SECRET = re.compile(
     r"(?i)(?:password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|"
-    r"private[ _-]?key|recovery[ _-]?code)\s*(?::|=|\bis\b)\s*\S+|"
+    r"private[ _-]?key|recovery[ _-]?code)[\\\"']{0,3}\s*(?::|=|\bis\b)\s*\S+|"
+    r"(?i:(?:password|passwd|secret|token|api[_ -]?key|private[_ -]?key|credential)[\w-]{0,40}"
+    r"[\\\"']{0,3}\s*[:=]\s*[\\\"']{0,3}"
+    r"(?:(?=[^\s\\\"',}]{0,100}[0-9_./+=@!#$%-])[^\s\\\"',}]{6,}|[^\s\\\"',}]{12,}))|"
     r"\bsk-[A-Za-z0-9_-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"\bBearer\s+\S+|\bgh[pousr]_[A-Za-z0-9]{20,}")
+    r"\bBearer\s+\S+|\bgh[pousr]_[A-Za-z0-9]{20,}|"
+    r"\bgithub_pat_[A-Za-z0-9_]{20,}|"
+    r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|"
+    r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|"
+    r"\bxox[abposr]-[A-Za-z0-9-]{10,}|"
+    r"\bAIza[0-9A-Za-z_-]{30,}|"
+    r"(?i:\b[a-z][a-z0-9+.-]{0,20}://[^\s/:@]{1,100}:[^\s/@]{1,100}@[^\s/]+)")
 OVERRIDE = re.compile(r"(?i)\b(?:ignore (?:all |the )?(?:previous|system|developer) instructions|"
                       r"you are (?:hermes|claude|chatgpt|codex)|(?:bypass|disable) (?:all )?(?:approval|permission))\b")
 

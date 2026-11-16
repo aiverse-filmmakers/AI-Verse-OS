@@ -2510,16 +2510,30 @@ class AIverseOSHost:
             raise AdapterError(f"migration.import {key} must be an array with at most {limit} items")
         return list(value)
 
+    _MIGRATION_SECRET_PATTERNS = tuple(
+        re.compile(pattern, flags)
+        for pattern, flags in (
+            (
+                r"(?:password|passwd|secret|token|api[_ -]?key|private[_ -]?key|credential)[\w-]{0,40}"
+                r"\s*[:=]\s*[\"']?[^\s\"',}]{6,}",
+                re.IGNORECASE,
+            ),
+            (r"\bsk-[A-Za-z0-9_-]{20,}", 0),
+            (r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}", re.IGNORECASE),
+            (r"\bgh[pousr]_[A-Za-z0-9]{20,}", 0),
+            (r"\bgithub_pat_[A-Za-z0-9_]{20,}", 0),
+            (r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", 0),
+            (r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}", 0),
+            (r"\bxox[abposr]-[A-Za-z0-9-]{10,}", 0),
+            (r"\bAIza[0-9A-Za-z_-]{30,}", 0),
+            (r"\b[a-z][a-z0-9+.-]{0,20}://[^\s/:@]{1,100}:[^\s/@]{1,100}@[^\s/]+", re.IGNORECASE),
+            (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", 0),
+        )
+    )
+
     @staticmethod
     def _migration_secret_like(value: str) -> bool:
-        return bool(
-            re.search(
-                r"(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|private[_ -]?key)\\s*[:=]\\s*[\"']?[^\\s\"',}]{6,}",
-                value,
-                re.IGNORECASE,
-            )
-            or re.search(r"\\bsk-[A-Za-z0-9_-]{20,}\\b", value)
-        )
+        return any(pattern.search(value) for pattern in AIverseOSHost._MIGRATION_SECRET_PATTERNS)
 
     def _migration_verified_spans(
         self,

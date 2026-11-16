@@ -290,7 +290,7 @@ class MigrationSecretFilterTests(unittest.TestCase):
         "Authorization: Bearer abcdefghijklmnopqrst1234",
         "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
         "github_pat_11ABCDEFG0abcdefghijklmnop_qrstuvwxyz",
-        "AKIAIOSFODNN7EXAMPLE",
+        "AKIAQWERTYUIOPASDFGH",
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijkl",
         "xoxb-1234567890-abcdefghij",
         "AIzaSyA1234567890abcdefghijklmnopqrstuv",

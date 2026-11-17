@@ -1,0 +1,72 @@
+name: Clean machine member check
+
+# Proves a brand new member can install and use the OS. The README says Node.js starts the installer,
+# so Node stays visible. Git and Python are hidden from the check's own tools (they stay installed on
+# the runner but are not on the PATH the check uses), no login, no keys, short private HOME.
+#   Windows:       the installer must download its own private Git and Python, and the OS must use them.
+#   macOS, Linux:  (1) without Git the installer must stop with a plain message and change nothing,
+#                  (2) with Git but no Python the installer must download a private Python and use it.
+# No path filter on purpose, so it can be a required check on every pull request.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clean-machine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-machine:
+    name: ${{ matrix.leg }} (${{ matrix.variant }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        variant: [plain, awkward]
+        include:
+          - os: ubuntu-latest
+            leg: linux
+          - os: macos-latest
+            leg: macos
+          - os: windows-latest
+            leg: windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Without Git (macOS and Linux)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CM_LEG: ${{ matrix.leg }}
+          CM_VARIANT: ${{ matrix.variant }}
+          CM_PHASE: no-git
+          CM_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/clean-machine-check.sh
+      - name: Without Python
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          CM_LEG: ${{ matrix.leg }}
+          CM_VARIANT: ${{ matrix.variant }}
+          CM_PHASE: with-git
+          CM_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/clean-machine-check.sh
+      - name: Without Git and Python
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          CM_LEG: ${{ matrix.leg }}
+          CM_VARIANT: ${{ matrix.variant }}
+          CM_PHASE: full
+          CM_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bash scripts/ci/clean-machine-check.sh

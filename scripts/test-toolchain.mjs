@@ -275,6 +275,7 @@ const local = bytes => async () => ({ length: bytes.length, chunks: (async funct
     'scripts/ai-verse': 'launcher: finds Node first, then asks the resolver for everything else',
     'scripts/ai-verse.cmd': 'launcher: finds Node first, then asks the resolver for everything else',
     'scripts/check-architecture.sh': 'developer-only repository check, never run for members',
+    'scripts/ci/clean-machine-check.sh': 'CI only: looks for the runner Node and checks that Git and Python are hidden',
     'system/extensions/packages/ai-verse-codex-learning/inspect_runtime.py': 'developer-only fixture on a throwaway folder',
   };
   const skipDirs = new Set(['node_modules', '.git', 'dist', 'assets', 'archives', 'workspaces', '__pycache__']);

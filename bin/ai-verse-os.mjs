@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { TOOLS, prepareToolchain, resolveTool, toolPath, toolEnv } from '../scripts/toolchain.mjs';
 
 // The OS version has one authority: release/component-release.json (the accepted
 // release descriptor). The CLI never carries its own number, and it asks the
@@ -17,7 +18,7 @@ const LAUNCHER_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 function versionFields(root) {
   const unknown = { version: 'unknown', version_status: 'unverified', release_descriptor_version: null };
   try {
-    const result = spawnSync(process.execPath, [path.join(root, 'scripts', 'os-version.mjs'), '--local', '--root', root], {
+    const result = spawnSync(toolPath('node') || process.execPath, [path.join(root, 'scripts', 'os-version.mjs'), '--local', '--root', root], {
       encoding: 'utf8', shell: false, timeout: 10_000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'],
     });
     if (result.error || result.status !== 0) return unknown;
@@ -54,13 +55,22 @@ function emit(value, json = false) {
   else out(JSON.stringify(value, null, 2));
 }
 
+// Node, Python and Git always run from the OS's own toolchain (see scripts/toolchain.mjs).
 function run(command, args = [], options = {}) {
-  const result = spawnSync(command, args, {
+  let file = command;
+  if (TOOLS.includes(command)) {
+    file = toolPath(command);
+    if (!file) {
+      if (options.allowFailure) return { error: new Error(`${command} is not available`), status: null, stdout: '', stderr: '' };
+      fail(`${command} is not available. Run: ai-verse-os setup`);
+    }
+  }
+  const result = spawnSync(file, args, {
     cwd: options.cwd,
     encoding: 'utf8',
     stdio: options.capture ? 'pipe' : 'inherit',
     shell: false,
-    env: options.env || process.env,
+    env: options.env || toolEnv({ tools: Object.fromEntries(TOOLS.map(t => [t, { path: toolPath(t) }])) }),
   });
   if (result.error) {
     if (options.allowFailure) return result;
@@ -277,7 +287,7 @@ function componentReport(root, command, { profile = 'detected', apply = false, c
   const args = [script, command, '--root', root, '--profile', profile, '--json'];
   if (apply) args.push('--apply');
   if (component) args.splice(2, 0, component);
-  const result = run(process.execPath, args, { capture: true, allowFailure: true });
+  const result = run('node', args, { capture: true, allowFailure: true });
   let parsed;
   try {
     parsed = JSON.parse(result.stdout || '{}');
@@ -343,9 +353,18 @@ function usage() {
   out('  ai-verse-os version');
 }
 
-function install(options) {
-  const gitVersion = commandVersion('git');
-  if (!gitVersion) fail('Git is required. Install Git and run the command again.');
+// Check (and where a trusted download is listed, prepare) Node, Python and Git up front,
+// so a missing tool stops the install here in plain words instead of at first use.
+async function requirePrerequisites(options) {
+  const report = await prepareToolchain();
+  if (!report.ok) {
+    if (options.json) emit({ schema_version: LIFECYCLE_SCHEMA, state: 'prerequisites-missing', ready: false, problems: report.problems }, true);
+    fail(`Stopped before changing anything.\n${report.problems.join('\n')}`);
+  }
+  return report;
+}
+
+async function install(options) {
   const explicit = options.dir || options.positional[0];
   // Run from inside an installation with no folder named: it is already installed, so do not nest a second copy.
   const here = explicit ? null : findRoot(realPathOrPlanned(process.cwd()));
@@ -393,6 +412,11 @@ function install(options) {
     ].join('\n'));
   }
 
+  // Every refusal above has already happened, so a refused install changes and downloads nothing.
+  await requirePrerequisites(options);
+  const gitVersion = commandVersion('git');
+  if (!gitVersion) fail('Git is not available. Run the install again or ask for help in the AI-Verse community.');
+
   if (!options.json) {
     out('AI-Verse OS installer');
     out('----------------------');
@@ -428,11 +452,12 @@ function install(options) {
   }
 }
 
-function setup(options) {
+async function setup(options) {
   const root = resolveRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
   const missing = validateInstall(root);
   if (missing.length) fail(`OS installation is incomplete. Missing: ${missing.join(', ')}`);
+  await requirePrerequisites(options);
 
   const before = readSetup(root);
   const profile = options.profile || before.profile || 'detected';
@@ -512,10 +537,11 @@ function doctor(options) {
   }
 
   const result = statusObject(root, { profile: options.profile || undefined });
-  const nodeMajor = Number(process.versions.node.split('.')[0]);
   const gitVersion = commandVersion('git');
+  const toolchain = Object.fromEntries(TOOLS.map(t => [t, resolveTool(t)]));
   const missing = validateInstall(root);
-  const structural = missing.length === 0 && nodeMajor >= 18 && Boolean(gitVersion);
+  const toolsOk = TOOLS.every(t => toolchain[t].path);
+  const structural = missing.length === 0 && toolsOk;
   const doctorResult = {
     ...result,
     command: 'doctor',
@@ -529,8 +555,9 @@ function doctor(options) {
       system_composed: true,
     },
     checks: {
-      node: { ok: nodeMajor >= 18, version: process.versions.node, complete_beta_baseline: nodeMajor >= 22 },
-      git: { ok: Boolean(gitVersion), version: gitVersion },
+      node: { ok: Boolean(toolchain.node.path), version: toolchain.node.version, source: toolchain.node.source },
+      python: { ok: Boolean(toolchain.python.path), version: toolchain.python.version, source: toolchain.python.source },
+      git: { ok: Boolean(toolchain.git.path), version: toolchain.git.version, source: toolchain.git.source },
       core_files: { ok: missing.length === 0, missing },
       setup: { ok: result.setup.state === 'ready', state: result.setup.state },
       components: { ok: result.components?.ready === true, state: result.components?.state ?? 'unknown' },
@@ -544,8 +571,7 @@ function doctor(options) {
   else {
     out('AI-Verse OS doctor');
     out('------------------');
-    out(`${nodeMajor >= 18 ? '✓' : '✗'} Node ${process.versions.node}`);
-    out(`${gitVersion ? '✓' : '✗'} Git${gitVersion ? `: ${gitVersion}` : ''}`);
+    for (const t of TOOLS) out(`${toolchain[t].path ? '✓' : '✗'} ${t[0].toUpperCase()}${t.slice(1)}${toolchain[t].path ? ` ${toolchain[t].version} (${toolchain[t].source})` : ': not found'}`);
     out(`${missing.length ? '✗' : '✓'} Core architecture`);
     out(`${result.setup.state === 'ready' ? '✓' : '!'} Setup: ${result.setup.state}`);
     out(`${result.components?.ready ? '✓' : '!'} Composed profile: ${result.components?.state}`);
@@ -636,7 +662,7 @@ function components(options) {
     const args = [script, subcommand, '--root', root, '--profile', profile];
     if (component) args.splice(2, 0, component);
     if (options.apply || subcommand === 'setup') args.push('--apply');
-    const human = run(process.execPath, args, { allowFailure: true });
+    const human = run('node', args, { allowFailure: true });
     if (human.status !== 0) process.exitCode = human.status;
     return;
   }
@@ -723,8 +749,8 @@ if (options.help) {
 }
 
 switch (command) {
-  case 'install': install(options); break;
-  case 'setup': setup(options); break;
+  case 'install': await install(options); break;
+  case 'setup': await setup(options); break;
   case 'status': status(options); break;
   case 'doctor': doctor(options); break;
   case 'update': update(options); break;

@@ -17,7 +17,7 @@ A web page, PDF, email or skill can contain hidden instructions for your AI. If 
 ## Your ten habits
 
 - [ ] Update Claude Code and Codex at least weekly.
-- [ ] Keep passwords and API keys out of your AI-Verse OS folder.
+- [ ] Keep passwords out of your AI-Verse OS folder. Keep API keys only in its `.env` file, saved with `node scripts/secrets.mjs set NAME`, and never paste a key into chat.
 - [ ] Only add skills from the AI-Verse library unless you have read the report.
 - [ ] Never paste an install command just because a skill or page told you to.
 - [ ] Download unknown projects into a separate folder, and do not open them with your AI until you trust them.
@@ -30,7 +30,7 @@ A web page, PDF, email or skill can contain hidden instructions for your AI. If 
 To review an outside skill or repo yourself, ask your AI to run this on its folder:
 
 ```bash
-node scripts/skill-check.mjs path/to/folder
+scripts/ai-verse node scripts/skill-check.mjs path/to/folder
 ```
 
 An empty report does not mean something is safe. It only means the simple checks found nothing.

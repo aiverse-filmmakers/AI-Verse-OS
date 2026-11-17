@@ -14,6 +14,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+_keep = sys.dont_write_bytecode
+sys.dont_write_bytecode = True  # never leave bytecode files in a member's OS folder
+try:
+    from toolchain import resolve_tool  # noqa: E402
+finally:
+    sys.dont_write_bytecode = _keep
+
 ROOT = Path(__file__).resolve().parents[1]
 HERE = ROOT / ".aiverse" / "reality-check"
 EXT = ROOT / ".aiverse/extensions/ai-verse-codex-learning"
@@ -117,8 +125,9 @@ if package.exists() and EXT.exists():
     check(not differ, "Helper files match the OS version",
           "they match" if not differ else "differ: " + ", ".join(sorted(differ)),
           "" if not differ else "Normal after an OS update until the helpers are refreshed; otherwise these are local edits.")
-status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT)
-edited = [line[3:] for line in status.stdout.splitlines() if line.strip()]
+_git = resolve_tool("git")
+status = subprocess.run([_git, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT) if _git else None
+edited = [line[3:] for line in status.stdout.splitlines() if line.strip()] if status else []
 check(not edited, "No unsaved edits to AI-Verse's own files",
       "none" if not edited else f"{len(edited)} edited: " + ", ".join(edited[:5]),
       "" if not edited else "An update will pause on these. Ask your assistant to help keep or move them safely.")

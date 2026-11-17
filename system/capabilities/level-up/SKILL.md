@@ -14,13 +14,13 @@ Read `references/3ms-framework.md`, `AI-VERSE.yaml`, `system/architecture/direct
 Resolve the target scope first:
 
 ```bash
-node scripts/direction-owner.mjs status --scope <operator-or-workspace:id>
+scripts/ai-verse node scripts/direction-owner.mjs status --scope <operator-or-workspace:id>
 ```
 
 If the improvement would change a goal, priority, objective, success definition, or other strategic direction, run:
 
 ```bash
-node scripts/direction-owner.mjs assert-strategic-write --scope <operator-or-workspace:id>
+scripts/ai-verse node scripts/direction-owner.mjs assert-strategic-write --scope <operator-or-workspace:id>
 ```
 
 If that assertion fails because Brain owns direction, do **not** edit OS strategic files. Read the generated `.aiverse/direction/views/<scope>.md`/Brain refs and improve the operational method serving that direction instead. Brain being offline never transfers ownership back to OS.

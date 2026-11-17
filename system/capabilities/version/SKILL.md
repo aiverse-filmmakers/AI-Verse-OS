@@ -11,10 +11,10 @@ Use `/version` for requests such as “what version am I on?”, “is AI-Verse 
 Run the reporter from the AI-Verse OS root:
 
 ```bash
-node scripts/os-version.mjs
+scripts/ai-verse node scripts/os-version.mjs
 ```
 
-Use `node scripts/os-version.mjs --json` only when a structured result is needed. Summarize the installed OS version, latest accepted OS version, and status in plain language. The check is read-only and never runs an update.
+Use `scripts/ai-verse node scripts/os-version.mjs --json` only when a structured result is needed. Summarize the installed OS version, latest accepted OS version, and status in plain language. The check is read-only and never runs an update.
 
 The reporter reads the installed Core receipt and non-mutating update plan from Distribution, then checks Distribution's public GitHub release catalog and the exact OS descriptor pinned by its current accepted Core release. “Latest” means the latest accepted member Core release. GitHub `main`, tags, unreleased candidates, and stale local refs are not substitutes.
 

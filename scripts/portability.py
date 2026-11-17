@@ -24,6 +24,14 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+_keep = sys.dont_write_bytecode
+sys.dont_write_bytecode = True  # never leave bytecode files in a member's OS folder
+try:
+    from toolchain import resolve_tool  # noqa: E402
+finally:
+    sys.dont_write_bytecode = _keep
+
 ROOT = Path(__file__).resolve().parents[1]
 LOCATION = ".aiverse/os/location.json"
 SETTINGS = [
@@ -251,8 +259,9 @@ def move_skills(root: Path) -> dict:
             return {"state": "refused", "message": "The skills library did not accept the new folder, so the setting "
                     "was put back. Your skills are still where they were. " + result.stderr.strip()[:300]}
     sync = root / "scripts" / "sync-my-skills.mjs"
-    if sync.is_file():
-        subprocess.run(["node", str(sync)], capture_output=True, text=True, cwd=root)
+    node = resolve_tool("node")
+    if sync.is_file() and node:
+        subprocess.run([node, str(sync)], capture_output=True, text=True, cwd=root)
     return {"state": "moved", "from": str(old), "to": str(new),
             "message": f"Your own skills now live in my-skills inside this folder. The old folder {old} is untouched; "
                        "delete it yourself once you have checked everything works."}

@@ -57,6 +57,9 @@ jobs:
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 
+      - name: Test prerequisites and private toolchain
+        run: node scripts/test-toolchain.mjs
+
       - name: Test the one line install in scratch folders
         run: node scripts/test-cli-install.mjs
 
@@ -73,6 +76,9 @@ jobs:
           node scripts/test-operator-profile-owner.mjs
           python3 scripts/test-migration-import.py
           python3 scripts/test-semantic-migration-clarification.py
+
+      - name: Test the owned secrets home (.env helper)
+        run: node scripts/test-secrets.mjs
 
       - name: Test ownership-aware adapter synchronization
         shell: bash

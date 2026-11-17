@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { toolPath } from './toolchain.mjs';
 import { fileURLToPath } from 'node:url';
 
 const OS_REPO = 'aiverse-filmmakers/AI-Verse-OS';
@@ -39,7 +40,9 @@ function readLocalDescriptor(root) {
 }
 
 function gitText(root, args) {
-  const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8', shell: false, timeout: 10_000, windowsHide: true });
+  const git = toolPath('git');
+  if (!git) return null;
+  const result = spawnSync(git, ['-C', root, ...args], { encoding: 'utf8', shell: false, timeout: 10_000, windowsHide: true });
   return result.error || result.status !== 0 ? null : result.stdout.trim();
 }
 

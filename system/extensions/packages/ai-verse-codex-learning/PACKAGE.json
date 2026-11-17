@@ -3,7 +3,7 @@
   "id": "ai-verse-codex-learning",
   "version": "0.3.0-local",
   "files": {
-    "bridge.py": "b4b47a60d29dd1885c772d56fdd74dfb871bdfea24bbb72881d958e0087f686f",
+    "bridge.py": "8f8eb544c8e384edc326252833139b4db1cbe7164550a1402f3f1c25460ef776",
     "lifecycle.py": "0bfdd974324fdd41ac8203dbc18a132a8d21acc23d679f0cbc79c7856291cefa",
     "install.py": "3784db6aa31785c5113d1aa2248097a120c4d50a41516a63ae8755ca90d272e4",
     "maintenance.py": "7239b9f3b686edd9c3521f9224de6e5fe87b4fb9bd29248d41252b5a4668d295",
@@ -18,7 +18,7 @@
     "reflect.py": "f14a309470beb64436218ee2b841a5dab7f9bff7924a9bc00bd2d159bcb20bb3",
     "claude_transcript.py": "d41155882c3399619977563cec302b62c4fcf99d09913f29612bd6bd26727695",
     "chat_archive.py": "45ed1c3ba1468750930127fe33ba48b01a8e4f587061cdd11dbad78ddd470282",
-    "claude_capture.py": "a8d49e018e590800037945f203ed2c0a75baf445e47f5b60a4ab4cc8dfb8d0f2",
+    "claude_capture.py": "6b22d658b3197b8bc4674ff8293c3bf1edf672b528d096fc3cc270104ce7d885",
     "prospective_capture.py": "9dc982effa7e5c30049ab15f15aacb00499191cfbefc673bc219dfbf700e2e77"
   }
 }

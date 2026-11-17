@@ -227,13 +227,16 @@ const local = bytes => async () => ({ length: bytes.length, chunks: (async funct
   for (const f of fs.readdirSync(path.join(ROOT, 'scripts'))) if (/\.(py|mjs)$/.test(f) && !f.startsWith('test-')) fs.copyFileSync(path.join(ROOT, 'scripts', f), path.join(copy, f));
   const home = path.join(scratch, 'fake-home'); fs.mkdirSync(home, { recursive: true });
   const env = { HOME: home, USERPROFILE: home, PATH: path.dirname(process.execPath), AI_VERSE_PRIVATE_TOOLCHAIN: 'off' };
-  const code = 'import sys; sys.path.insert(0, sys.argv[1]); import toolchain, ai_verse_host_adapter, portability; print(toolchain.resolve_tool("node") or "")';
-  const py = spawnSync(PYTHON, ['-c', code, copy], { encoding: 'utf8', env });
-  eq(py.status, 0, py.stderr);
-  ok(path.isAbsolute(py.stdout.trim()), 'node resolves from a minimal PATH with no manifest present');
-  ok(!fs.existsSync(path.join(copy, '__pycache__')), 'importing the resolver and its callers leaves no bytecode in the folder');
-  const reality = spawnSync(PYTHON, [path.join(copy, 'reality-check.py'), '--help'], { encoding: 'utf8', env, cwd: path.dirname(copy) });
-  ok(!fs.existsSync(path.join(copy, '__pycache__')), 'reality-check leaves no bytecode either'); void reality;
+  // Run the OS scripts the way members do (as programs, never importing them from the test), and also
+  // load the host adapter the way the learning package does (bytecode off, as its loader does), then insist no bytecode folder appears.
+  const osRoot = path.dirname(copy);
+  const ran = spawnSync(PYTHON, [path.join(copy, 'portability.py'), 'check', '--json'], { encoding: 'utf8', env, cwd: osRoot });
+  const real = spawnSync(PYTHON, [path.join(copy, 'reality-check.py')], { encoding: 'utf8', env, cwd: osRoot });
+  const code = 'import importlib.util,sys;s=importlib.util.spec_from_file_location("a",sys.argv[1]);m=importlib.util.module_from_spec(s);sys.modules["a"]=m;sys.dont_write_bytecode=True;s.loader.exec_module(m);print(m._node())';
+  const adapter = spawnSync(PYTHON, ['-c', code, path.join(copy, 'ai_verse_host_adapter.py')], { encoding: 'utf8', env, cwd: osRoot });
+  void ran; void real;
+  ok(path.isAbsolute(adapter.stdout.trim()), `node resolves from a minimal PATH with no manifest present: ${adapter.stderr}`);
+  ok(!fs.existsSync(path.join(copy, '__pycache__')) && !fs.existsSync(path.join(osRoot, '__pycache__')), 'running the OS scripts leaves no bytecode in the OS folder');
   const jsRun = spawnSync(process.execPath, [path.join(copy, 'toolchain.mjs'), 'resolve', 'node'], { encoding: 'utf8', env });
   eq(jsRun.status, 0, jsRun.stderr);
   eq(fs.readdirSync(copy).filter(f => f.startsWith('.') || f === '__pycache__'), [], 'the Node resolver leaves no files either');

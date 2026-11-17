@@ -162,7 +162,11 @@ def _load_module(path: Path, name: str):
         raise AdapterError(f"cannot load component: {path}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    _keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # never leave bytecode in the OS folder
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = _keep
     return module
 
 

@@ -23,7 +23,7 @@ Read:
 
 Run `bash scripts/check-architecture.sh` when the script is available. Treat its result as evidence, not as the entire audit.
 
-Also run `python3 scripts/reality-check.py` (plain words) or with `--json`. It checks that the helpers can run and ran recently, that chat summaries and memories are being saved, that every memory has search words, that memory search has not got worse, and that AI-Verse's own files have no unsaved edits. Report each FIX line in everyday words.
+Also run `scripts/ai-verse python scripts/reality-check.py` (plain words) or with `--json`. It checks that the helpers can run and ran recently, that chat summaries and memories are being saved, that every memory has search words, that memory search has not got worse, and that AI-Verse's own files have no unsaved edits. Report each FIX line in everyday words.
 
 Do not modify the inspected system merely to improve its score. The default write is the audit report.
 
@@ -116,7 +116,7 @@ Report each item as present, missing or not checkable. Never call the installati
 - `.claude/settings.json` exists, the sandbox is on, and bypass mode is disabled.
 - Claude Code and Codex are recent versions.
 - No `.env` or credential files sit inside the OS folder.
-- List outside skills and run `node scripts/skill-check.mjs <folder>` on any not from the AI-Verse library.
+- List outside skills and run `scripts/ai-verse node scripts/skill-check.mjs <folder>` on any not from the AI-Verse library.
 - List connected MCP servers and connectors, and name any that can send, publish or spend.
 - List memories labelled as unconfirmed outside content.
 - Confirm no scheduled job both reads outside content and can reach private files or send anything out.

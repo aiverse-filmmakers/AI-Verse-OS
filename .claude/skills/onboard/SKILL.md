@@ -40,8 +40,8 @@ Before durable writes:
 - inspect any already-filled answers in `ai-verse-os-intake.md`
 - never delete or bulk-move existing user state during onboarding
 - if old and new sources conflict, mark the ambiguity and preserve provenance
-- run `node scripts/direction-owner.mjs status --scope operator`
-- before any operator goal/priority/success-definition write, run `node scripts/direction-owner.mjs assert-strategic-write --scope operator`
+- run `scripts/ai-verse node scripts/direction-owner.mjs status --scope operator`
+- before any operator goal/priority/success-definition write, run `scripts/ai-verse node scripts/direction-owner.mjs assert-strategic-write --scope operator`
 
 Re-running onboarding must be safe and must reuse known answers rather than asking them again.
 

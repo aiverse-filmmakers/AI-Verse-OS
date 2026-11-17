@@ -8,10 +8,9 @@
 
 Requirements:
 
-- Git
-- Node.js 22+ for the complete five-component beta
-- Python when optional Python components are used
 - macOS, Linux, or Windows
+- Node.js 22+ to start the installer (the command above needs it)
+- Git, Node.js 22+ and Python 3.9+ are all checked during install. If one is missing or too old, the installer downloads its own private copy into `~/.aiverse/toolchain` (checksum verified, never touching your system tools, never using Homebrew). Git has no portable download for macOS and Linux, so there it must already be installed; the installer says so in plain words and stops before changing anything.
 
 Install the current OS development/public-beta candidate:
 

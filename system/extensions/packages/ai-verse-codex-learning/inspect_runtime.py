@@ -69,6 +69,8 @@ if __name__ == "__main__":
         from test_bridge import fixture
         temporary, root = fixture()
         try:
+            # Developer-only fixture on a throwaway folder with no OS scripts, so the shared resolver is not
+            # available here; it is never run on a member's machine.
             subprocess.run(["git", "init", "--quiet", str(root)], check=True)
             subprocess.run([sys.executable, str(root / ".aiverse/extensions" / ID / "lifecycle.py"),
                             "--root", str(root), "install"], stdout=subprocess.DEVNULL, check=True)

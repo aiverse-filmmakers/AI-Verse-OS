@@ -81,16 +81,16 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 echo "HOME=$HOME"; echo "WORK=$WORK"; echo "LANG=$LANG"
 TCDIR="$HOME/.aiverse/toolchain"
 
-# Step 2: the install line from the README, pointed at the commit under test. npm can only fetch a
-# GitHub package without Git when the commit is a full id, so CI always passes CM_REF.
+# Step 2: the install line from the README (an https tarball, so only Node and npm are needed to start),
+# pointed at the commit under test by swapping the trailing ref (main) for CM_REF.
 if [ -n "${CM_INSTALL_LINE:-}" ]; then LINE="$CM_INSTALL_LINE"; else
   LINE="$(awk '/^## Install/{f=1;next} /^## /{f=0} f && /^(npx|curl|irm|iwr) /{print;exit}' "$README")"
   [ -n "$LINE" ] || LINE="$(awk '/^## Install/{f=1;next} /^## /{f=0} f && /^npx /{print;exit}' "$README")"
   [ -n "$LINE" ] || fail "no install line found under '## Install' in $README"
-  if [ -n "${CM_REF:-}" ]; then LINE="${LINE//github:aiverse-filmmakers\/AI-Verse-OS/github:aiverse-filmmakers/AI-Verse-OS#$CM_REF}"; fi
+  if [ -n "${CM_REF:-}" ]; then LINE="${LINE//AI-Verse-OS\/tar.gz\/main/AI-Verse-OS/tar.gz/$CM_REF}"; fi
 fi
 if [ -z "${CM_INSTALL_LINE:-}" ] && [ -n "${CM_REF:-}" ]; then
-  case "$LINE" in *"#$CM_REF"*) ;; *) fail "the README install line does not take the commit under test (no #$CM_REF after substitution): $LINE" ;; esac
+  case "$LINE" in *"/tar.gz/$CM_REF"*) ;; *) fail "the README install line does not take the commit under test (no tar.gz/$CM_REF after substitution): $LINE" ;; esac
 fi
 say "Install line: $LINE"
 TARGET="$WORK/AI-Verse-OS"

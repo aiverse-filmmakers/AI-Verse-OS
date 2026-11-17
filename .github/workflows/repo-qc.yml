@@ -112,8 +112,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq 'npx --yes github:aiverse-filmmakers/AI-Verse-OS install' README.md
-          grep -Fq 'npm install -g github:aiverse-filmmakers/AI-Verse-OS' README.md
+          grep -Fq 'npx --yes https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main install' README.md
+          grep -Fq 'npm install -g https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main' README.md
           grep -Fq 'ai-verse-os update' README.md
           grep -Fq '## Install' README.md
           grep -Fq '## Setup' README.md

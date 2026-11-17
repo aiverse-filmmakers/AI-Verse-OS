@@ -9,13 +9,13 @@
 Requirements:
 
 - macOS, Linux, or Windows
-- Node.js 22+ to start the installer (the command above needs it)
+- Node.js 22+ to start the installer (the command above needs only Node and npm, not Git)
 - Git, Node.js 22+ and Python 3.9+ are all checked during install. If one is missing or too old, the installer downloads its own private copy into `~/.aiverse/toolchain` (checksum verified, never touching your system tools, never using Homebrew). Git has no portable download for macOS and Linux, so there it must already be installed; the installer says so in plain words and stops before changing anything.
 
 Install the current OS development/public-beta candidate:
 
 ```bash
-npx --yes github:aiverse-filmmakers/AI-Verse-OS install
+npx --yes https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main install
 ```
 
 Run it from the folder where you want AI-Verse OS to live. It downloads itself into a new `AI-Verse-OS` folder there, so you do not clone anything first. If that folder already has files, or you are already inside an installation, it says so in plain words and changes nothing.
@@ -23,7 +23,7 @@ Run it from the folder where you want AI-Verse OS to live. It downloads itself i
 Or install the command globally:
 
 ```bash
-npm install -g github:aiverse-filmmakers/AI-Verse-OS
+npm install -g https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main
 ai-verse-os install
 ```
 

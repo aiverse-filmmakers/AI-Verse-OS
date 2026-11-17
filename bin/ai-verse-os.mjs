@@ -37,7 +37,7 @@ const LIFECYCLE_SCHEMA = '1.0';
 const SETUP_SCHEMA = '1.0';
 const DEFAULT_REPO = 'https://github.com/aiverse-filmmakers/AI-Verse-OS.git';
 const REPO_URL = process.env.AI_VERSE_OS_REPO_URL || DEFAULT_REPO;
-const INSTALL_COMMAND = 'npx --yes github:aiverse-filmmakers/AI-Verse-OS install';
+const INSTALL_COMMAND = 'npx --yes https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main install';
 const SETUP_MARKER_REL = '.aiverse/os/setup.json';
 
 function out(message = '') {

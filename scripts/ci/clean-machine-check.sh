@@ -124,8 +124,8 @@ fi
 # Move the new folder to exactly the commit under test, so every check below runs the code being reviewed.
 say "Commit under test"
 SRC="$REPO"; [ "$WIN" = 1 ] && SRC="$(cygpath -m "$REPO")"
-if [ "$WIN" = 1 ]; then GITBIN="$("$NODE" "$TARGET/scripts/toolchain.mjs" resolve git)"; else GITBIN="$(command -v git)"; fi
-"$GITBIN" -C "$TARGET" fetch -q "$SRC" HEAD || fail "could not fetch the commit under test from $SRC"
+if [ "$WIN" = 1 ]; then GITBIN="$("$NODE" "$REPO/scripts/toolchain.mjs" resolve git)"; else GITBIN="$(command -v git)"; fi
+"$GITBIN" -c safe.directory='*' -C "$TARGET" fetch -q "$SRC" HEAD || fail "could not fetch the commit under test from $SRC"
 "$GITBIN" -C "$TARGET" checkout -q --detach FETCH_HEAD || fail "could not check out the commit under test"
 [ "$("$GITBIN" -C "$TARGET" rev-parse HEAD)" = "$CM_HEAD" ] || fail "the install folder is not at the commit under test ($CM_HEAD)"
 echo "install folder is at $CM_HEAD"
@@ -183,6 +183,7 @@ console.log('hash:' + crypto.createHash('sha256').update(v).digest('hex'));
 console.log('raw:' + v);
 PROBE
 OUT="$("${SECRETS[@]}" run -- node cm-probe.mjs 2>&1)" && fail "secrets run ran a command that is not on .env.allow"
+case "$OUT" in *"not on your approved list"*) ;; *) fail "the refusal has the wrong message: $OUT" ;; esac
 case "$OUT" in *"$SENTINEL"*) fail "the refusal printed the key value" ;; esac
 printf 'node cm-probe.mjs\n' > .env.allow
 OUT="$("${SECRETS[@]}" run -- node cm-probe.mjs 2>&1)" || fail "secrets run failed for an approved command: $OUT"

@@ -279,7 +279,8 @@ If no canonical location exists, consult `EXPANSIONS.md` before creating a new t
 
 ## Privacy and safety
 
-- Never store passwords, API keys, private keys, recovery codes, session tokens, or authentication secrets in the repository.
+- Never store passwords, API keys, private keys, recovery codes, session tokens, or authentication secrets in the repository, notes, memory, registries, chat archives, or commits. The one exception is the member's own `.env` at the OS root, which is gitignored and holds API keys only.
+- API keys live only in `.env`. Save one with `node scripts/secrets.mjs set NAME` (the member types the value into a hidden prompt, or it comes in on stdin; never put a value in a command argument or in chat). Check with `node scripts/secrets.mjs status`, which lists names as set or missing and never values. Every use of the helper asks the member to approve it. Claude has no hidden prompt, so for `set` tell the member to run it themselves with the `!` prefix or in their own terminal. Use keys with `node scripts/secrets.mjs run -- <command>` only for commands the member listed in `.env.allow`; never edit `.env.allow`, `scripts/secrets.mjs` or `.claude/settings.json`, and never ask to run an unlisted command with keys. Never read, print, copy, or echo `.env` or a key value; say only "set" or "missing". If a member pastes a key into chat, do not repeat it, tell them to save it with the command, and suggest they rotate it.
 - User-owned state is gitignored by default in the public template. Do not defeat that protection casually.
 - Respect workspace privacy boundaries. Do not leak one workspace's private context into another workspace without a legitimate reason.
 - Treat external actions, publishing, financial operations, destructive changes, and high-stakes domain decisions as requiring appropriate approval and verification.

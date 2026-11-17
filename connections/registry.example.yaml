@@ -12,6 +12,7 @@ connections: []
 #     workspaces: []
 #   auth:
 #     method: "credential manager / environment / interactive / none"
+#     env_var: ""   # name only, for example OPENAI_API_KEY; the value lives in .env, never here
 #     secret_stored_here: false
 #   authoritative_for: []
 #   last_checked: null

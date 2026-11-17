@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.allow.example
 .DS_Store
 *.log
 __pycache__/

@@ -14,6 +14,12 @@ const IDENTITY_LISTS = ['roles', 'domains', 'ventures', 'notes'];
 const START = '<!-- ai-verse-profile:auto:start -->';
 const END = '<!-- ai-verse-profile:auto:end -->';
 
+const TEMPORARY_ERROR_CODES = new Set(['EACCES', 'EPERM', 'ENOSPC', 'EBUSY', 'EAGAIN', 'EIO', 'EMFILE', 'ENFILE', 'EROFS', 'ETIMEDOUT', 'EDQUOT']);
+// Exit 75 (EX_TEMPFAIL) tells the host this failure may succeed on a later try.
+function temporaryExit(error) {
+  return TEMPORARY_ERROR_CODES.has(error && error.code) ? 75 : null;
+}
+
 function fail(message, code = 4) {
   process.stderr.write(`operator-profile-owner: ${message}\n`);
   process.exit(code);
@@ -461,7 +467,7 @@ function withProfileLock(profileRoot, work) {
         try { fs.renameSync(lock, aside); fs.unlinkSync(aside); } catch { /* another process took it */ }
         continue;
       }
-      if (Date.now() > until) throw new Error('operator profile is busy; retry');
+      if (Date.now() > until) throw Object.assign(new Error('operator profile is busy; retry'), { code: 'EBUSY' });
       sleepMs(25);
     }
   }
@@ -824,4 +830,4 @@ function ensureProfile(profileRoot, request) {
   }, null, 2) + '\n');
 }
 
-main().catch((error) => fail(error.message));
+main().catch((error) => fail(error.message, temporaryExit(error) ?? 4));

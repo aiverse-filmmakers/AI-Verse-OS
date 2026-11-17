@@ -121,6 +121,26 @@ function calls(f) {
     .map((line) => JSON.parse(line));
 }
 
+test('Data host CLI exits 75 for a system failure and 2 for a validation refusal', { skip: typeof process.getuid === 'function' && process.getuid() === 0 }, () => {
+  const f = fixture();
+  try {
+    const script = fileURLToPath(new URL('./data-host.mjs', import.meta.url));
+    const runCli = (input) => spawnSync(process.execPath, [script, '--root', f.root], { input, encoding: 'utf8' });
+    // The fixture engine appends to its call log; a log the system refuses to write is a system failure.
+    fs.writeFileSync(f.callLog, '', 'utf8');
+    fs.chmodSync(f.callLog, 0o400);
+    const denied = runCli(JSON.stringify(request({ request_id: 'req-exit-75' })) + '\n');
+    assert.equal(denied.status, 75, denied.stderr);
+    assert.equal(denied.stdout.trim(), '');
+    assert.equal(fs.readFileSync(f.callLog, 'utf8'), '', 'a failed write leaves the log unchanged');
+    const malformed = runCli('not json');
+    assert.equal(malformed.status, 2, malformed.stderr);
+  } finally {
+    try { fs.chmodSync(f.callLog, 0o600); } catch {}
+    f.cleanup();
+  }
+});
+
 test('Data host CLI entrypoint reads stdin and emits JSON on every platform', () => {
   const f = fixture();
   try {

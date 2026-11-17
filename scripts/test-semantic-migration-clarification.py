@@ -209,6 +209,92 @@ class SemanticMigrationClarificationTests(unittest.TestCase):
         self.assertEqual(prior["clarifications"][0]["status"], "resolved")
         self.assertEqual(prior["clarifications"][0]["resolved_source_sha256"], second["result"]["migration_import"]["source_sha256"])
 
+    def test_temporary_failure_keeps_pending_question_and_retries_item(self):
+        temp, root, host = self.make_host()
+        self.addCleanup(temp.cleanup)
+        state = {"fail_once": True, "calls": 0}
+
+        def workspace_action(request, scope, parameters):
+            state["calls"] += 1
+            if state["fail_once"]:
+                state["fail_once"] = False
+                raise OSError("temporarily locked")
+            return {
+                "status": "succeeded",
+                "effect_occurred": True,
+                "result": {"workspace_organization": {"state": "created", "workspace": {"id": parameters["workspace"]["id"]}}},
+            }
+
+        host._request_workspace_ensure = workspace_action
+        payload = {
+            "source": {"kind": "raw-paste", "text": "Client Beta is a client. TUI may be old or current."},
+            "plan": {
+                "workspaces": [
+                    {
+                        "workspace": {"id": "client-beta", "name": "Client Beta", "type": "client", "purpose": "Keep Beta work apart."},
+                        "evidence": {"substantial_scope": True, "boundary_clear": True, "reason": "Named client"},
+                        "authority": {"permission_expansion": False, "privacy_ambiguous": False, "new_connection": False, "new_credential": False},
+                    }
+                ],
+                "clarifications": [
+                    {
+                        "topic": "TUI",
+                        "kind": "relationship",
+                        "question": "Is TUI a current client, a past client, or a one-off project?",
+                        "choices": ["current client", "past client", "one-off project", "something else"],
+                        "reason": "The real-world relationship is unclear.",
+                        "evidence_spans": ["TUI may be old or current."],
+                    }
+                ],
+            },
+        }
+        first = self.action(host, payload)["result"]["migration_import"]
+        self.assertEqual(first["state"], "partial")
+        self.assertEqual(first["workspaces"][0]["status"], "failed-temporary")
+        self.assertIn("run the import again", first["member_message"].lower())
+        pending = [row for row in first["clarifications"] if row.get("status") == "pending"]
+        self.assertEqual(len(pending), 1)
+
+        # A changed plan for the same source must not silently look like a retry.
+        changed = json.loads(json.dumps(payload))
+        changed["plan"]["workspaces"][0]["evidence"]["reason"] = "Reworded by a later classifier pass."
+        replayed = self.action(host, changed)["result"]["migration_import"]
+        self.assertTrue(replayed["replayed"])
+        self.assertEqual(replayed["state"], "partial")
+        self.assertIn("same plan", replayed["member_message"])
+        self.assertEqual(state["calls"], 1)
+
+        # Answering the question must not flip the partial receipt to complete.
+        answer = "TUI is a current client."
+        resolved = self.action(
+            host,
+            {
+                "source": {"kind": "user-clarification", "text": answer},
+                "plan": {
+                    "workspaces": [], "memories": [], "data": [], "clarifications": [],
+                    "resolutions": [
+                        {
+                            "source_import_key": first["import_key"],
+                            "clarification_id": first["clarifications"][0]["clarification_id"],
+                            "answer_spans": [answer],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(resolved["result"]["migration_import"]["counts"]["resolved_clarifications"], 1)
+        prior_path = root / "operator" / "inbox" / "migration-imports" / f"{first['import_key']}.json"
+        prior = json.loads(prior_path.read_text(encoding="utf-8"))
+        self.assertEqual(prior["state"], "partial")
+        self.assertTrue(prior["retry_pending"])
+
+        second = self.action(host, payload)["result"]["migration_import"]
+        self.assertFalse(second["replayed"])
+        self.assertEqual(second["workspaces"][0]["status"], "succeeded")
+        self.assertEqual(second["state"], "complete")
+        self.assertEqual(second["clarifications"][0]["status"], "resolved")
+        self.assertEqual(state["calls"], 2)
+
     def test_architecture_question_is_rejected_instead_of_shown_to_user(self):
         temp, _root, host = self.make_host()
         self.addCleanup(temp.cleanup)

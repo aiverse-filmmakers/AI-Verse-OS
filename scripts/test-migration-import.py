@@ -293,6 +293,131 @@ class MigrationImportTests(unittest.TestCase):
         with self.assertRaisesRegex(host_module.AdapterError, "unsupported sections"):
             host.request_action(self.request(bad))
 
+    def test_temporary_failure_is_partial_and_retried_without_duplicates(self):
+        temp, root, host = self.make_host()
+        self.addCleanup(temp.cleanup)
+        host.authorize_action = lambda request: {"decision": "allow"}
+
+        stored = {}
+        attempts = {"count": 0, "fail_once": True}
+
+        def memory_action(request, scope, parameters):
+            attempts["count"] += 1
+            if parameters["text"] == "Second lesson." and attempts["fail_once"]:
+                attempts["fail_once"] = False
+                raise OSError("disk briefly unavailable")
+            stored.setdefault(request["idempotency_key"], parameters["text"])
+            return {
+                "status": "succeeded",
+                "effect_occurred": True,
+                "result": {"memory_capture": {"state": "captured", "memory_id": "m-" + parameters["text"][:3]}},
+            }
+
+        host._request_memory_capture = memory_action
+        admission = {
+            "durable": True, "historical": True, "current_truth": False, "contains_secret": False,
+            "strategic": False, "permission_expansion": False, "privacy_ambiguous": False,
+            "external_authority": False,
+        }
+        payload = {
+            "source": {"kind": "hermes-memory", "text": "First lesson. Second lesson. Third lesson."},
+            "plan": {
+                "workspaces": [],
+                "data": [],
+                "memories": [
+                    {"scope": "operator", "type": "lesson", "text": text, "confidence": 0.95, "admission": admission}
+                    for text in ("First lesson.", "Second lesson.", "Third lesson.")
+                ],
+            },
+        }
+
+        first = host.request_action(self.request(payload))["result"]["migration_import"]
+        self.assertEqual(first["state"], "partial")
+        self.assertEqual([row["status"] for row in first["memories"]][1], "failed-temporary")
+        self.assertNotIn("rejected", [row["status"] for row in first["memories"]])
+        self.assertEqual(first["retry_pending"], [{"section": "memories", "index": 1, "attempts": 1}])
+        self.assertIn("run the import again", first["member_message"].lower())
+        self.assertIn("ask for help", first["member_message"])
+        self.assertEqual(len(stored), 2)
+
+        attempts["fail_once"] = True
+        again = host.request_action(self.request(payload))["result"]["migration_import"]
+        self.assertEqual(again["state"], "partial")
+        self.assertEqual(again["retry_pending"], [{"section": "memories", "index": 1, "attempts": 2}])
+
+        second = host.request_action(self.request(payload))
+        self.assertTrue(second["effect_occurred"])
+        final = second["result"]["migration_import"]
+        self.assertEqual(final["state"], "complete")
+        self.assertNotIn("retry_pending", final)
+        self.assertEqual([row["status"] for row in final["memories"]], ["succeeded"] * 3)
+        self.assertEqual(len(stored), 3)
+        # Only the failed item was attempted again: 3 first run + 2 retries.
+        self.assertEqual(attempts["count"], 5)
+        self.assertEqual(
+            len(list((root / "operator" / "inbox" / "migration-imports").glob("*.json"))),
+            1,
+        )
+
+        third = host.request_action(self.request(payload))
+        self.assertFalse(third["effect_occurred"])
+        self.assertTrue(third["result"]["migration_import"]["replayed"])
+        self.assertEqual(attempts["count"], 5)
+
+    def test_owner_exit_codes_split_temporary_from_refusal(self):
+        temp, _root, host = self.make_host()
+        self.addCleanup(temp.cleanup)
+        host.authorize_action = lambda request: {"decision": "allow"}
+        codes = {"value": 75}
+
+        class Done:
+            def __init__(self, code):
+                self.returncode = code
+                self.stdout = ""
+                self.stderr = "owner said no"
+
+        original = host_module.subprocess.run
+        host_module.subprocess.run = lambda *a, **k: Done(codes["value"])
+        self.addCleanup(lambda: setattr(host_module.subprocess, "run", original))
+        payload = {
+            "source": {"kind": "hermes-memory", "text": "Client Gamma."},
+            "plan": {
+                "memories": [], "data": [],
+                "workspaces": [{
+                    "workspace": {"id": "gamma", "name": "Gamma", "type": "client", "purpose": "Keep Gamma apart."},
+                    "evidence": {"substantial_scope": True, "boundary_clear": True, "reason": "Named client"},
+                    "authority": {"permission_expansion": False, "privacy_ambiguous": False, "new_connection": False, "new_credential": False},
+                }],
+            },
+        }
+        temporary = host.request_action(self.request(payload))["result"]["migration_import"]
+        self.assertEqual(temporary["state"], "partial")
+        self.assertEqual(temporary["workspaces"][0]["status"], "failed-temporary")
+
+        for crash in (1, -9):
+            payload["source"]["text"] = f"Client Gamma {crash}."
+            codes["value"] = crash
+            crashed = host.request_action(self.request(payload))["result"]["migration_import"]
+            self.assertEqual(crashed["workspaces"][0]["status"], "failed-temporary")
+
+        payload["source"]["text"] = "Client Gamma refused."
+        codes["value"] = 4
+        refused = host.request_action(self.request(payload))["result"]["migration_import"]
+        self.assertEqual(refused["workspaces"][0]["status"], "rejected")
+        self.assertEqual(refused["state"], "complete")
+
+    def test_invalid_item_is_still_rejected_and_import_completes(self):
+        temp, _root, host = self.make_host()
+        self.addCleanup(temp.cleanup)
+        host.authorize_action = lambda request: {"decision": "allow"}
+        payload = {
+            "source": {"kind": "hermes-memory", "text": "Some history."},
+            "plan": {"workspaces": [], "memories": [{"scope": "bad scope!!", "text": "x"}], "data": []},
+        }
+        receipt = host.request_action(self.request(payload))["result"]["migration_import"]
+        self.assertEqual(receipt["memories"][0]["status"], "rejected")
+        self.assertEqual(receipt["state"], "complete")
+
     def test_migration_must_start_from_operator_scope(self):
         temp, _root, host = self.make_host()
         self.addCleanup(temp.cleanup)

@@ -265,6 +265,24 @@ try {
   assert.equal(fresh.status, 0, fresh.stderr);
   assert.match(fs.readFileSync(path.join(root, 'workspaces', 'new-aliased', 'WORKSPACE.yaml'), 'utf8'), /^aliases:\n  - "Nova"$/m);
 
+  // A system level failure (no permission to write) exits 75 so the host retries it; a validation refusal exits 4.
+  if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+    const locked = makeRoot();
+    const workspacesDir = path.join(locked, 'workspaces');
+    try {
+      fs.chmodSync(workspacesDir, 0o500);
+      const denied = run(locked, request());
+      assert.equal(denied.status, 75, denied.stderr);
+      assert.equal(denied.stdout.trim(), '', 'a failed write must print no JSON result');
+      assert.equal(fs.existsSync(path.join(workspacesDir, 'client-a')), false);
+      const refused = run(locked, request({ workspace: { id: 'Bad Id!' } }));
+      assert.equal(refused.status, 4, refused.stderr);
+    } finally {
+      fs.chmodSync(workspacesDir, 0o700);
+      fs.rmSync(locked, { recursive: true, force: true });
+    }
+  }
+
   process.stdout.write('Automatic workspace owner acceptance: PASS\n');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

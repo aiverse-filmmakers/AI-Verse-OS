@@ -58,7 +58,7 @@ Keeping those meanings distinct is more important than having many folders.
 
 OS-built-in capability methodology lives under `system/capabilities/`. Runtime trees such as `.claude/skills/` and `.agents/skills/` are generated peers, not competing editable sources. See `adapter-synchronization.md`.
 
-External execution authority is also layered rather than duplicated. AI-Verse OS supplies a restrictive host permission floor from canonical operator/workspace policy, while an intelligence layer such as Brain keeps its own policy and exact approval validation. Denial by either layer blocks execution. See `action-permissions.md`.
+External execution authority is also layered rather than duplicated. AI-Verse OS supplies a restrictive host permission check for outside actions, Data writes and deletions from canonical operator/workspace policy (local reads, writes and canonical edits are allowed by design and controlled by the agent host), while an intelligence layer such as Brain keeps its own policy and exact approval validation. Denial by either layer blocks execution. See `action-permissions.md`.
 
 ## Domain neutrality
 

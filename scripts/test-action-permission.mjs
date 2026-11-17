@@ -191,4 +191,27 @@ for (const status of ['paused', 'archived']) {
   assert.equal(result.request_fingerprint, payload.request_fingerprint);
 }
 
+{
+  // Pins the by-design behaviour: the OS does not gate local work (the agent host
+  // does), and gates only outside actions, Data writes and deletions.
+  const root = tempRoot();
+  for (const cls of ['read_local', 'write_local_reversible', 'modify_canonical_state']) {
+    assert.equal(evaluate(root, cls, 'operator', `pin-${cls}`).decision, 'allow', `${cls} must be allowed by design`);
+  }
+  for (const cls of ['external_write_reversible', 'send_message', 'delete_data']) {
+    assert.notEqual(evaluate(root, cls, 'operator', `pin-${cls}`).decision, 'allow', `${cls} must stay gated`);
+  }
+}
+
+{
+  // Fail closed: local classes are open by design, but invalid state still denies them.
+  const localClasses = ['read_local', 'write_local_reversible', 'modify_canonical_state'];
+  const bad = tempRoot();
+  fs.writeFileSync(path.join(bad, 'automations', 'policies', 'action-permissions.yaml'), 'approval: [not valid\n  : :', 'utf8');
+  for (const cls of localClasses) assert.equal(evaluate(bad, cls, 'operator', `bad-${cls}`).decision, 'deny', `${cls} must fail closed on a malformed policy`);
+  const badWs = tempRoot();
+  writeWorkspace(badWs, 'ws-x', { manifestId: 'other' });
+  for (const cls of localClasses) assert.equal(evaluate(badWs, cls, 'workspace:ws-x', `ws-${cls}`).decision, 'deny', `${cls} must fail closed on an invalid manifest`);
+}
+
 console.log('Action permission acceptance tests: PASS');

@@ -189,6 +189,15 @@ function validateRequest(request) {
 
 function applicableCategories(actionClass) {
   switch (actionClass) {
+    // Local reads, local writes and canonical edits are allowed BY DESIGN.
+    // The OS does not gate local work. The agent host (Claude Code or Codex)
+    // permissions and sandbox are the gatekeeper for those. The OS check only
+    // gates the outside, delete and high stakes classes below. "Data write" is
+    // not a class here: the caller (Brain or Data) picks the class it maps a
+    // Data write to, for example external_write_reversible or delete_data.
+    // The checks above this point still fail closed for every class, local
+    // included: invalid OS root, malformed operator policy, invalid workspace
+    // manifest, and paused or archived workspaces all deny.
     case 'read_local':
     case 'write_local_reversible':
     case 'modify_canonical_state':
@@ -294,7 +303,7 @@ export function evaluateActionPermission({ osRoot = process.cwd(), request }) {
 
   const categories = applicableCategories(request.action_class);
   if (categories.length === 0) {
-    return boundResult(request, 'allow', 'OS has no additional permission floor for this local action class');
+    return boundResult(request, 'allow', 'local action allowed by design: the agent host (Claude Code or Codex) permissions and sandbox control local work, not the OS');
   }
 
   let effective = 'allow';
@@ -310,7 +319,7 @@ export function evaluateActionPermission({ osRoot = process.cwd(), request }) {
   return boundResult(
     request,
     decisionForPolicy(effective),
-    `OS permission floor (${applied.join(', ')}) resolved to ${effective}`,
+    `OS permission check (${applied.join(', ')}) resolved to ${effective}`,
   );
 }
 

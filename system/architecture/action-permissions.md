@@ -1,12 +1,12 @@
 # Action Permission Boundary
 
-AI-Verse OS owns the outer host permission floor for actions executed through an intelligence layer such as AI-Verse Brain. The intelligence layer keeps its own policy and approval model. Effective authority is the intersection: **denial by either layer blocks execution**.
+AI-Verse OS owns the outer host permission check for outside actions, Data writes and deletions executed through an intelligence layer such as AI-Verse Brain. The intelligence layer keeps its own policy and approval model. Effective authority is the intersection: **denial by either layer blocks execution**.
 
 ## Contract
 
 The OS evaluator is `scripts/action-permission.mjs`. It accepts one immutable Brain action permission request on stdin and returns exactly one restrictive decision:
 
-- `allow` — OS adds no stronger restriction. This never overrides a Brain denial or approval requirement.
+- `allow` — OS adds no restriction of its own. This never overrides a Brain denial or approval requirement.
 - `approval_required` — OS requires Brain to hold a valid explicit-user approval bound to that exact action.
 - `deny` — the action must not be dispatched.
 
@@ -18,7 +18,7 @@ A host adapter must re-evaluate permission at the action boundary rather than ca
 
 Workspace policy stays in the existing `workspaces/<id>/WORKSPACE.yaml` `approval` section. Operator-wide action policy may be stored locally in the user-owned, gitignored `automations/policies/action-permissions.yaml` file.
 
-The three OS permission floors are:
+The three OS approval categories are:
 
 - `external_actions`
 - `destructive_actions`
@@ -47,9 +47,9 @@ The OS applies the existing broad approval floors conservatively:
 - `delete_data` -> `destructive_actions`
 - `change_permissions` and `security_sensitive` -> `destructive_actions` + `high_stakes_decisions`
 - `high_stakes_domain_action` -> `high_stakes_decisions`
-- `read_local`, `write_local_reversible`, and `modify_canonical_state` -> no additional OS action floor; Brain policy remains fully authoritative and may still deny or require approval
+- `read_local`, `write_local_reversible`, and `modify_canonical_state` -> always `allow` from the OS, by design, as long as the OS can read its own state. The OS still denies every class, local included (fail closed), when the OS root is invalid, the operator policy file is malformed, the workspace manifest is invalid, or the workspace is paused or archived. The OS does not gate local reads, local writes or canonical edits. The agent host (Claude Code or Codex) permissions and sandbox control local work, and Brain policy may still deny or require approval
 
-This mapping is an outer safety floor, not a replacement for Brain's finer-grained action policy.
+"Data write" is not an action class. The calling component (Brain or Data) chooses the class it sends, for example `external_write_reversible` or `delete_data`, and the OS gates by that class. This mapping is an outer check for outside actions, Data writes and deletions only, not a replacement for Brain's finer-grained action policy.
 
 ## Failure behavior
 

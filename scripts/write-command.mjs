@@ -447,8 +447,12 @@ export function dispatchWriteCommand({ osRoot = process.cwd(), request }) {
 
   const candidate = candidatePayload(normalized);
 
-  // Final-edge authorization is deliberately stronger than enqueue authorization.
-  // The inbox write is canonical OS-owned state, so current policy is re-evaluated now.
+  // Dispatch re-evaluates permission at the final edge, so a workspace that was
+  // paused or archived after enqueue is refused. This is NOT a stronger policy
+  // gate: modify_canonical_state is a local class that the OS allows by design
+  // (the agent host, Claude Code or Codex, controls local work). The only extra
+  // protection here is the fresh workspace and policy check (paused, archived
+  // or invalid workspace, malformed policy).
   const effectPermission = evaluatePermission(
     root,
     normalized,

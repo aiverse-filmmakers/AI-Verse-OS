@@ -18,6 +18,9 @@ with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
     (root / "scripts").mkdir()
     shutil.copy(SOURCE, root / "scripts" / "reality-check.py")
+    shutil.copy(SOURCE.with_name("toolchain.py"), root / "scripts" / "toolchain.py")
+    (root / "system" / "toolchain").mkdir(parents=True, exist_ok=True)
+    shutil.copy(SOURCE.parents[1] / "system" / "toolchain" / "manifest.json", root / "system" / "toolchain" / "manifest.json")
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     before = sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if ".git" not in p.parts)
 

@@ -41,7 +41,7 @@ function install(cwd, args = []) {
   return spawnSync(process.execPath, [cli, 'install', ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, USERPROFILE: home, AI_VERSE_OS_REPO_URL: source },
+    env: { ...process.env, HOME: home, USERPROFILE: home, AI_VERSE_OS_REPO_URL: source, AI_VERSE_PRIVATE_TOOLCHAIN: 'off' },
   });
 }
 const snapshot = (dir) => fs.readdirSync(dir).sort().join(',');

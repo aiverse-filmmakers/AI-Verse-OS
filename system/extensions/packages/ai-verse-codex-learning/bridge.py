@@ -139,7 +139,11 @@ def load_module(path, name):
         raise Refused("owner module unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    _keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # never leave bytecode in the OS folder
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = _keep
     return module
 
 
@@ -2315,7 +2319,18 @@ def run_owner(bridge, operation, payload):
             'r.request_fingerprint=m.computeWriteCommandFingerprint(r);'
             'process.stdout.write(JSON.stringify(m.submitWriteCommand({osRoot:process.cwd(),request:r})));')
         env = {**bridge.env, "AI_VERSE_WRITE_OWNER": str(bridge.root / "scripts/write-command.mjs")}
-        proc = subprocess.run(["node", "--input-type=module", "--eval", code],
+        # The OS's own shared resolver picks Node (private copy first); never a bare "node".
+        spec = importlib.util.spec_from_file_location("aiverse_toolchain", bridge.root / "scripts/toolchain.py")
+        toolchain = importlib.util.module_from_spec(spec)
+        keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no bytecode files in the OS folder
+        try:
+            spec.loader.exec_module(toolchain)
+        finally:
+            sys.dont_write_bytecode = keep
+        node = toolchain.resolve_tool("node")
+        if not node:
+            raise Refused("OS inbox owner unavailable: Node is missing")
+        proc = subprocess.run([node, "--input-type=module", "--eval", code],
                               input=json.dumps(request), text=True, capture_output=True, env=env, cwd=bridge.root)
         if proc.returncode:
             raise Refused("OS inbox owner refused pending learning")

@@ -2,6 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { toolPath } from './toolchain.mjs';
 import { randomUUID } from 'node:crypto';
 import { invokeDataHost, OS_DATA_HOST_PROTOCOL } from './data-host.mjs';
 import { validateDirectionScope } from './direction-owner-core.mjs';
@@ -52,7 +53,7 @@ export function createDataPurposeReader(root = process.cwd(), { scope = 'operato
     if (bindings === undefined) return { status: 'unavailable', scope, reason: 'data_purpose_bindings_required' };
     const input = JSON.stringify({ ...request, bindings, now: now ?? new Date().toISOString() });
     if (Buffer.byteLength(input, 'utf8') > MAX_INPUT_BYTES) throw new Error('Purpose Data request exceeds byte limit');
-    const out = spawnSync(process.execPath, [script, '--root', base], {
+    const out = spawnSync(toolPath('node') || process.execPath, [script, '--root', base], {
       input, encoding: 'utf8', shell: false, timeout: 10_000, maxBuffer: 131_072,
     });
     if (out.error || out.status !== 0) return { status: 'unavailable', scope, reason: 'data_purpose_reader_unavailable' };

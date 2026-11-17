@@ -39,7 +39,10 @@ try {
   git(temp, 'clone', origin, work);
   git(work, 'checkout', '-B', 'main');
   const overlay = (dir) => {
-    for (const rel of ['bin/ai-verse-os.mjs', 'scripts/os-version.mjs']) fs.copyFileSync(path.join(repo, rel), path.join(dir, rel));
+    for (const rel of ['bin/ai-verse-os.mjs', 'scripts/os-version.mjs', 'scripts/toolchain.mjs', 'system/toolchain/manifest.json']) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.copyFileSync(path.join(repo, rel), path.join(dir, rel));
+    }
   };
 
   // 1. Source S carries the PREVIOUS descriptor (0.3.10 describes base, not S).

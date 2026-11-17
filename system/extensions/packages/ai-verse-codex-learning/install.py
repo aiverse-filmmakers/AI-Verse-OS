@@ -45,6 +45,22 @@ def metadata_for(root, explicit=None):
     return matches[0][1] if matches else {}
 
 
+def _os_node(root):
+    """The OS's own Node (private copy first) from the shared resolver; never a bare PATH lookup."""
+    import importlib.util
+    file = Path(root) / "scripts" / "toolchain.py"
+    if not file.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("aiverse_toolchain", file)
+    module = importlib.util.module_from_spec(spec)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no bytecode files in the OS folder
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = keep
+    return module.resolve_tool("node")
+
+
 def discover(root, options):
     metadata = metadata_for(root, options.get("metadata"))
     components = metadata.get("checks", {}).get("doctor", {}).get("components", {})
@@ -60,7 +76,7 @@ def discover(root, options):
                            capture_output=True, timeout=10)
     if check.returncode:
         raise ValueError("setup requires Python >=3.9 with the admitted owner's packages; provision it through Distribution")
-    node = options.get("node") or metadata.get("managed_node", {}).get("node") or shutil.which("node")
+    node = options.get("node") or metadata.get("managed_node", {}).get("node") or _os_node(root)
     if not node or not Path(node).is_file():
         raise ValueError("setup requires the project's admitted Node runtime")
     node = Path(node).resolve()

@@ -1,0 +1,26 @@
+#!/bin/sh
+# Run Node, Python or Git from AI-Verse OS's own copies, never from whatever is on the computer.
+#   scripts/ai-verse node scripts/skills-list.mjs
+#   scripts/ai-verse python scripts/portability.py check
+#   scripts/ai-verse git status
+# On Windows use scripts\ai-verse.cmd the same way. The choice is made by scripts/toolchain.mjs.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TC="${AI_VERSE_TOOLCHAIN_DIR:-${HOME:-.}/.aiverse/toolchain}"
+TOOL_NAME="${1:-}"
+case "$TOOL_NAME" in
+  node|python|git) shift ;;
+  *) echo "Usage: scripts/ai-verse <node|python|git> [arguments]" >&2; exit 2 ;;
+esac
+BOOT="$TC/node/bin/node"
+[ -x "$BOOT" ] || BOOT="$(command -v node || true)"
+if [ -z "$BOOT" ]; then
+  echo "AI-Verse OS could not find its own copy of Node.js. Run: ai-verse-os setup" >&2
+  exit 1
+fi
+TOOL="$("$BOOT" "$ROOT/scripts/toolchain.mjs" resolve "$TOOL_NAME")" || exit 1
+# Only the folders of tools that really resolve to a private copy go first on PATH.
+PREFIX="$("$BOOT" "$ROOT/scripts/toolchain.mjs" path-prefix)" || exit 1
+[ -n "$PREFIX" ] && PATH="$PREFIX:$PATH"
+export PATH
+exec "$TOOL" "$@"

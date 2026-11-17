@@ -32,7 +32,8 @@ if [ -z "${CM_CLEAN:-}" ]; then
   NODE_SRC="$(command -v node || true)"
   [ -n "$NODE_SRC" ] || { echo "CLEAN MACHINE FAIL: the runner has no Node.js to start the installer" >&2; exit 1; }
   if [ "$WIN" = 1 ]; then
-    CLEAN_PATH="$(dirname "$NODE_SRC"):/usr/bin:/c/Windows/System32:/c/Windows"
+    # Not /c/Windows: py.exe lives there. System32 has tar and the other system programs the installer uses.
+    CLEAN_PATH="$(dirname "$NODE_SRC"):/usr/bin:/c/Windows/System32"
   else
     MINBIN="$(mktemp -d "${TMPDIR:-/tmp}/cm-minbin.XXXXXX")"
     TOOLS="node npm npx bash sh env curl wget tar gzip gunzip unzip xz bzip2 uname mkdir rm rmdir cp mv cat ls chmod ln dirname basename sed grep awk tr head tail sort uniq find xargs mktemp printf date sleep touch wc cut readlink id sha256sum shasum openssl tee test true false diff stat realpath expr"
@@ -42,12 +43,15 @@ if [ -z "${CM_CLEAN:-}" ]; then
     done
     CLEAN_PATH="$MINBIN"
   fi
-  exec env CM_CLEAN=1 PATH="$CLEAN_PATH" "$BASH" "$0" "$@"
+  # The commit under test, read now while Git is still visible.
+  CM_HEAD="$(git -C "$REPO" rev-parse HEAD 2>/dev/null || true)"
+  [ -n "$CM_HEAD" ] || { echo "CLEAN MACHINE FAIL: cannot read the commit under test" >&2; exit 1; }
+  exec env CM_CLEAN=1 CM_HEAD="$CM_HEAD" PATH="$CLEAN_PATH" "$BASH" "$0" "$@"
 fi
 
 say "Hidden tools (phase $PHASE)"
-HIDE="python python3 py gh brew"
-[ "$PHASE" = with-git ] || HIDE="$HIDE git"
+HIDE="python python3 py python.exe py.exe gh brew"
+[ "$PHASE" = with-git ] || HIDE="$HIDE git git.exe"
 for t in $HIDE; do
   if command -v "$t" >/dev/null 2>&1; then fail "$t is still visible at $(command -v "$t"); the machine is not clean"; fi
 done
@@ -62,7 +66,12 @@ unset GITHUB_TOKEN GH_TOKEN GH_ENTERPRISE_TOKEN NODE_OPTIONS NPM_TOKEN AI_VERSE_
 export GIT_TERMINAL_PROMPT=0 CI=true npm_config_update_notifier=false
 export USERPROFILE="$HOME" LOCALAPPDATA="$HOME/AppData/Local" APPDATA="$HOME/AppData/Roaming"
 if [ "$VARIANT" = awkward ]; then
-  export LANG=tr_TR.UTF-8 LC_ALL=tr_TR.UTF-8
+  if command -v locale >/dev/null 2>&1 && locale -a 2>/dev/null | grep -qi '^tr_TR\.utf-\?8$'; then
+    export LANG=tr_TR.UTF-8 LC_ALL=tr_TR.UTF-8
+  else
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
+    echo "NOTE: tr_TR.UTF-8 is not installed on this runner, so the awkward variant tests the odd folder path only, not the locale"
+  fi
   WORK="$BASE/AI Verse Ünï Çödé Ğ/my project (ro da tr)-$PHASE"
 else
   export LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -80,6 +89,9 @@ if [ -n "${CM_INSTALL_LINE:-}" ]; then LINE="$CM_INSTALL_LINE"; else
   [ -n "$LINE" ] || fail "no install line found under '## Install' in $README"
   if [ -n "${CM_REF:-}" ]; then LINE="${LINE//github:aiverse-filmmakers\/AI-Verse-OS/github:aiverse-filmmakers/AI-Verse-OS#$CM_REF}"; fi
 fi
+if [ -z "${CM_INSTALL_LINE:-}" ] && [ -n "${CM_REF:-}" ]; then
+  case "$LINE" in *"#$CM_REF"*) ;; *) fail "the README install line does not take the commit under test (no #$CM_REF after substitution): $LINE" ;; esac
+fi
 say "Install line: $LINE"
 TARGET="$WORK/AI-Verse-OS"
 INSTALL_LOG="$BASE/cm-install-$LEG-$PHASE.log"
@@ -93,7 +105,8 @@ if [ "$PHASE" = no-git ]; then
   if grep -q 'spawn git\|ENOENT' "$INSTALL_LOG" && ! grep -q 'Git has to be installed by you' "$INSTALL_LOG"; then
     fail "npm itself failed to fetch the package without Git, so the README line cannot start on a machine without Git (see log above)"
   fi
-  grep -q 'Git' "$INSTALL_LOG" || fail "the message does not mention Git"
+  grep -q 'Stopped before changing anything' "$INSTALL_LOG" || fail "the install did not stop before changing anything"
+  grep -Eq 'needs Git [0-9.]+ or newer, and it was not found on this computer' "$INSTALL_LOG" || fail "the message does not say Git is needed and was not found"
   grep -q 'Git has to be installed by you' "$INSTALL_LOG" || fail "the message does not tell the member to install Git themselves"
   grep -q 'Nothing on your computer was changed' "$INSTALL_LOG" || fail "the message does not say nothing was changed"
   grep -qi 'xcode-select --install\|package manager' "$INSTALL_LOG" || fail "the message does not say how to install Git"
@@ -106,6 +119,16 @@ fi
 
 [ "$RC" -eq 0 ] || fail "the README install line failed on a clean machine"
 [ -f "$TARGET/bin/ai-verse-os.mjs" ] || fail "install did not create $TARGET"
+
+# The installer gives a member the accepted release, which is not necessarily the commit under test.
+# Move the new folder to exactly the commit under test, so every check below runs the code being reviewed.
+say "Commit under test"
+SRC="$REPO"; [ "$WIN" = 1 ] && SRC="$(cygpath -m "$REPO")"
+if [ "$WIN" = 1 ]; then GITBIN="$("$NODE" "$TARGET/scripts/toolchain.mjs" resolve git)"; else GITBIN="$(command -v git)"; fi
+"$GITBIN" -C "$TARGET" fetch -q "$SRC" HEAD || fail "could not fetch the commit under test from $SRC"
+"$GITBIN" -C "$TARGET" checkout -q --detach FETCH_HEAD || fail "could not check out the commit under test"
+[ "$("$GITBIN" -C "$TARGET" rev-parse HEAD)" = "$CM_HEAD" ] || fail "the install folder is not at the commit under test ($CM_HEAD)"
+echo "install folder is at $CM_HEAD"
 
 # Step 3: the private toolchain. Python (and on Windows Git) were hidden, so only the private copies
 # the installer downloaded can be what ran. Node was the member's own, started the installer.
@@ -167,7 +190,9 @@ WANT="$(printf '%s' "$SENTINEL" | "$NODE" -e "process.stdin.on('data',d=>console
 printf '%s\n' "$OUT" | grep -q "hash:$WANT" || fail "the approved command did not receive the key"
 case "$OUT" in *"$SENTINEL"*) fail "secrets run printed the key value instead of hiding it" ;; esac
 printf 'node\n' > .env.allow
-"${SECRETS[@]}" run -- node cm-probe.mjs >/dev/null 2>&1 && fail "secrets run accepted a bare interpreter on .env.allow"
+OUT="$("${SECRETS[@]}" run -- node cm-probe.mjs 2>&1)" && fail "secrets run accepted a bare interpreter on .env.allow"
+case "$OUT" in *"lists only a program like node or git"*) ;; *) fail "the bare interpreter refusal has the wrong message: $OUT" ;; esac
+case "$OUT" in *"$SENTINEL"*) fail "the bare interpreter refusal printed the key value" ;; esac
 rm -f .env.allow cm-probe.mjs
 "$GIT" check-ignore -q .env || fail ".env is not ignored by git"
 [ -z "$("$GIT" status --porcelain --untracked-files=all -- .env)" ] || fail ".env shows up as a change to commit"

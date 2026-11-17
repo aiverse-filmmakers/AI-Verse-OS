@@ -753,6 +753,14 @@ class AIverseOSHost:
         return result
 
     def authorize_action(self, request: Mapping[str, Any]) -> Dict[str, Any]:
+        # Delegates to the OS permission check. That check gates only the action
+        # classes the caller maps outside actions, Data writes and deletions to
+        # (external_write_reversible, delete_data and so on); the class is chosen
+        # by the calling component (Brain or Data) in its request, not here.
+        # Local reads, local writes and canonical edits are allowed by design (the
+        # agent host, Claude Code or Codex, controls local work). The check still
+        # denies every class, local included, when the OS root, policy file or
+        # workspace manifest is invalid, or the workspace is paused or archived.
         if not isinstance(request, Mapping):
             raise AdapterError("action permission request must be an object")
         return _run_json(

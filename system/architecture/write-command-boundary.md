@@ -28,7 +28,7 @@ The request contains:
 
 ## Enqueue remains transport-only
 
-`enqueue` preserves the Phase 3.7 compatibility contract. It validates the host, request, scope, fingerprint and current OS permission floor, then writes only disposable runtime state under:
+`enqueue` preserves the Phase 3.7 compatibility contract. It validates the host, request, scope, fingerprint and current OS permission check (local write classes are allowed by design, so this mainly refuses paused or archived workspaces), then writes only disposable runtime state under:
 
 ```text
 runtime/write-commands/

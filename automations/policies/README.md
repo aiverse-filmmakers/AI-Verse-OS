@@ -8,7 +8,7 @@ High-stakes domains should use stricter policies than low-consequence internal t
 
 ## Action permission policy
 
-The optional local file `automations/policies/action-permissions.yaml` is the operator-wide OS permission floor used by `scripts/action-permission.mjs`. This directory is user-owned and gitignored, so changing local permission policy does not dirty the upstream OS checkout.
+The optional local file `automations/policies/action-permissions.yaml` is the operator-wide OS permission policy for outside actions, deletions and high stakes decisions, used by `scripts/action-permission.mjs`. This directory is user-owned and gitignored, so changing local permission policy does not dirty the upstream OS checkout.
 
 The file is deliberately small and strict:
 

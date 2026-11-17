@@ -142,8 +142,8 @@ crossrepo sources belongs to composed integration after those sources are publis
 
 The Python host accepts `skills.library-import` (scoped source folder, admission,
 optional provenance and exact preview), `skills.binding-plan` and
-`skills.binding-save`. Writes and learning enforce the OS permission floor and
-valid scope. A sibling workspace source or unsafe path is refused. Prepared
+`skills.binding-save`. Writes and learning run the OS permission check (local classes are allowed by
+design; the agent host controls local work) and require a valid scope. A sibling workspace source or unsafe path is refused. Prepared
 ordinary skills and learned procedures use the same Skills-owned library API.
 
 `capability.read_instructions` now supports verified directory/member and explicit

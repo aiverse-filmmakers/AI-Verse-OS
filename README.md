@@ -1,6 +1,6 @@
 # AI-Verse OS
 
-**AI-Verse OS** is the host constitution for AI-Verse. It owns workspace scope, host structure, current operating context, routing, permission floors, and component composition. It does not take canonical Brain, Memory, Data, Skills, Connections, or automation state away from their owning components.
+**AI-Verse OS** is the host constitution for AI-Verse. It owns workspace scope, host structure, current operating context, routing, the permission check for outside actions, Data writes and deletions, and component composition. It does not take canonical Brain, Memory, Data, Skills, Connections, or automation state away from their owning components.
 
 **AI-Verse Community:** https://www.skool.com/bogdans-ai-verse-4398
 
@@ -286,7 +286,7 @@ The local extension attachment registry is:
 .aiverse/extensions/registry.json
 ```
 
-OS reads that registry, validates safe repository-relative runtime paths, and applies the host permission floor. Registration alone grants no authority.
+OS reads that registry, validates safe repository-relative runtime paths, and applies the host permission check (which gates outside actions, Data writes and deletions; local work is left to the agent host). Registration alone grants no authority.
 
 Skills is intentionally discoverable from its external immutable provider root and does not need a fake local OS attachment entry.
 

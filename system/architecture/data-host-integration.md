@@ -16,7 +16,7 @@ AI-Verse OS owns:
 
 - trusted OS and workspace identity;
 - extension registration discovery;
-- action-permission floors;
+- the action-permission check for outside actions, Data writes and deletions (local work is left to the agent host);
 - the decision to dispatch an operator request.
 
 AI-Verse Data owns:

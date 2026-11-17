@@ -12,11 +12,36 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-verse-cli-install-'));
 const home = path.join(temp, 'home');
 fs.mkdirSync(home, { recursive: true });
 
+// Throwaway source repo built from the working tree, so the test does not depend on which branch (or detached HEAD) the checkout is on.
+const source = path.join(temp, 'source');
+fs.mkdirSync(source, { recursive: true });
+const gitEnv = { ...process.env, HOME: home, GIT_CONFIG_NOSYSTEM: '1' };
+function git(cwd, args) {
+  const g = spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', env: gitEnv });
+  assert.equal(g.status, 0, g.stderr);
+  return g.stdout;
+}
+const files = git(repo, ['ls-files', '-co', '--exclude-standard', '-z']).split('\0').filter((f) => f && fs.existsSync(path.join(repo, f)) && fs.lstatSync(path.join(repo, f)).isFile());
+for (const f of files) {
+  fs.mkdirSync(path.dirname(path.join(source, f)), { recursive: true });
+  fs.copyFileSync(path.join(repo, f), path.join(source, f));
+}
+git(source, ['init', '-q', '-b', 'main']);
+git(source, ['add', '-A']);
+git(source, ['commit', '-q', '-m', 'test source']);
+// The installer only takes an accepted release: a second commit that touches only release/ points at the first.
+const releaseFile = path.join(source, 'release', 'component-release.json');
+const release = JSON.parse(fs.readFileSync(releaseFile, 'utf8'));
+release.release_status = 'accepted';
+release.revision = git(source, ['rev-parse', 'HEAD']).trim();
+fs.writeFileSync(releaseFile, `${JSON.stringify(release, null, 2)}\n`);
+git(source, ['commit', '-q', '-am', 'accept release']);
+
 function install(cwd, args = []) {
   return spawnSync(process.execPath, [cli, 'install', ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, USERPROFILE: home, AI_VERSE_OS_REPO_URL: repo },
+    env: { ...process.env, HOME: home, USERPROFILE: home, AI_VERSE_OS_REPO_URL: source },
   });
 }
 const snapshot = (dir) => fs.readdirSync(dir).sort().join(',');

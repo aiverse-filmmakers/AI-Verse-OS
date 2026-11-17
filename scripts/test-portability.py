@@ -21,6 +21,9 @@ def make_os(root: Path, stack: str):
     (root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n")
     (root / "scripts").mkdir()
     shutil.copy(SCRIPT, root / "scripts" / "portability.py")
+    shutil.copy(SCRIPT.with_name("toolchain.py"), root / "scripts" / "toolchain.py")
+    (root / "system" / "toolchain").mkdir(parents=True, exist_ok=True)
+    shutil.copy(SCRIPT.parents[1] / "system" / "toolchain" / "manifest.json", root / "system" / "toolchain" / "manifest.json")
     (root / ".aiverse").mkdir()
     (root / ".aiverse/brain-host.json").write_text(json.dumps({"cwd": str(root), "root": str(root), "python": f"{stack}/python",
         "adapter": f"{root}/scripts/ai_verse_host_adapter.py", "sibling": f"{root} 2/other"}))

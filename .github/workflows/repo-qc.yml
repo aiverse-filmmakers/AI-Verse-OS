@@ -57,6 +57,9 @@ jobs:
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 
+      - name: Test prerequisites and private toolchain
+        run: node scripts/test-toolchain.mjs
+
       - name: Test progressive onboarding contract
         run: node scripts/test-progressive-onboarding.mjs
 

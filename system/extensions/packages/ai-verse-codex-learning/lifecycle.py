@@ -17,6 +17,8 @@ EVENTS = ["UserPromptSubmit", "SessionStart", "PostToolUse", "Stop", "Interrupt"
 def definition(root, python, build=None):
     file = root / ".aiverse/extensions" / ID / "bridge.py"
     build = build or hashlib.sha256(file.read_bytes()).hexdigest()
+    # `python` is always a full path recorded at install (never a bare name), so hooks keep using the
+    # same interpreter that was checked then.
     argv = [python, str(file), "--root", str(root), "--build", build, "hook"]
     command = subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(v) for v in argv)
     hooks = {}

@@ -30,7 +30,7 @@ A web page, PDF, email or skill can contain hidden instructions for your AI. If 
 To review an outside skill or repo yourself, ask your AI to run this on its folder:
 
 ```bash
-node scripts/skill-check.mjs path/to/folder
+scripts/ai-verse node scripts/skill-check.mjs path/to/folder
 ```
 
 An empty report does not mean something is safe. It only means the simple checks found nothing.

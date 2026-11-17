@@ -25,7 +25,7 @@ Do not hardcode a profession or force the work into a closed taxonomy.
 For runtime-driven internal organization, use the canonical OS owner primitive:
 
 ```bash
-node scripts/workspace-owner.mjs ensure --root <os-root>
+scripts/ai-verse node scripts/workspace-owner.mjs ensure --root <os-root>
 ```
 
 Pass one bounded JSON request on stdin. The caller may classify the opportunity, but OS owns the mutation and rechecks:
@@ -68,8 +68,8 @@ Determine from available context:
 For an existing workspace, resolve `workspace:<id>` ownership before changing its objective, current outcome, strategic success definition, or equivalent direction:
 
 ```bash
-node scripts/direction-owner.mjs status --scope workspace:<id>
-node scripts/direction-owner.mjs assert-strategic-write --scope workspace:<id>
+scripts/ai-verse node scripts/direction-owner.mjs status --scope workspace:<id>
+scripts/ai-verse node scripts/direction-owner.mjs assert-strategic-write --scope workspace:<id>
 ```
 
 A newly created workspace has no handover record and therefore begins OS-owned. If Brain already owns an existing workspace, the strategic-write assertion fails and OS must preserve Brain refs/generated direction views instead of creating a parallel editable objective. Brain unavailability does not change ownership.

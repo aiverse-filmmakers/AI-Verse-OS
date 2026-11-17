@@ -9,11 +9,11 @@ can always be installed again, so you never need to carry them.
 
 Ask your assistant "is my OS ready to move?", or run:
 
-    python3 scripts/portability.py check
+    scripts/ai-verse python scripts/portability.py check
 
 If your own skills still live outside the folder, it tells you. Fix that with:
 
-    python3 scripts/portability.py move-skills
+    scripts/ai-verse python scripts/portability.py move-skills
 
 It copies them into `my-skills/`, checks every file, and switches over. Your old skills
 folder is left alone until you delete it.
@@ -22,7 +22,7 @@ folder is left alone until you delete it.
 
 Move it, then run once inside the moved folder:
 
-    python3 scripts/portability.py repair
+    scripts/ai-verse python scripts/portability.py repair
 
 It points the settings at the new place (a backup of every changed file is kept in
 `.aiverse/os/moved-backups/`). If you moved it to a different parent folder, run the AI-Verse

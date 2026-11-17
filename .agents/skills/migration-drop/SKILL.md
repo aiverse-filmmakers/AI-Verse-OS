@@ -236,7 +236,7 @@ Do not merely mark a question resolved while ignoring newly clarified durable in
 From the AI-Verse OS root:
 
 ```bash
-python3 scripts/migration-import.py --root .
+scripts/ai-verse python scripts/migration-import.py --root .
 ```
 
 Send the JSON payload on stdin.
@@ -244,7 +244,7 @@ Send the JSON payload on stdin.
 To recover unresolved clarification questions later:
 
 ```bash
-python3 scripts/migration-import.py --root . --pending
+scripts/ai-verse python scripts/migration-import.py --root . --pending
 ```
 
 This read path scans existing OS migration receipts. It is not a second migration store.

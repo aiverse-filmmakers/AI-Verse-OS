@@ -7,10 +7,12 @@
     "ai-verse-os": "bin/ai-verse-os.mjs"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "files": [
     "bin/",
+    "scripts/toolchain.mjs",
+    "system/toolchain/manifest.json",
     "release/component-release.json",
     "LICENSE",
     "README.md"

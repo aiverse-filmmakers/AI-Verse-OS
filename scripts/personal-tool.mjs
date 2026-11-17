@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {toolPath} from './toolchain.mjs';
 import {fileURLToPath} from 'node:url';
 import {evaluateActionPermission} from './action-permission.mjs';
 import {createHash} from 'node:crypto';
@@ -84,12 +85,17 @@ export function dependencyPlan(options) {
   if(options.runtime==='node') {
     const args=['--prefix',loc.directory,'--global=false','--workspaces=false','--ignore-scripts','--no-audit','--no-fund','install',...specs];
     // Windows .cmd shims require a shell; invoke npm's JavaScript entrypoint instead.
+    const node=toolPath('node');
+    if(!node) throw Error('Node is not available. Run: ai-verse-os setup');
     if(process.platform==='win32') {
-      const cli=path.join(path.dirname(process.execPath),'node_modules','npm','bin','npm-cli.js');
+      const cli=path.join(path.dirname(node),'node_modules','npm','bin','npm-cli.js');
       plainFile(cli);
-      return {...loc,steps:[{command:process.execPath,args:[cli,...args]}]};
+      return {...loc,steps:[{command:node,args:[cli,...args]}]};
     }
-    return {...loc,steps:[{command:'npm',args}]};
+    // npm ships beside the OS's own Node, so it is run by that exact path.
+    const npm=path.join(path.dirname(node),'npm');
+    if(!fs.existsSync(npm)) throw Error('npm was not found next to the OS Node. Run: ai-verse-os setup');
+    return {...loc,steps:[{command:npm,args}]};
   }
   const venv = path.join(loc.directory,'.venv');
   if(fs.existsSync(venv)) {
@@ -98,7 +104,7 @@ export function dependencyPlan(options) {
     if(!/^include-system-site-packages\s*=\s*false\s*$/mi.test(fs.readFileSync(config,'utf8'))) throw Error('Tool virtual environment must exclude system site-packages.');
   }
   const python = path.join(venv,process.platform==='win32'?'Scripts':'bin',process.platform==='win32'?'python.exe':'python');
-  const steps = fs.existsSync(venv) ? [] : [{command:process.platform==='win32'?'python':'python3',args:['-I','-m','venv',venv]}];
+  const steps = fs.existsSync(venv) ? [] : [{command:toolPath('python')||(()=>{throw Error('Python is not available. Run: ai-verse-os setup');})(),args:['-I','-m','venv',venv]}];
   steps.push({command:python,args:['-I','-m','pip','--isolated','install','--prefix',venv,'--no-user',...specs]});
   return {...loc,steps};
 }

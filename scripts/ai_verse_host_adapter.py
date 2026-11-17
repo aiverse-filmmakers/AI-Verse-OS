@@ -26,6 +26,17 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from uuid import uuid4
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from toolchain import resolve_tool  # noqa: E402
+
+
+def _node() -> str:
+    """The OS's own Node (private copy first), never a bare "node" found by luck on PATH."""
+    found = resolve_tool("node")
+    if not found:
+        raise RuntimeError("AI-Verse OS needs Node.js 22 or newer and could not find it. Run the AI-Verse OS setup again.")
+    return found
+
 PROTOCOL = "ai-verse-brain-bridge/1.0"
 ADAPTER_ID = "ai-verse-os:host"
 LEGACY_ADAPTER_ID = "ai-verse-os:four-component-host"
@@ -235,7 +246,7 @@ class AIverseOSHost:
         )
         configuration_cli = self.root / "scripts/capability-configuration-cli.mjs"
         if configuration_cli.is_file():
-            config = _run_json(["node", str(configuration_cli), "--root", str(self.root)], {"operation": "read"}, "OS provider configuration")
+            config = _run_json([_node(), str(configuration_cli), "--root", str(self.root)], {"operation": "read"}, "OS provider configuration")
             configured_skills = Path(config["skillsRoot"]).resolve()
             configured_local = Path(config["localSkillsRoot"]).resolve()
             if config.get("configured"):
@@ -398,7 +409,7 @@ class AIverseOSHost:
         scope = self._validate_scope(scope)
         proc = subprocess.run(
             [
-                "node",
+                _node(),
                 str(self.current_context_cli),
                 "read",
                 "--root",
@@ -628,7 +639,7 @@ class AIverseOSHost:
             "local_skills_root": str(self.local_skills_root),
         }
         return _run_json(
-            ["node", str(self.resolver_cli), "--root", str(self.root)],
+            [_node(), str(self.resolver_cli), "--root", str(self.root)],
             request,
             "OS capability resolver",
         )
@@ -756,7 +767,7 @@ class AIverseOSHost:
         if not isinstance(request, Mapping):
             raise AdapterError("action permission request must be an object")
         return _run_json(
-            ["node", str(self.permission_cli), "--root", str(self.root)],
+            [_node(), str(self.permission_cli), "--root", str(self.root)],
             request,
             "OS action permission",
         )
@@ -1333,7 +1344,7 @@ class AIverseOSHost:
 
         proc = subprocess.run(
             [
-                "node",
+                _node(),
                 str(self.workspace_owner_cli),
                 "ensure",
                 "--root",
@@ -1390,7 +1401,7 @@ class AIverseOSHost:
 
         proc = subprocess.run(
             [
-                "node",
+                _node(),
                 str(self.operator_profile_owner_cli),
                 "ensure",
                 "--root",
@@ -1442,7 +1453,7 @@ class AIverseOSHost:
         if not isinstance(parameters, Mapping) or parameters:
             raise AdapterError("operator.profile.read takes no parameters")
         proc = subprocess.run(
-            ["node", str(self.operator_profile_owner_cli), "read", "--root", str(self.root)],
+            [_node(), str(self.operator_profile_owner_cli), "read", "--root", str(self.root)],
             input="{}",
             text=True,
             encoding="utf-8",
@@ -1484,7 +1495,7 @@ class AIverseOSHost:
                 "replacement" not in keys and parameters.get("retire") is not True):
             raise AdapterError("operator.profile.correct requires category, previous, replacement (or retire), expected_sha256, evidence and provenance; section is optional")
         proc = subprocess.run(
-            ["node", str(self.operator_profile_owner_cli), "correct-preference", "--root", str(self.root)],
+            [_node(), str(self.operator_profile_owner_cli), "correct-preference", "--root", str(self.root)],
             input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),
             text=True,
             encoding="utf-8",
@@ -1603,7 +1614,7 @@ class AIverseOSHost:
             'process.stdout.write(JSON.stringify(result));'
         )
         return _run_json(
-            ["node", "--input-type=module", "--eval", source, str(engine)],
+            [_node(), "--input-type=module", "--eval", source, str(engine)],
             payload,
             "Multiple Bots temporary Worker owner",
         )
@@ -1844,7 +1855,7 @@ class AIverseOSHost:
             'process.stdout.write(JSON.stringify(result));'
         )
         return _run_json(
-            ["node", "--input-type=module", "--eval", source, str(engine)],
+            [_node(), "--input-type=module", "--eval", source, str(engine)],
             manifest,
             "Multiple Bots durable Bot owner",
         )
@@ -3731,7 +3742,7 @@ class AIverseOSHost:
         if actor is not None:
             request["actor"] = dict(actor)
         envelope = _run_json(
-            ["node", str(self.data_host_cli), "--root", str(self.root)],
+            [_node(), str(self.data_host_cli), "--root", str(self.root)],
             request,
             "OS Data host",
         )

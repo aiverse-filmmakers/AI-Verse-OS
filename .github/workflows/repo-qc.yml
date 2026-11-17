@@ -57,6 +57,9 @@ jobs:
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 
+      - name: Test the one line install in scratch folders
+        run: node scripts/test-cli-install.mjs
+
       - name: Test progressive onboarding contract
         run: node scripts/test-progressive-onboarding.mjs
 

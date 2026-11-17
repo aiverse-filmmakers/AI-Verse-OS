@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { privateToolchainEnabled, resolveTool, prepareToolchain, loadManifest, atLeast, parseVersion, makeDownloader, unsafeEntries, unsafeListing, withToolLock, plainProblem, toolEnv, toolPath, clearToolCache, TOOLS } from './toolchain.mjs';
+import { DEFAULT_MINIMUM, privateToolchainEnabled, resolveTool, prepareToolchain, loadManifest, atLeast, parseVersion, makeDownloader, unsafeEntries, unsafeListing, withToolLock, plainProblem, toolEnv, toolPath, clearToolCache, TOOLS } from './toolchain.mjs';
 import crypto from 'node:crypto';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -217,6 +217,26 @@ const local = bytes => async () => ({ length: bytes.length, chunks: (async funct
   const js2 = resolveTool('git', { manifest, env, platform: process.platform });
   const py2 = spawnSync(PYTHON, ['-I', '-c', 'import sys;sys.path.insert(0,sys.argv[1]);import toolchain;print(toolchain.resolve_tool("git"))', path.join(ROOT, 'scripts')], { encoding: 'utf8', env });
   eq(py2.stdout.trim(), js2.path);
+}
+
+// 3h. Regression (CI): folders that copy only scripts/ have no manifest and must still work; importing the
+// Python resolver must never leave bytecode files behind; a minimal PATH and a fake HOME still resolve.
+{
+  eq(DEFAULT_MINIMUM, loadManifest().minimum, 'built-in minimums equal the manifest');
+  const copy = path.join(scratch, 'scripts-only', 'scripts'); fs.mkdirSync(copy, { recursive: true });
+  for (const f of fs.readdirSync(path.join(ROOT, 'scripts'))) if (/\.(py|mjs)$/.test(f) && !f.startsWith('test-')) fs.copyFileSync(path.join(ROOT, 'scripts', f), path.join(copy, f));
+  const home = path.join(scratch, 'fake-home'); fs.mkdirSync(home, { recursive: true });
+  const env = { HOME: home, USERPROFILE: home, PATH: path.dirname(process.execPath), AI_VERSE_PRIVATE_TOOLCHAIN: 'off' };
+  const code = 'import sys; sys.path.insert(0, sys.argv[1]); import toolchain, ai_verse_host_adapter, portability; print(toolchain.resolve_tool("node") or "")';
+  const py = spawnSync(PYTHON, ['-c', code, copy], { encoding: 'utf8', env });
+  eq(py.status, 0, py.stderr);
+  ok(path.isAbsolute(py.stdout.trim()), 'node resolves from a minimal PATH with no manifest present');
+  ok(!fs.existsSync(path.join(copy, '__pycache__')), 'importing the resolver and its callers leaves no bytecode in the folder');
+  const reality = spawnSync(PYTHON, [path.join(copy, 'reality-check.py'), '--help'], { encoding: 'utf8', env, cwd: path.dirname(copy) });
+  ok(!fs.existsSync(path.join(copy, '__pycache__')), 'reality-check leaves no bytecode either'); void reality;
+  const jsRun = spawnSync(process.execPath, [path.join(copy, 'toolchain.mjs'), 'resolve', 'node'], { encoding: 'utf8', env });
+  eq(jsRun.status, 0, jsRun.stderr);
+  eq(fs.readdirSync(copy).filter(f => f.startsWith('.') || f === '__pycache__'), [], 'the Node resolver leaves no files either');
 }
 
 // 4. A missing prerequisite is caught at install, in plain words, with a non zero exit and nothing created.

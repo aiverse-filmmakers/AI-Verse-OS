@@ -20,6 +20,7 @@ _RUN = subprocess.run  # kept at import time so callers that stub subprocess.run
 DARWIN_SHIMS = {"/usr/bin/git", "/usr/bin/python3", "/usr/bin/python"}
 _CACHE = {}
 _DEV_TOOLS = []
+DEFAULT_MINIMUM = {"node": "22.0.0", "python": "3.9.0", "git": "2.25.0"}  # same as system/toolchain/manifest.json (a test keeps them equal)
 MANIFEST = Path(__file__).resolve().parent.parent / "system" / "toolchain" / "manifest.json"
 
 
@@ -31,6 +32,14 @@ def parse_version(text):
 def toolchain_dir(env=None):
     env = os.environ if env is None else env
     return Path(env.get("AI_VERSE_TOOLCHAIN_DIR") or Path.home() / ".aiverse" / "toolchain")
+
+
+def _minimums():
+    """Oldest allowed versions. Test folders that copy only scripts/ have no manifest, so fall back to the built-in numbers."""
+    try:
+        return json.loads(MANIFEST.read_text(encoding="utf-8"))["minimum"]
+    except (OSError, ValueError, KeyError):
+        return DEFAULT_MINIMUM
 
 
 def clear_cache():
@@ -77,7 +86,7 @@ def resolve_tool(tool, env=None, platform=None):
 def _resolve(tool, env, platform):
     win = platform == "win32"
     idx = 1 if win else 0
-    minimum = parse_version(json.loads(MANIFEST.read_text(encoding="utf-8"))["minimum"][tool])
+    minimum = parse_version(_minimums()[tool])
     candidates = [toolchain_dir(env).joinpath(*rel.split("/")) for rel in PRIVATE[tool][idx]]
     for d in str(_env_get(env, "PATH") or "").split(";" if win else ":"):
         # Windows Store stubs open the Store instead of running anything.

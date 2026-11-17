@@ -53,7 +53,11 @@ def _os_node(root):
         return None
     spec = importlib.util.spec_from_file_location("aiverse_toolchain", file)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no bytecode files in the OS folder
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = keep
     return module.resolve_tool("node")
 
 

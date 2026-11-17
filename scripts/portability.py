@@ -25,7 +25,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from toolchain import resolve_tool  # noqa: E402
+_keep = sys.dont_write_bytecode
+sys.dont_write_bytecode = True  # never leave bytecode files in a member's OS folder
+try:
+    from toolchain import resolve_tool  # noqa: E402
+finally:
+    sys.dont_write_bytecode = _keep
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCATION = ".aiverse/os/location.json"

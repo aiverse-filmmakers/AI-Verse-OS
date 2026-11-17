@@ -2318,7 +2318,11 @@ def run_owner(bridge, operation, payload):
         # The OS's own shared resolver picks Node (private copy first); never a bare "node".
         spec = importlib.util.spec_from_file_location("aiverse_toolchain", bridge.root / "scripts/toolchain.py")
         toolchain = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(toolchain)
+        keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True  # no bytecode files in the OS folder
+        try:
+            spec.loader.exec_module(toolchain)
+        finally:
+            sys.dont_write_bytecode = keep
         node = toolchain.resolve_tool("node")
         if not node:
             raise Refused("OS inbox owner unavailable: Node is missing")

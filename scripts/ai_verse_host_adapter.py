@@ -27,7 +27,12 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from toolchain import resolve_tool  # noqa: E402
+_keep = sys.dont_write_bytecode
+sys.dont_write_bytecode = True  # never leave bytecode files in a member's OS folder
+try:
+    from toolchain import resolve_tool  # noqa: E402
+finally:
+    sys.dont_write_bytecode = _keep
 
 
 def _node() -> str:

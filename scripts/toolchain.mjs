@@ -37,8 +37,11 @@ const PRIVATE_PATHS = {
 };
 const LABEL = { node: 'Node.js', python: 'Python', git: 'Git' };
 
+export const DEFAULT_MINIMUM = { node: '22.0.0', python: '3.9.0', git: '2.25.0' }; // same as the manifest (a test keeps them equal)
+
+// Folders that copy only scripts/ have no manifest: fall back to the built-in minimums and no downloads.
 export function loadManifest(file = MANIFEST_FILE) {
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { schema_version: '1.0', minimum: DEFAULT_MINIMUM, sources: {} }; }
 }
 
 // Private tools live once per member (not per OS folder) so install can use them

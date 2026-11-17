@@ -233,6 +233,15 @@ const local = bytes => async () => ({ length: bytes.length, chunks: (async funct
   ok(!fs.existsSync(path.join(home, '.aiverse')), 'nothing written to home when nothing could be prepared');
 }
 
+// 4b. A refused install (folder not empty) changes and downloads nothing, even with no tools at all.
+{
+  const home = path.join(scratch, 'home2'); const empty = path.join(scratch, 'empty-bin2'); const full = path.join(scratch, 'full');
+  fs.mkdirSync(home, { recursive: true }); fs.mkdirSync(empty, { recursive: true }); fs.mkdirSync(full, { recursive: true }); fs.writeFileSync(path.join(full, 'x'), '1');
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'bin', 'ai-verse-os.mjs'), 'install', full], { encoding: 'utf8', env: { HOME: home, USERPROFILE: home, PATH: empty, TMPDIR: scratch } });
+  ok(result.status !== 0 && /already has files/.test(result.stderr), result.stderr);
+  eq(fs.readdirSync(home), [], 'nothing written or downloaded for a refused install');
+}
+
 // 5. Lint: no script starts node, python, git or npm by bare name. Everything goes through scripts/toolchain.
 {
   // Each entry says why a bare name is acceptable. Keep this list short.

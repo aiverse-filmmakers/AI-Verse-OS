@@ -18,6 +18,8 @@ Install the current OS development/public-beta candidate:
 npx --yes github:aiverse-filmmakers/AI-Verse-OS install
 ```
 
+Run it from the folder where you want AI-Verse OS to live. It downloads itself into a new `AI-Verse-OS` folder there, so you do not clone anything first. If that folder already has files, or you are already inside an installation, it says so in plain words and changes nothing.
+
 Or install the command globally:
 
 ```bash

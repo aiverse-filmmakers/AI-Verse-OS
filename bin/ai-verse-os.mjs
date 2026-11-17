@@ -37,6 +37,7 @@ const LIFECYCLE_SCHEMA = '1.0';
 const SETUP_SCHEMA = '1.0';
 const DEFAULT_REPO = 'https://github.com/aiverse-filmmakers/AI-Verse-OS.git';
 const REPO_URL = process.env.AI_VERSE_OS_REPO_URL || DEFAULT_REPO;
+const INSTALL_COMMAND = 'npx --yes github:aiverse-filmmakers/AI-Verse-OS install';
 const SETUP_MARKER_REL = '.aiverse/os/setup.json';
 
 function out(message = '') {
@@ -139,6 +140,22 @@ function parse(argv) {
 function isRoot(candidate) {
   return fs.existsSync(path.join(candidate, 'AI-VERSE.yaml')) &&
     fs.existsSync(path.join(candidate, 'AGENTS.md'));
+}
+
+// Real path of a folder that may not exist yet: resolve the nearest existing ancestor through symlinks, then add the rest back.
+function realPathOrPlanned(candidate) {
+  let current = path.resolve(candidate);
+  const rest = [];
+  while (true) {
+    try {
+      return path.join(fs.realpathSync(current), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(candidate);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 function findRoot(start = process.cwd()) {
@@ -324,7 +341,7 @@ function statusObject(root, options = {}) {
 function usage() {
   out(`AI-Verse OS CLI v${versionFields(LAUNCHER_ROOT).version}\n`);
   out('Usage:');
-  out('  ai-verse-os install [folder] [--json]');
+  out('  ai-verse-os install [folder] [--json]   (downloads itself into a new or empty folder; default ./AI-Verse-OS)');
   out('  ai-verse-os setup [--dir folder] [--profile detected|core] [--json]');
   out('  ai-verse-os status [--dir folder] [--profile detected|core] [--json]');
   out('  ai-verse-os doctor [--dir folder] [--profile detected|core] [--json]');
@@ -348,11 +365,10 @@ async function requirePrerequisites(options) {
 }
 
 async function install(options) {
-  await requirePrerequisites(options);
-  const gitVersion = commandVersion('git');
-  if (!gitVersion) fail('Git is not available. Run the install again or ask for help in the AI-Verse community.');
-  const targetArg = options.dir || options.positional[0] || 'AI-Verse-OS';
-  const target = path.resolve(targetArg);
+  const explicit = options.dir || options.positional[0];
+  // Run from inside an installation with no folder named: it is already installed, so do not nest a second copy.
+  const here = explicit ? null : findRoot(realPathOrPlanned(process.cwd()));
+  const target = here || realPathOrPlanned(explicit || 'AI-Verse-OS');
 
   if (isRoot(target)) {
     const result = {
@@ -372,9 +388,34 @@ async function install(options) {
     return;
   }
 
-  if (fs.existsSync(target) && fs.readdirSync(target).length) {
-    fail(`Install folder already exists and is not empty: ${target}`);
+  if (fs.existsSync(target) && !fs.statSync(target).isDirectory()) {
+    fail([
+      `Nothing was installed and nothing was changed, because the install location is a file, not a folder: ${target}`,
+      'To continue, name a new folder:',
+      `  ${INSTALL_COMMAND} <new-folder-name>`,
+    ].join('\n'));
   }
+  if (fs.existsSync(target) && fs.readdirSync(target).length) {
+    fail([
+      `Nothing was installed and nothing was changed, because the install folder already has files in it: ${target}`,
+      'AI-Verse OS installs into a new or empty folder and downloads itself, so no separate download step is needed.',
+      'To continue, run the same command from the folder where you want AI-Verse-OS created, or name a new folder:',
+      `  ${INSTALL_COMMAND} <new-folder-name>`,
+    ].join('\n'));
+  }
+  const enclosing = findRoot(path.dirname(target));
+  if (enclosing) {
+    fail([
+      `Nothing was installed and nothing was changed, because this folder is inside an existing AI-Verse OS: ${enclosing}`,
+      'To continue, run the command from a folder outside it, or use the existing one with:',
+      `  ai-verse-os setup --dir "${enclosing}"`,
+    ].join('\n'));
+  }
+
+  // Every refusal above has already happened, so a refused install changes and downloads nothing.
+  await requirePrerequisites(options);
+  const gitVersion = commandVersion('git');
+  if (!gitVersion) fail('Git is not available. Run the install again or ask for help in the AI-Verse community.');
 
   if (!options.json) {
     out('AI-Verse OS installer');

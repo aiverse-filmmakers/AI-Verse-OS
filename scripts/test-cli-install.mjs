@@ -68,7 +68,7 @@ try {
   r = install(temp, ['busy']);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /Nothing was installed and nothing was changed/);
-  assert.match(r.stderr, /npx --yes github:aiverse-filmmakers\/AI-Verse-OS install <new-folder-name>/);
+  assert.match(r.stderr, /npx --yes https:\/\/codeload.github.com\/aiverse-filmmakers\/AI-Verse-OS\/tar.gz\/main install <new-folder-name>/);
   assert.equal(snapshot(busy), 'mine.txt');
 
   // 4. Run from inside an installation: already installed, no nested copy.

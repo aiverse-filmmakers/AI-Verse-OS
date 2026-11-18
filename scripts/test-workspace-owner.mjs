@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -264,6 +265,47 @@ try {
   const fresh = run(root, request({ workspace: { id: 'new-aliased', name: 'New Aliased', aliases: ['Nova'] } }));
   assert.equal(fresh.status, 0, fresh.stderr);
   assert.match(fs.readFileSync(path.join(root, 'workspaces', 'new-aliased', 'WORKSPACE.yaml'), 'utf8'), /^aliases:\n  - "Nova"$/m);
+
+  // Ids derived from names: accents fold to plain letters, existing ASCII slugs do not change,
+  // and a name with nothing Latin in it still gets a safe, stable, non empty id.
+  const slugRoot = makeRoot();
+  try {
+    const idFor = (name) => {
+      const out = run(slugRoot, request({ workspace: { id: '', name, canonical_sources: [] } }));
+      assert.equal(out.status, 0, `${name}: ${out.stderr}`);
+      return out.json.workspace.id;
+    };
+    // Byte for byte the same as before for ASCII names.
+    assert.equal(idFor('Client A'), 'client-a');
+    assert.equal(idFor('  My  Great_Project!! '), 'my-great-project');
+    assert.equal(idFor('R&D 2026 (Q1)'), 'r-d-2026-q1');
+    // Romanian and other accented Latin names.
+    assert.equal(idFor('București'), 'bucuresti');
+    assert.equal(idFor('Ștefan Țepeș'), 'stefan-tepes');
+    assert.equal(idFor('İstanbul'), 'istanbul');
+    assert.equal(idFor('Århus Straße'), 'arhus-strasse');
+    // Mixed scripts keep the readable Latin part.
+    assert.equal(idFor('東京 Studio'), 'studio');
+    // Nothing Latin at all: a stable hash fallback, never empty.
+    const japanese = idFor('東京の映画');
+    assert.match(japanese, /^workspace-[0-9a-f]{8}$/);
+    assert.equal(japanese, 'workspace-' + crypto.createHash('sha256').update('東京の映画', 'utf8').digest('hex').slice(0, 8));
+    assert.notEqual(idFor('大阪の映画'), japanese);
+    assert.match(idFor('🎬🎬'), /^workspace-[0-9a-f]{8}$/);
+    assert.match(idFor('!!!'), /^workspace-[0-9a-f]{8}$/);
+    // The same name is found again (idempotent), and an unaccented spelling matches the accented one.
+    assert.equal(run(slugRoot, request({ workspace: { id: '', name: '東京の映画', canonical_sources: [] } })).json.state, 'existing');
+    const again = run(slugRoot, request({ workspace: { id: '', name: 'Bucuresti', canonical_sources: [] } }));
+    assert.equal(again.json.workspace.id, 'bucuresti');
+    assert.equal(again.json.state, 'existing');
+    // Two different non Latin names are different workspaces.
+    assert.equal(fs.existsSync(path.join(slugRoot, 'workspaces', idFor('大阪の映画'))), true);
+    // An empty name is still refused.
+    const empty = run(slugRoot, request({ workspace: { id: '', name: '' } }));
+    assert.notEqual(empty.status, 0);
+  } finally {
+    fs.rmSync(slugRoot, { recursive: true, force: true });
+  }
 
   // A system level failure (no permission to write) exits 75 so the host retries it; a validation refusal exits 4.
   if (typeof process.getuid === 'function' && process.getuid() !== 0) {

@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { capabilityConfiguration } from './capability-configuration.mjs';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 export const STATE_REL = '.aiverse/my-skills-listing.json';
 const TARGETS = ['.claude/skills', '.agents/skills'];
@@ -18,7 +19,7 @@ const MAX_BYTES = 10 * 1024 * 1024;
 function treeDigest(dir) {
   const hash = crypto.createHash('sha256');
   const walk = (current, rel) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => compareCodeUnits(a.name, b.name))) {
       if (entry.isSymbolicLink()) continue;
       const abs = path.join(current, entry.name);
       const r = rel ? `${rel}/${entry.name}` : entry.name;

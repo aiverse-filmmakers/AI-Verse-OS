@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 const STATUS_SCHEMA = 'ai-verse.workspace-infrastructure-status/v1';
 const OWNER = 'ai-verse-os';
@@ -125,7 +126,7 @@ function detect(root) {
   const realWorkspacesRoot = fs.realpathSync(workspacesRoot);
   const entries = fs.readdirSync(realWorkspacesRoot, { withFileTypes: true })
     .filter((entry) => entry.name !== '_template')
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => compareCodeUnits(a.name, b.name));
 
   const byManifestId = new Map();
 
@@ -248,7 +249,7 @@ function detect(root) {
     });
   }
 
-  for (const [manifestId, slots] of [...byManifestId.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [manifestId, slots] of [...byManifestId.entries()].sort(([a], [b]) => compareCodeUnits(a, b))) {
     if (slots.length < 2) continue;
     for (const slot of slots.sort()) {
       addFinding(
@@ -270,8 +271,8 @@ function detect(root) {
 }
 
 function buildResult(root, observations, findings) {
-  findings.sort((a, b) => `${a.slot}:${a.code}`.localeCompare(`${b.slot}:${b.code}`));
-  observations.sort((a, b) => a.slot.localeCompare(b.slot));
+  findings.sort((a, b) => compareCodeUnits(`${a.slot}:${a.code}`, `${b.slot}:${b.code}`));
+  observations.sort((a, b) => compareCodeUnits(a.slot, b.slot));
   const current = findings.length === 0;
   return {
     schema_version: STATUS_SCHEMA,

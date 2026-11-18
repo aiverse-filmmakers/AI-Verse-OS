@@ -1,0 +1,42 @@
+name: Learning tests on every system
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The learning package tests that need nothing outside this repository run on Linux, macOS and Windows.
+#
+# Not run here (they run on Linux in four-repo-acceptance.yml, where the Memory, Brain and Skills
+# repositories are checked out at pinned commits): test_bridge, test_chat_placement, test_claude_harness,
+# test_destinations, test_feedback, test_intent, test_negative, test_parity, test_tidy.
+# Reason: each one imports or starts code from one of those other repositories, so on their own
+# they stop at import or at a missing memory.py. They are not skipped for any Windows problem.
+jobs:
+  learning-self-contained:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the self contained learning tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in chat_archive chat_placement_transport claude_capture claude_transcript package prospective_capture secret_filter setup skill_usage tidy_outdated; do
+            python -m unittest discover -s system/extensions/tests/codex-learning -p "test_${name}.py" -v
+          done

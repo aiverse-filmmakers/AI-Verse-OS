@@ -40,6 +40,9 @@ jobs:
       - name: Test disabled Claude catch-up and hostile source paths (synthetic)
         run: python3 -m unittest discover -s system/extensions/tests/codex-learning -p 'test_claude_capture.py' -v
 
+      - name: Guard against locale dependent sorting
+        run: node scripts/test-fixed-order.mjs
+
       - name: Test scoped capability discovery and selection
         run: node scripts/test-capability-resolver.mjs
 

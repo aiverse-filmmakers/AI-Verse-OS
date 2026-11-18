@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './fixed-order.mjs';
 const MAX_BINDINGS = 32;
 const DEFAULT_MAX_BYTES = 16_384;
 const DATA_RESULT_STATES = new Set(['ok', 'partial', 'unavailable']);
@@ -213,7 +214,7 @@ export function applyPurposeDataCurrentState(envelope, options = {}) {
   }
 
   const relevantRefs = collectPurposeRefs(output);
-  const purposeRefs = [...relevantRefs.values()].sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
+  const purposeRefs = [...relevantRefs.values()].sort((a, b) => compareCodeUnits(canonicalRefKey(a), canonicalRefKey(b)));
   const result = reader(Object.freeze({
     scope: output.scope,
     purpose_refs: Object.freeze(purposeRefs.map((ref) => Object.freeze({ ...ref }))),

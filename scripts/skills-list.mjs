@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverCapabilities } from './capability-resolver.mjs';
+import { compareForDisplay } from './fixed-order.mjs';
 
 export function skillGroups({ osRoot, scope = 'operator', skillsRoot, localSkillsRoot } = {}) {
   const result = discoverCapabilities({ osRoot, scope, query: '', limit: 200, skillsRoot, localSkillsRoot });
@@ -15,7 +16,7 @@ export function skillGroups({ osRoot, scope = 'operator', skillsRoot, localSkill
     if (item.provider === 'os' || item.provider === 'aiverse-skills') shipped.push(row);
     else mine.push({ ...row, where: item.provider === 'local' ? 'mine' : 'this project' });
   }
-  const byName = (a, b) => a.name.localeCompare(b.name);
+  const byName = (a, b) => compareForDisplay(a.name, b.name);
   return { scope, skills: shipped.sort(byName), my_skills: mine.sort(byName), complete: result.candidates.length === result.total_matching_candidates };
 }
 

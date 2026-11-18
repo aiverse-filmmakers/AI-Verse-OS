@@ -23,7 +23,7 @@ export async function readCodexMemories(root) {
     let entries;
     try { entries = await fs.readdir(path.join(root, relative), { withFileTypes: true }); }
     catch (err) { if (err.code === 'ENOENT') return; throw err; }
-    for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       if (e.name.startsWith('.')) continue;
       const child = path.join(relative, e.name);
       if (e.isDirectory()) await walk(child, kind);

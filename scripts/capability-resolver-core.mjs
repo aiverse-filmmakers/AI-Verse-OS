@@ -7,6 +7,7 @@ import { capabilityConfiguration } from './capability-configuration.mjs';
 import { externalSources } from './capability-external-sources.mjs';
 import { readBindings } from './capability-bindings.mjs';
 import { projectAdjustmentsFor } from './skill-adjustments.mjs';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 export const PROVIDER_CONTRACT = 'aiverse-capability-provider-v1';
 export const DISTRIBUTED_PROVIDER = 'aiverse-skills';
@@ -274,7 +275,7 @@ function scanDirectoryProvider({ root, provider, visibility, prefix }) {
       diagnostics.push(`${entry.name}: ${error.message}`);
     }
   }
-  candidates.sort((a, b) => a.id.localeCompare(b.id));
+  candidates.sort((a, b) => compareCodeUnits(a.id, b.id));
   return { provider, state: diagnostics.length ? 'degraded' : 'healthy', candidates, diagnostics };
 }
 
@@ -389,7 +390,7 @@ function distributedProvider(root) {
       });
     }
     if (seen.size !== manifestCaps.size) throw new Error('Skills capability index is missing installed manifest capabilities');
-    candidates.sort((a, b) => a.id.localeCompare(b.id));
+    candidates.sort((a, b) => compareCodeUnits(a.id, b.id));
     return { provider, state: 'healthy', candidates, diagnostics: [...new Set(privacyDiagnostics)], generation_id: generationId };
   } catch (error) {
     return { provider, state: 'degraded', candidates: [], diagnostics: [error.message] };
@@ -526,7 +527,7 @@ export function discoverCapabilities({
   if (qualifiedId) ranked = ranked.filter(({ candidate }) => candidate.id === qualifiedId);
   ranked.sort((a, b) => b.score - a.score ||
     providerPreference(a.candidate, workspaceId) - providerPreference(b.candidate, workspaceId) ||
-    a.candidate.id.localeCompare(b.candidate.id));
+    compareCodeUnits(a.candidate.id, b.candidate.id));
 
   return {
     contract: PROVIDER_CONTRACT,
@@ -602,7 +603,7 @@ export function selectCapability(options = {}) {
   }
   const exact = discovery.candidates
     .filter((candidate) => candidate.bare_id === normalizedBare || normalizeSearch(candidate.name) === query)
-    .sort((a, b) => providerPreference(a, workspaceId) - providerPreference(b, workspaceId) || a.id.localeCompare(b.id));
+    .sort((a, b) => providerPreference(a, workspaceId) - providerPreference(b, workspaceId) || compareCodeUnits(a.id, b.id));
   if (exact.length > 1) return {
     status: 'ambiguous', requested: options.query,
     reason: 'Several available skills have this name. Choose an exact skill or save a scoped preference.',

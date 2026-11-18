@@ -145,6 +145,7 @@ class TextEncodingLintTests(unittest.TestCase):
             'subprocess.run(["x"], text=True)\n'
             'subprocess.Popen(["x"], universal_newlines=True)\n'
             'check_output(["x"], text=True)\n'
+            '_RUN(["x"], capture_output=True, text=True)\n'
         )
         self.assertEqual(len(bare_text_calls(bad)), 16)
 

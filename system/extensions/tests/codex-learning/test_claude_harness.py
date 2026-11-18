@@ -49,7 +49,7 @@ class ClaudeFixture(unittest.TestCase):
                    "--root", str(root or self.root)]
         if harness:
             command += ["--harness", harness]
-        return subprocess.run(command + list(args), input=stdin, capture_output=True, text=True, timeout=60)
+        return subprocess.run(command + list(args), input=stdin, capture_output=True, text=True, timeout=60, encoding="utf-8")
 
 
 class HarnessLabelTests(ClaudeFixture):
@@ -77,7 +77,7 @@ class HarnessLabelTests(ClaudeFixture):
         self.assertTrue(learn["effect_id"].startswith("claude:"), learn["effect_id"])
         self.assertTrue(all(ref.startswith("claude:turn:") for ref in learn["refs"]), learn["refs"])
         self.assertEqual(receipt["effects"][0]["result"]["result"]["memory_capture"]["state"], "captured")
-        files = [f.read_text() for f in (self.root / "operator/memory").rglob("*.md")]
+        files = [f.read_text(encoding="utf-8") for f in (self.root / "operator/memory").rglob("*.md")]
         self.assertTrue(any("claude-code:completed-turn" in text for text in files))
         self.assertFalse(any("codex-desktop" in text for text in files))
 
@@ -89,7 +89,7 @@ class HarnessLabelTests(ClaudeFixture):
         learn = [payload for operation, payload in calls if operation == "learn"][0]
         self.assertTrue(learn["effect_id"].startswith("codex:"))
         self.assertTrue(all(ref.startswith("codex:turn:") for ref in learn["refs"]))
-        files = [f.read_text() for f in (self.root / "operator/memory").rglob("*.md")]
+        files = [f.read_text(encoding="utf-8") for f in (self.root / "operator/memory").rglob("*.md")]
         self.assertTrue(any("codex-desktop:completed-turn" in text for text in files))
 
     def test_owner_subprocess_inherits_the_harness(self):
@@ -114,7 +114,7 @@ class HarnessLabelTests(ClaudeFixture):
         result = self.cli("owner", "learn", stdin=json.dumps(payload), harness="claude")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(json.loads(result.stdout)["ok"])
-        files = [f.read_text() for f in (self.root / "operator/memory").rglob("*.md")]
+        files = [f.read_text(encoding="utf-8") for f in (self.root / "operator/memory").rglob("*.md")]
         self.assertTrue(any("claude-code:completed-turn" in text for text in files))
 
     def test_printed_commands_use_the_claude_prefix(self):
@@ -136,11 +136,11 @@ class HarnessLabelTests(ClaudeFixture):
         Bridge(self.root).hook({"session_id": "codex-session-0003", "turn_id": "turn-9", "cwd": str(self.root),
                                 "hook_event_name": "UserPromptSubmit", "permission_mode": "default",
                                 "prompt": "Check it."})
-        rows = [json.loads(line) for line in (self.root / "runtime/codex-learning/events.jsonl").read_text().splitlines()]
+        rows = [json.loads(line) for line in (self.root / "runtime/codex-learning/events.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertEqual({row["harness"] for row in rows}, {"claude", "codex"})
 
     def test_intent_actor_follows_the_harness_and_shared_keys_stay(self):
-        text = (EXT / "intent.py").read_text()
+        text = (EXT / "intent.py").read_text(encoding="utf-8")
         self.assertNotIn('actor="codex:', text)
         self.assertIn("self.harness", text)
         for kept in ("namespace=\"codex-intent\"", "codex_capture", "codex_confirmation", "codex-correction-link:"):
@@ -152,7 +152,7 @@ class InputFileTests(ClaudeFixture):
         folder = self.root / "runtime/codex-learning/claude-input"
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / name
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         return path
 
     def review_args(self, path):
@@ -180,9 +180,9 @@ class InputFileTests(ClaudeFixture):
     def test_note_deleted_when_learning_is_disabled(self):
         self.start()
         config = self.root / ".aiverse/extensions/ai-verse-codex-learning/config.json"
-        value = json.loads(config.read_text())
+        value = json.loads(config.read_text(encoding="utf-8"))
         value["enabled"] = False
-        config.write_text(json.dumps(value))
+        config.write_text(json.dumps(value), encoding="utf-8")
         path = self.note(json.dumps(review_payload()))
         result = self.cli(*self.review_args(path), harness="claude")
         self.assertEqual(result.returncode, 2)
@@ -198,7 +198,7 @@ class InputFileTests(ClaudeFixture):
     def test_paths_outside_the_folder_are_refused_and_left_alone(self):
         self.start()
         outside = self.root / "runtime/codex-learning/elsewhere.json"
-        outside.write_text(json.dumps(review_payload()))
+        outside.write_text(json.dumps(review_payload()), encoding="utf-8")
         sibling = self.root / "operator/profile/preferences.md"
         for target in (outside, sibling, self.root / "runtime/codex-learning/claude-input/../elsewhere.json"):
             result = self.cli(*self.review_args(target), harness="claude")
@@ -210,7 +210,7 @@ class InputFileTests(ClaudeFixture):
     def test_symlink_notes_and_folders_are_refused(self):
         self.start()
         real = self.root / "runtime/codex-learning/real.json"
-        real.write_text(json.dumps(review_payload()))
+        real.write_text(json.dumps(review_payload()), encoding="utf-8")
         folder = self.root / "runtime/codex-learning/claude-input"
         link = folder / "link.json"
         link.symlink_to(real)
@@ -228,8 +228,8 @@ class InputFileTests(ClaudeFixture):
         self.note("{}", "keep.json")
         folder = self.root / "runtime/codex-learning/claude-input"
         (folder / "nested").mkdir()
-        (folder / "nested/deep.json").write_text("{}")
-        (folder / ".hidden.json").write_text("{}")
+        (folder / "nested/deep.json").write_text("{}", encoding="utf-8")
+        (folder / ".hidden.json").write_text("{}", encoding="utf-8")
         for target in ("claude-input/keep.json", folder / "nested/deep.json", folder / ".hidden.json"):
             result = self.cli(*self.review_args(target), harness="claude")
             self.assertEqual(result.returncode, 2, target)
@@ -286,9 +286,9 @@ class ClaudeEventTests(ClaudeFixture):
 
     def set_config(self, **values):
         file = self.root / ".aiverse/extensions/ai-verse-codex-learning/config.json"
-        config = json.loads(file.read_text())
+        config = json.loads(file.read_text(encoding="utf-8"))
         config.update(values)
-        file.write_text(json.dumps(config))
+        file.write_text(json.dumps(config), encoding="utf-8")
         self.bridge = Bridge(self.root, harness="claude")
 
     def test_a_session_start_returns_profile_context(self):
@@ -339,9 +339,9 @@ class ClaudeEventTests(ClaudeFixture):
         self.assertEqual(self.bridge.hook(self.claude_event("Stop")), {})
 
     def test_g_context_stays_inside_the_budget_with_the_full_review_command(self):
-        (self.root / "operator/profile/preferences.md").write_text("# Preferences\n\n" + "Prefers short plain answers. " * 300)
-        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 300)
-        (self.root / "operator/context/CURRENT.md").write_text("# Context\n\n## Current state\n\n" + "- Working on the course.\n" * 400)
+        (self.root / "operator/profile/preferences.md").write_text("# Preferences\n\n" + "Prefers short plain answers. " * 300, encoding="utf-8")
+        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 300, encoding="utf-8")
+        (self.root / "operator/context/CURRENT.md").write_text("# Context\n\n## Current state\n\n" + "- Working on the course.\n" * 400, encoding="utf-8")
         ownership = self.root / ".aiverse/direction/ownership.json"
         ownership.parent.mkdir(parents=True, exist_ok=True)
         for limit in (4096, 6000, 14000, 24000):
@@ -379,8 +379,8 @@ class ClaudeEventTests(ClaudeFixture):
             "\n\n### Communication\n\n" + filler(8, "Voice") + "\n- " + self.RULE + " Use commas instead.\n" +
             filler(25, "Tone") + "\n\n### Working style\n\n" + filler(40, "Style") +
             "\n\n### Quality expectations\n\n" + filler(30, "Quality") +
-            "\n\n### Avoid\n\n- " + self.AVOID + "\n" + filler(10, "Avoid") + "\n")
-        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 60)
+            "\n\n### Avoid\n\n- " + self.AVOID + "\n" + filler(10, "Avoid") + "\n", encoding="utf-8")
+        (self.root / "operator/profile/identity.md").write_text("# Identity\n\n" + "Founder of a small studio. " * 60, encoding="utf-8")
         self.assertGreater(len((self.root / "operator/profile/preferences.md").read_bytes()), 7500)
 
     def test_i_communication_rules_arrive_first_at_session_start_and_prompt_submit(self):
@@ -413,7 +413,7 @@ class ClaudeEventTests(ClaudeFixture):
         self.assertLessEqual(len(text.encode()), 14000)
 
     def keys_at(self, prefs, limit=14000, event="prompt"):
-        (self.root / "operator/profile/preferences.md").write_text(prefs)
+        (self.root / "operator/profile/preferences.md").write_text(prefs, encoding="utf-8")
         self.set_config(context_max_bytes=limit)
         with patch.object(Bridge, "owner", self.rich_owner):
             result = (self.prompt("What goals and priorities matter?") if event == "prompt" else
@@ -490,18 +490,18 @@ class ClaudeInstallTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve() / "Core | Test"
         self.root.mkdir()
-        (self.root / "AI-VERSE.yaml").write_text("architecture: unified-workspace\n")
+        (self.root / "AI-VERSE.yaml").write_text("architecture: unified-workspace\n", encoding="utf-8")
         self.extension = self.root / ".aiverse/extensions" / ID
         self.extension.mkdir(parents=True)
         self.source = EXT
         self.copy_package(self.source)
         self.write_receipt()
         (self.root / ".codex").mkdir()
-        (self.root / ".codex/hooks.json").write_text('{"hooks": {}}\n')
+        (self.root / ".codex/hooks.json").write_text('{"hooks": {}}\n', encoding="utf-8")
         (self.root / ".aiverse/extensions/registry.json").write_text(json.dumps({
             "schema_version": "1.0", "extensions": {ID: {"id": ID, "supported": True, "installed": True,
-                                                         "enabled": True, "version": VERSION}}}))
-        (self.extension / "config.json").write_text(json.dumps({"schema_version": 1, "enabled": True}))
+                                                         "enabled": True, "version": VERSION}}}), encoding="utf-8")
+        (self.extension / "config.json").write_text(json.dumps({"schema_version": 1, "enabled": True}), encoding="utf-8")
         self.python = sys.executable
         self.settings = self.root / ".claude/settings.local.json"
         self.record = self.extension / "claude-adapter.json"
@@ -516,7 +516,7 @@ class ClaudeInstallTests(unittest.TestCase):
     def write_receipt(self):
         files = {name: self.sha(self.extension / name) for name in self.FILES}
         (self.extension / "install-receipt.json").write_text(json.dumps(
-            {"version": self.VERSION, "files": files, "python": sys.executable}))
+            {"version": self.VERSION, "files": files, "python": sys.executable}), encoding="utf-8")
 
     def install_module(self, source=None):
         import importlib
@@ -525,7 +525,7 @@ class ClaudeInstallTests(unittest.TestCase):
 
     def run_install(self, *args):
         return subprocess.run([sys.executable, str(self.extension / "install.py"), "--root", str(self.root), *args],
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, timeout=60, encoding="utf-8")
 
     def cmd(self, name, *extra):
         result = self.run_install(name, "--python", self.python, *extra)
@@ -538,7 +538,7 @@ class ClaudeInstallTests(unittest.TestCase):
                 "receipt": (self.extension / "install-receipt.json").read_bytes()}
 
     def load(self):
-        return json.loads(self.settings.read_text())
+        return json.loads(self.settings.read_text(encoding="utf-8"))
 
     def bridge_hooks(self, settings=None):
         from lifecycle import is_ours_claude
@@ -553,7 +553,7 @@ class ClaudeInstallTests(unittest.TestCase):
 
     def test_merge_keeps_other_hooks_permissions_and_keys(self):
         self.settings.parent.mkdir()
-        self.settings.write_text(json.dumps(self.OTHER, indent=2))
+        self.settings.write_text(json.dumps(self.OTHER, indent=2), encoding="utf-8")
         before = self.state()
         code, out = self.cmd("claude-install")
         self.assertEqual(code, 0, out)
@@ -580,9 +580,9 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertEqual(self.state(), before)  # Codex hooks, registry, config and receipt untouched.
 
     def mark_hooks_as_older_build(self):
-        record = json.loads(self.record.read_text())
+        record = json.loads(self.record.read_text(encoding="utf-8"))
         record["build"] = "older-build"
-        self.record.write_text(json.dumps(record))
+        self.record.write_text(json.dumps(record), encoding="utf-8")
         return self.sha(self.extension / "bridge.py")
 
     def test_install_refreshes_claude_hooks_when_the_bridge_changes(self):
@@ -590,7 +590,7 @@ class ClaudeInstallTests(unittest.TestCase):
         build = self.mark_hooks_as_older_build()
         status = self.install_module()._refresh_claude_hooks(self.root, {})
         self.assertEqual(status, "refreshed")
-        self.assertEqual(json.loads(self.record.read_text())["build"], build)
+        self.assertEqual(json.loads(self.record.read_text(encoding="utf-8"))["build"], build)
         self.assertTrue(all(build in hook["command"] for hook in self.bridge_hooks()))
         self.assertEqual(self.install_module()._refresh_claude_hooks(self.root, {}), "current")
 
@@ -603,7 +603,7 @@ class ClaudeInstallTests(unittest.TestCase):
         settings = self.load()
         hook = settings["hooks"]["Stop"][0]["hooks"][0]
         hook["timeout"] = hook["timeout"] + 1
-        self.settings.write_text(json.dumps(settings, indent=2))
+        self.settings.write_text(json.dumps(settings, indent=2), encoding="utf-8")
         self.mark_hooks_as_older_build()
         status = self.install_module()._refresh_claude_hooks(self.root, {})
         self.assertTrue(status.startswith("needs-attention"), status)
@@ -611,14 +611,14 @@ class ClaudeInstallTests(unittest.TestCase):
     def test_repeat_install_has_no_duplicates_and_keeps_the_baseline(self):
         self.settings.parent.mkdir()
         original = json.dumps(self.OTHER, indent=2)
-        self.settings.write_text(original)
+        self.settings.write_text(original, encoding="utf-8")
         self.cmd("claude-install")
         first = self.settings.read_bytes()
-        baseline = json.loads(self.record.read_text())["original"]
+        baseline = json.loads(self.record.read_text(encoding="utf-8"))["original"]
         self.cmd("claude-install")
         self.assertEqual(self.settings.read_bytes(), first)
         self.assertEqual(len(self.bridge_hooks()), 5)
-        record = json.loads(self.record.read_text())
+        record = json.loads(self.record.read_text(encoding="utf-8"))
         self.assertEqual(record["original"], baseline)
         self.assertTrue(record["exact_restore_ok"])
 
@@ -642,14 +642,14 @@ class ClaudeInstallTests(unittest.TestCase):
 
     def test_preexisting_rule_and_memory_setting_survive_remove_after_an_edit(self):
         self.settings.parent.mkdir()
-        self.settings.write_text(json.dumps({"autoMemoryEnabled": True, "permissions": {"allow": ["Bash(ls:*)"]}}))
+        self.settings.write_text(json.dumps({"autoMemoryEnabled": True, "permissions": {"allow": ["Bash(ls:*)"]}}), encoding="utf-8")
         self.cmd("claude-install")
-        added = json.loads(self.record.read_text())["added_allow_rules"]
+        added = json.loads(self.record.read_text(encoding="utf-8"))["added_allow_rules"]
         self.assertNotIn("Bash(ls:*)", added)
         # Pre-existing identical allow rule: install again after pre-seeding one of ours must not claim it.
         edited = self.load()
         edited["note"] = "user edit"
-        self.settings.write_text(json.dumps(edited, indent=2))
+        self.settings.write_text(json.dumps(edited, indent=2), encoding="utf-8")
         code, out = self.cmd("claude-remove")
         self.assertEqual(out["restore"], "selective")
         left = self.load()
@@ -662,12 +662,12 @@ class ClaudeInstallTests(unittest.TestCase):
         self.settings.parent.mkdir()
         module = self.install_module()
         rules = module._claude_rules(self.root, str(Path(self.python).absolute()))
-        self.settings.write_text(json.dumps({"permissions": {"allow": [rules[0]]}}))
+        self.settings.write_text(json.dumps({"permissions": {"allow": [rules[0]]}}), encoding="utf-8")
         self.cmd("claude-install")
-        self.assertNotIn(rules[0], json.loads(self.record.read_text())["added_allow_rules"])
+        self.assertNotIn(rules[0], json.loads(self.record.read_text(encoding="utf-8"))["added_allow_rules"])
         edited = self.load()
         edited["x"] = 1
-        self.settings.write_text(json.dumps(edited))
+        self.settings.write_text(json.dumps(edited), encoding="utf-8")
         self.cmd("claude-remove")
         self.assertEqual(self.load()["permissions"]["allow"], [rules[0]])
 
@@ -676,9 +676,9 @@ class ClaudeInstallTests(unittest.TestCase):
         edited = self.load()
         edited["extra"] = {"keep": True}
         edited["permissions"]["allow"].append("Bash(git status:*)")
-        self.settings.write_text(json.dumps(edited, indent=2))
+        self.settings.write_text(json.dumps(edited, indent=2), encoding="utf-8")
         self.cmd("claude-install")
-        self.assertFalse(json.loads(self.record.read_text())["exact_restore_ok"])
+        self.assertFalse(json.loads(self.record.read_text(encoding="utf-8"))["exact_restore_ok"])
         self.assertEqual(len(self.bridge_hooks()), 5)
         code, out = self.cmd("claude-remove")
         left = self.load()
@@ -693,7 +693,7 @@ class ClaudeInstallTests(unittest.TestCase):
         handler = edited["hooks"]["Stop"][0]["hooks"][0]
         handler["timeout"] = 99
         edited["autoMemoryEnabled"] = True
-        self.settings.write_text(json.dumps(edited))
+        self.settings.write_text(json.dumps(edited), encoding="utf-8")
         code, out = self.cmd("claude-remove")
         self.assertTrue(any("Stop" in item for item in out["left_in_place"]), out)
         self.assertTrue(any("autoMemoryEnabled" in item for item in out["left_in_place"]), out)
@@ -705,10 +705,10 @@ class ClaudeInstallTests(unittest.TestCase):
     def test_malformed_settings_are_refused_untouched(self):
         self.settings.parent.mkdir()
         for text in ("{not json", "[1, 2]", '{"hooks": []}', '{"permissions": {"allow": "x"}}'):
-            self.settings.write_text(text)
+            self.settings.write_text(text, encoding="utf-8")
             code, out = self.cmd("claude-install")
             self.assertEqual(code, 2, text)
-            self.assertEqual(self.settings.read_text(), text)
+            self.assertEqual(self.settings.read_text(encoding="utf-8"), text)
             self.assertFalse(self.record.exists())
 
     def test_write_failure_rolls_back_both_files(self):
@@ -737,7 +737,7 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(self.settings.exists())
         self.write_receipt()
-        (self.extension / "REVIEW-SCHEMA.md").write_text("tampered")
+        (self.extension / "REVIEW-SCHEMA.md").write_text("tampered", encoding="utf-8")
         code, out = self.cmd("claude-install")
         self.assertEqual(code, 2)
         self.assertFalse(self.settings.exists())
@@ -750,21 +750,21 @@ class ClaudeInstallTests(unittest.TestCase):
                 {"build": build, "event": "review", "state": "reviewed", "harness": "claude"}]
         runtime = self.root / "runtime/codex-learning"
         runtime.mkdir(parents=True)
-        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         with patch("install.shutil.which", return_value=None):
             result = install.setup(self.root)
         self.assertFalse(result["execution_observed"])
         self.assertFalse(result["review_observed"])
         legacy = [{"build": build, "event": "UserPromptSubmit"},
                   {"build": build, "event": "review", "state": "reviewed"}]
-        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in legacy))
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in legacy), encoding="utf-8")
         with patch("install.shutil.which", return_value=None):
             result = install.setup(self.root)
         self.assertTrue(result["execution_observed"])
         self.assertTrue(result["review_observed"])
         summary = Bridge(self.root).execution_summary()
         self.assertTrue(summary["current_build_prompt_observed"])
-        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         summary = Bridge(self.root).execution_summary()
         self.assertFalse(summary["current_build_prompt_observed"])
         self.assertFalse(summary["current_build_review_observed"])
@@ -774,31 +774,31 @@ class ClaudeInstallTests(unittest.TestCase):
         build = self.sha(self.extension / "bridge.py")
         runtime = self.root / "runtime/codex-learning"
         runtime.mkdir(parents=True)
-        (runtime / "events.jsonl").write_text(json.dumps({"build": build, "event": "UserPromptSubmit"}) + "\n")
+        (runtime / "events.jsonl").write_text(json.dumps({"build": build, "event": "UserPromptSubmit"}) + "\n", encoding="utf-8")
         before = {p: p.read_bytes() for p in (self.settings, self.record)}
         code, out = self.cmd("claude-doctor", "--json")
         self.assertEqual(out["state"], "installed")
         self.assertFalse(out["execution_observed"])
         rows = [{"build": build, "event": "UserPromptSubmit", "harness": "claude"},
                 {"build": build, "event": "review", "state": "reviewed", "harness": "claude"}]
-        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         code, out = self.cmd("claude-doctor", "--json")
         self.assertEqual(out["state"], "ready")
         self.assertEqual({p: p.read_bytes() for p in before}, before)
 
     def test_update_flow_stale_build_is_reported_and_refreshed(self):
         self.settings.parent.mkdir()
-        self.settings.write_text(json.dumps(self.OTHER, indent=2))
+        self.settings.write_text(json.dumps(self.OTHER, indent=2), encoding="utf-8")
         self.cmd("claude-install")
-        baseline = json.loads(self.record.read_text())["original"]
+        baseline = json.loads(self.record.read_text(encoding="utf-8"))["original"]
         build_a = self.sha(self.extension / "bridge.py")
         # Build B: different bridge bytes, same version, correctly refreshed package hashes.
         build_b = Path(self.temp.name) / "package-b"
         self.shutil.copytree(self.source, build_b, ignore=self.shutil.ignore_patterns("__pycache__", "hooks.json"))
-        (build_b / "bridge.py").write_text((build_b / "bridge.py").read_text() + "\n# build B marker\n")
-        manifest = json.loads((build_b / "PACKAGE.json").read_text())
+        (build_b / "bridge.py").write_text((build_b / "bridge.py").read_text(encoding="utf-8") + "\n# build B marker\n", encoding="utf-8")
+        manifest = json.loads((build_b / "PACKAGE.json").read_text(encoding="utf-8"))
         manifest["files"] = {name: self.hashlib.sha256((build_b / name).read_bytes()).hexdigest() for name in self.FILES}
-        (build_b / "PACKAGE.json").write_text(json.dumps(manifest))
+        (build_b / "PACKAGE.json").write_text(json.dumps(manifest), encoding="utf-8")
         self.copy_package(build_b)  # What an update does to the installed package files.
         self.write_receipt()
         settings_after_update = self.settings.read_bytes()
@@ -808,7 +808,7 @@ class ClaudeInstallTests(unittest.TestCase):
         # The doctor must run from the installed (new) package.
         def doctor():
             result = subprocess.run([sys.executable, str(self.extension / "install.py"), "--root", str(self.root),
-                                     "claude-doctor", "--json"], capture_output=True, text=True, timeout=60)
+                                     "claude-doctor", "--json"], capture_output=True, text=True, timeout=60, encoding="utf-8")
             return json.loads(result.stdout)
         # Installed files now differ from SOURCE only if SOURCE is the old tree; the installed copy is its own source.
         report = doctor()
@@ -816,7 +816,7 @@ class ClaudeInstallTests(unittest.TestCase):
         self.assertIs(report["build_matches"], False)
         code, out = self.cmd("claude-install")
         self.assertEqual(code, 0, out)
-        record = json.loads(self.record.read_text())
+        record = json.loads(self.record.read_text(encoding="utf-8"))
         self.assertEqual(record["original"], baseline)
         self.assertEqual(record["build"], build_b_sha)
         settings = self.load()
@@ -829,7 +829,7 @@ class ClaudeInstallTests(unittest.TestCase):
         self.cmd("claude-install")
         edited = self.load()
         edited["hooks"]["SessionStart"][0]["matcher"] = "startup"
-        self.settings.write_text(json.dumps(edited))
+        self.settings.write_text(json.dumps(edited), encoding="utf-8")
         code, out = self.cmd("claude-remove")
         self.assertTrue(any("SessionStart" in item for item in out["left_in_place"]), out)
         self.assertEqual(self.load()["hooks"]["SessionStart"][0]["matcher"], "startup")
@@ -838,7 +838,7 @@ class ClaudeInstallTests(unittest.TestCase):
         self.cmd("claude-install")
         edited = self.load()
         edited["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 77
-        self.settings.write_text(json.dumps(edited))
+        self.settings.write_text(json.dumps(edited), encoding="utf-8")
         before = (self.settings.read_bytes(), self.record.read_bytes())
         code, out = self.cmd("claude-install")
         self.assertEqual(code, 2)
@@ -852,18 +852,18 @@ class ClaudeInstallTests(unittest.TestCase):
         runtime.mkdir(parents=True)
         rows = [{"build": build, "event": "UserPromptSubmit", "harness": "claude"},
                 {"build": build, "event": "review", "state": "reviewed", "harness": "claude"}]
-        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (runtime / "events.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
         self.assertEqual(self.cmd("claude-doctor", "--json")[1]["state"], "ready")
         config = self.extension / "config.json"
-        config.write_text(json.dumps({"schema_version": 1, "enabled": False}))
+        config.write_text(json.dumps({"schema_version": 1, "enabled": False}), encoding="utf-8")
         out = self.cmd("claude-doctor", "--json")[1]
         self.assertEqual(out["state"], "disabled")
         self.assertFalse(out["learning_enabled"])
-        config.write_text(json.dumps({"schema_version": 1, "enabled": True}))
+        config.write_text(json.dumps({"schema_version": 1, "enabled": True}), encoding="utf-8")
         registry = self.root / ".aiverse/extensions/registry.json"
-        value = json.loads(registry.read_text())
+        value = json.loads(registry.read_text(encoding="utf-8"))
         value["extensions"][self.ID]["enabled"] = False
-        registry.write_text(json.dumps(value))
+        registry.write_text(json.dumps(value), encoding="utf-8")
         self.assertEqual(self.cmd("claude-doctor", "--json")[1]["state"], "disabled")
 
     def test_settings_json_hook_command_runs_the_installed_bridge_end_to_end(self):
@@ -875,45 +875,45 @@ class ClaudeInstallTests(unittest.TestCase):
         import hashlib
         files = {name: hashlib.sha256((extension / name).read_bytes()).hexdigest() for name in self.FILES}
         (extension / "install-receipt.json").write_text(json.dumps(
-            {"version": self.VERSION, "files": files, "python": sys.executable}))
-        registry = json.loads((fix_root / ".aiverse/extensions/registry.json").read_text())
+            {"version": self.VERSION, "files": files, "python": sys.executable}), encoding="utf-8")
+        registry = json.loads((fix_root / ".aiverse/extensions/registry.json").read_text(encoding="utf-8"))
         registry["extensions"][self.ID]["version"] = self.VERSION
-        (fix_root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry))
+        (fix_root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry), encoding="utf-8")
         result = subprocess.run([sys.executable, str(extension / "install.py"), "--root", str(fix_root),
-                                 "claude-install", "--python", sys.executable], capture_output=True, text=True, timeout=60)
+                                 "claude-install", "--python", sys.executable], capture_output=True, text=True, timeout=60, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stdout)
-        settings = json.loads((fix_root / ".claude/settings.local.json").read_text())
+        settings = json.loads((fix_root / ".claude/settings.local.json").read_text(encoding="utf-8"))
         command = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
         event = {"session_id": "cli-session-0001", "cwd": str(fix_root), "hook_event_name": "UserPromptSubmit",
                  "permission_mode": "default", "prompt": "Quick check of the installed hook."}
-        good = subprocess.run(command, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60)
+        good = subprocess.run(command, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60, encoding="utf-8")
         output = json.loads(good.stdout)
         self.assertIn("--harness claude review --session cli-session-0001", output["hookSpecificOutput"]["additionalContext"])
         wrong_build = command.replace(" --build ", " --build 0000", 1)
-        bad = subprocess.run(wrong_build, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60)
+        bad = subprocess.run(wrong_build, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60, encoding="utf-8")
         self.assertIn("AI-Verse hook unavailable", json.loads(bad.stdout)["systemMessage"])
         config = extension / "config.json"
-        value = json.loads(config.read_text())
+        value = json.loads(config.read_text(encoding="utf-8"))
         value["enabled"] = False
-        config.write_text(json.dumps(value))
-        off = subprocess.run(command, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60)
+        config.write_text(json.dumps(value), encoding="utf-8")
+        off = subprocess.run(command, shell=True, input=json.dumps(event), capture_output=True, text=True, timeout=60, encoding="utf-8")
         self.assertEqual(json.loads(off.stdout), {})
         value["enabled"] = True
-        config.write_text(json.dumps(value))
+        config.write_text(json.dumps(value), encoding="utf-8")
         # Now run the printed review and intent commands through a shell, as the model would, with a note file.
         text = output["hookSpecificOutput"]["additionalContext"]
         line = [part for part in text.split("Run this review command: ")[1].split("\n")[0:1]][0]
         note = _shlex.split(line)[-1]
-        Path(note).write_text(json.dumps(review_payload()))
-        reviewed = subprocess.run(line, shell=True, capture_output=True, text=True, timeout=60, cwd=fix_root)
+        Path(note).write_text(json.dumps(review_payload()), encoding="utf-8")
+        reviewed = subprocess.run(line, shell=True, capture_output=True, text=True, timeout=60, cwd=fix_root, encoding="utf-8")
         self.assertEqual(json.loads(reviewed.stdout)["state"], "reviewed", reviewed.stdout)
         self.assertFalse(Path(note).exists())
         turn_args = _shlex.split(line)
         intent_line = line.replace(" review ", " intent capture --scope operator ", 1).replace(
             "-review.json", "-intent.json")
         intent_note = _shlex.split(intent_line)[-1]
-        Path(intent_note).write_text(json.dumps({"classification": "operator-goal"}))
-        intent = subprocess.run(intent_line, shell=True, capture_output=True, text=True, timeout=60, cwd=fix_root)
+        Path(intent_note).write_text(json.dumps({"classification": "operator-goal"}), encoding="utf-8")
+        intent = subprocess.run(intent_line, shell=True, capture_output=True, text=True, timeout=60, cwd=fix_root, encoding="utf-8")
         self.assertFalse(Path(intent_note).exists())
         self.assertNotIn("input file", intent.stdout.lower())
 
@@ -952,7 +952,7 @@ class ProfileCorrectionTests(ClaudeFixture):
         return bridge.review(session, turn["id"], turn["token"], review_payload([candidate]))
 
     def preferences(self):
-        return (self.root / "operator/profile/preferences.md").read_text()
+        return (self.root / "operator/profile/preferences.md").read_text(encoding="utf-8")
 
     def seed_bullets(self):
         self.turn_and_review(self.bridge, "I prefer answers as short bullet points, not long paragraphs.",
@@ -999,13 +999,13 @@ class ProfileCorrectionTests(ClaudeFixture):
         text = self.preferences()
         self.assertIn("short paragraphs", text)
         self.assertNotIn("short bullet points, not long paragraphs", text)
-        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        history = "\n".join(p.read_text(encoding="utf-8") for p in (self.root / "operator/profile").rglob("*") if p.is_file())
         self.assertIn('user said: \\"give me answers as short paragraphs instead of bullet points\\"', history)
         self.assertIn("claude-code:user", history)
 
     def test_capture_keeps_the_quote_in_the_provenance_reason(self):
         self.seed_bullets()
-        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        history = "\n".join(p.read_text(encoding="utf-8") for p in (self.root / "operator/profile").rglob("*") if p.is_file())
         self.assertIn('user said: \\"prefer answers as short bullet points\\"', history)
 
     def test_repeating_the_same_correction_creates_no_duplicate(self):
@@ -1029,7 +1029,7 @@ class ProfileCorrectionTests(ClaudeFixture):
             calls.append(1)
             if len(calls) == 1:
                 path = self.root / "operator/profile/preferences.md"
-                path.write_text(path.read_text() + "\n<!-- edited by someone else -->\n")
+                path.write_text(path.read_text(encoding="utf-8") + "\n<!-- edited by someone else -->\n", encoding="utf-8")
         first, second = self.inprocess_owner(touch)
         with first, second:
             self.turn_and_review(
@@ -1047,7 +1047,7 @@ class ProfileCorrectionTests(ClaudeFixture):
 
         def touch():
             path = self.root / "operator/profile/preferences.md"
-            path.write_text(path.read_text() + "\n<!-- again -->\n")
+            path.write_text(path.read_text(encoding="utf-8") + "\n<!-- again -->\n", encoding="utf-8")
         first, second = self.inprocess_owner(touch)
         with first, second:
             receipt = self.turn_and_review(
@@ -1092,7 +1092,7 @@ class ProfileCorrectionTests(ClaudeFixture):
                                        candidate, session="codex-session-0009", turn_id="turn-codex-1")
         self.assertIn(receipt["effects"][0]["result"]["result"]["operator_profile"]["state"], {"evolved", "created"})
         self.assertIn("short paragraphs", self.preferences())
-        history = "\n".join(p.read_text() for p in (self.root / "operator/profile").rglob("*") if p.is_file())
+        history = "\n".join(p.read_text(encoding="utf-8") for p in (self.root / "operator/profile").rglob("*") if p.is_file())
         self.assertIn("codex-desktop:user", history)
         self.assertIn('user said: \\"give me answers as short paragraphs', history)
 

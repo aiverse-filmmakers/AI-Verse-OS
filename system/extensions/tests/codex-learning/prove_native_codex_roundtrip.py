@@ -24,7 +24,7 @@ from native_pending_proof import durable_prompt, kill_before_reply, verify_copie
 def approve_fixture(binary, root, env):
     process = subprocess.Popen([binary, '-c', 'features.codex_hooks=true', 'app-server'],
         cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, text=True, bufsize=1)
+        stderr=subprocess.DEVNULL, text=True, bufsize=1, encoding="utf-8")
     messages = queue.Queue()
     def pump():
         for line in process.stdout:
@@ -87,7 +87,7 @@ def main():
         settings = definition(root, sys.executable,
             build=hashlib.sha256((PACKAGE / 'bridge.py').read_bytes()).hexdigest())
         (root / '.codex').mkdir()
-        (root / '.codex/hooks.json').write_text(json.dumps(settings))
+        (root / '.codex/hooks.json').write_text(json.dumps(settings), encoding="utf-8")
         home = base / 'home'
         codex_home = base / 'codex'
         home.mkdir()
@@ -110,11 +110,11 @@ def main():
             '-c', 'model_providers.proof.wire_api="responses"',
             '-c', 'model_providers.proof.requires_openai_auth=false', 'portable-native-proof-prompt']
         try:
-            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8")
             if result.returncode:
                 raise SystemExit('first native fixture turn failed')
             resumed = [command[0], 'exec', 'resume', '--last', *command[2:]]
-            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8")
             if result.returncode:
                 raise SystemExit('resumed native conversation failed')
             crash_prompt = 'durable prompt before killed native reply café 🧪'
@@ -127,9 +127,9 @@ def main():
         files = list((root / 'archives/private-chat-history/v1').rglob('*.jsonl'))
         if len(files) != 1:
             for file in (root / 'runtime').rglob('events.jsonl'):
-                print(file.read_text()[-5000:])
+                print(file.read_text(encoding="utf-8")[-5000:])
             raise SystemExit('native Codex hook capture did not produce one archive')
-        messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
+        messages = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()][1:]
         assert [m['text'] for m in messages[:4]] == ['portable-native-proof-prompt','portable-native-proof-reply'] * 2
         assert len(messages) in {4, 5}
         if len(messages) == 5:

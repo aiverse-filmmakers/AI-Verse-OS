@@ -36,19 +36,19 @@ def fixture():
                     ignore=shutil.ignore_patterns("__pycache__", "hooks.json"))
     for path in ["operator/context", "operator/profile", "operator/memory", "operator/inbox", "runtime"]:
         (root / path).mkdir(parents=True, exist_ok=True)
-    (root / "operator/profile/preferences.md").write_text("# Preferences\n\nUse brief evidence-based answers.\n")
-    (root / "operator/context/CURRENT.md").write_text("# Context\n\n## Current state\n\n- Operator fixture only.\n")
+    (root / "operator/profile/preferences.md").write_text("# Preferences\n\nUse brief evidence-based answers.\n", encoding="utf-8")
+    (root / "operator/context/CURRENT.md").write_text("# Context\n\n## Current state\n\n- Operator fixture only.\n", encoding="utf-8")
     for workspace in ["alpha", "beta"]:
         directory = root / "workspaces" / workspace
         (directory / "context").mkdir(parents=True)
         (directory / "WORKSPACE.yaml").write_text(
-            f'schema_version: "2.0"\nid: {workspace}\nname: "{workspace.title()} Study"\nstatus: active\n')
-        (directory / "context/CURRENT.md").write_text(f"## Current state\n\n- {workspace.upper()} PRIVATE FIXTURE.\n")
+            f'schema_version: "2.0"\nid: {workspace}\nname: "{workspace.title()} Study"\nstatus: active\n', encoding="utf-8")
+        (directory / "context/CURRENT.md").write_text(f"## Current state\n\n- {workspace.upper()} PRIVATE FIXTURE.\n", encoding="utf-8")
     registry = {"schema_version": "1.0", "extensions": {
         ID: {"id": ID, "supported": True, "installed": True, "enabled": True},
         "ai-verse-memory": {"id": "ai-verse-memory", "supported": True, "installed": True,
                             "enabled": True, "engine": "scripts/ai-verse-memory/memory.py"}}}
-    (root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry))
+    (root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry), encoding="utf-8")
     memory = load_module(root / "scripts/ai-verse-memory/memory.py", "_qc_memory_fixture")
     memory.ensure_layout(root, memory.MODE_NATIVE)
     memory.rebuild(silent=True, root=root, mode=memory.MODE_NATIVE)
@@ -58,7 +58,7 @@ def fixture():
     config = {"schema_version": 1, "enabled": True, "review_mode": "all",
               "runtime_path": os.path.dirname(shutil.which("node")),
               "skills_root": str(root / "skills")}
-    (root / ".aiverse/extensions" / ID / "config.json").write_text(json.dumps(config))
+    (root / ".aiverse/extensions" / ID / "config.json").write_text(json.dumps(config), encoding="utf-8")
     return temporary, root
 
 
@@ -214,7 +214,7 @@ class AdapterTests(unittest.TestCase):
         return candidate
 
     def saved_memory_text(self):
-        return "".join(path.read_text() for path in (self.root / "operator/memory/atomic").rglob("*.md"))
+        return "".join(path.read_text(encoding="utf-8") for path in (self.root / "operator/memory/atomic").rglob("*.md"))
 
     def test_web_quote_is_saved_as_unconfirmed_memory(self):
         self.start()
@@ -276,8 +276,8 @@ class AdapterTests(unittest.TestCase):
             "query": "validated filter twelve correct records", "max_bytes": 8192, "limit": 4})
         self.assertIn("filter", json.dumps(rows))
         files = list((self.root / "operator/memory").rglob("*.md"))
-        self.assertTrue(any("codex-hook-v1" in f.read_text() for f in files))
-        self.assertFalse(any("gateway:" in f.read_text() for f in files))
+        self.assertTrue(any("codex-hook-v1" in f.read_text(encoding="utf-8") for f in files))
+        self.assertFalse(any("gateway:" in f.read_text(encoding="utf-8") for f in files))
 
     def test_profile_owner_write_and_fresh_session_recall(self):
         self.start("Always use short bullet points for my future answers.")
@@ -304,7 +304,7 @@ class AdapterTests(unittest.TestCase):
             "evidence": [{"source_id": "user", "quote": statement}]}
         receipt = self.review(self.payload([candidate]))
         self.assertTrue(receipt["effects"][0]["result"]["effect_occurred"])
-        self.assertIn(statement, (self.root / "operator/profile/identity.md").read_text())
+        self.assertIn(statement, (self.root / "operator/profile/identity.md").read_text(encoding="utf-8"))
         self.assertEqual(list((self.root / "operator/inbox").glob("write-candidate-*.json")), [])
         self.assertTrue(self.review(self.payload([candidate]))["replayed"])
         response = self.bridge.hook(self.event("UserPromptSubmit", session_id="fresh-profile-session",
@@ -330,16 +330,16 @@ class AdapterTests(unittest.TestCase):
         result = self.review(self.payload([candidate]))
         self.assertEqual(result["effects"][0]["result"]["state"], "updated")
         file = self.root / "operator/context/CURRENT.md"
-        self.assertIn("Operator fixture only", file.read_text())
-        self.assertIn("Validation stage complete", file.read_text())
+        self.assertIn("Operator fixture only", file.read_text(encoding="utf-8"))
+        self.assertIn("Validation stage complete", file.read_text(encoding="utf-8"))
 
     def test_brain_strategy_is_not_reinjected_and_preserved_on_write(self):
         ownership = self.root / ".aiverse/direction/ownership.json"
         ownership.parent.mkdir(parents=True)
         ownership.write_text(json.dumps({"schema_version": 1, "scopes": {"operator": {
-            "owner": "brain", "state": "active", "handover_id": "qc-handover", "brain_refs": []}}}))
+            "owner": "brain", "state": "active", "handover_id": "qc-handover", "brain_refs": []}}}), encoding="utf-8")
         file = self.root / "operator/context/CURRENT.md"
-        file.write_text("## Current priorities\n\nFROZEN STRATEGY\n\n## Current state\n\nOperational item.\n")
+        file.write_text("## Current priorities\n\nFROZEN STRATEGY\n\n## Current state\n\nOperational item.\n", encoding="utf-8")
         response = self.start("The operational item is completed now.")
         self.assertNotIn("FROZEN STRATEGY", response["hookSpecificOutput"]["additionalContext"])
         snapshot = self.bridge.current_snapshot("operator")
@@ -348,8 +348,8 @@ class AdapterTests(unittest.TestCase):
             "expected_sha256": snapshot["source_sha256"], "admission": CURRENT_ADMISSION},
             "evidence": [{"source_id": "user", "quote": "operational item is completed now."}]}
         self.review(self.payload([candidate]))
-        self.assertIn("FROZEN STRATEGY", file.read_text())
-        self.assertIn("Operational item complete", file.read_text())
+        self.assertIn("FROZEN STRATEGY", file.read_text(encoding="utf-8"))
+        self.assertIn("Operational item complete", file.read_text(encoding="utf-8"))
 
     def test_all_candidates_validated_before_any_write(self):
         self.start()
@@ -362,7 +362,7 @@ class AdapterTests(unittest.TestCase):
     def test_secret_payloads_and_proofs(self):
         secret = "password is super-secret-123"
         self.start("Never retain " + secret)
-        raw = self.bridge.session_path(self.session).read_text()
+        raw = self.bridge.session_path(self.session).read_text(encoding="utf-8")
         self.assertNotIn(secret, raw)
         payload = self.payload()
         payload["summary"] = secret
@@ -457,26 +457,26 @@ class AdapterTests(unittest.TestCase):
 
     def test_installer_preserves_unknown_registry_and_other_hooks(self):
         file = self.root / ".aiverse/extensions/registry.json"
-        registry = json.loads(file.read_text())
+        registry = json.loads(file.read_text(encoding="utf-8"))
         registry["extensions"]["unrelated"] = {"untouched": "exact value"}
-        file.write_text(json.dumps(registry))
+        file.write_text(json.dumps(registry), encoding="utf-8")
         hooks = self.root / ".codex/hooks.json"
         hooks.parent.mkdir()
         foreign = {"type": "command", "command": "echo unrelated"}
-        hooks.write_text(json.dumps({"description": "existing metadata", "hooks": {"Stop": [{"hooks": [foreign]}]}}))
+        hooks.write_text(json.dumps({"description": "existing metadata", "hooks": {"Stop": [{"hooks": [foreign]}]}}), encoding="utf-8")
         script = self.root / ".aiverse/extensions" / ID / "lifecycle.py"
         for command in ["install", "install", "remove"]:
             process = subprocess.run([sys.executable, str(script), "--root", str(self.root), command],
-                                     capture_output=True, text=True)
+                                     capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(process.returncode, 0, process.stderr)
-        self.assertEqual(json.loads(file.read_text())["extensions"]["unrelated"], {"untouched": "exact value"})
-        self.assertEqual(json.loads(hooks.read_text())["hooks"]["Stop"], [{"hooks": [foreign]}])
+        self.assertEqual(json.loads(file.read_text(encoding="utf-8"))["extensions"]["unrelated"], {"untouched": "exact value"})
+        self.assertEqual(json.loads(hooks.read_text(encoding="utf-8"))["hooks"]["Stop"], [{"hooks": [foreign]}])
 
     def test_script_integrity_bound_in_hook_definition(self):
         config = definition(self.root, sys.executable)
         command = config["hooks"]["Stop"][0]["hooks"][0]["command"]
         self.assertIn("--build", command)
-        actual = digest((self.root / ".aiverse/extensions" / ID / "bridge.py").read_text())
+        actual = digest((self.root / ".aiverse/extensions" / ID / "bridge.py").read_text(encoding="utf-8"))
         self.assertIn(actual, command)
 
     def test_proof_requires_contiguous_exact_quote(self):
@@ -488,9 +488,9 @@ class AdapterTests(unittest.TestCase):
     def test_missing_owner_defers_to_os_inbox(self):
         self.start()
         file = self.root / ".aiverse/extensions/registry.json"
-        registry = json.loads(file.read_text())
+        registry = json.loads(file.read_text(encoding="utf-8"))
         registry["extensions"]["ai-verse-memory"]["enabled"] = False
-        file.write_text(json.dumps(registry))
+        file.write_text(json.dumps(registry), encoding="utf-8")
         result = self.review(self.payload([self.candidate()]))
         effect = result["effects"][0]
         self.assertEqual(effect["state"], "owner_unavailable")
@@ -502,14 +502,14 @@ class AdapterTests(unittest.TestCase):
         self.start("The validation stage is now complete.")
         version = self.bridge.current_snapshot("operator")["source_sha256"]
         file = self.root / "operator/context/CURRENT.md"
-        file.write_text("## Current state\n\nA newer human edit.\n")
+        file.write_text("## Current state\n\nA newer human edit.\n", encoding="utf-8")
         candidate = {"route": "current", "parameters": {
             "heading": "Current state", "text": "Validation stage complete.", "old_text": "",
             "expected_sha256": version, "admission": CURRENT_ADMISSION},
             "evidence": [{"source_id": "user", "quote": "validation stage is now complete."}]}
         effect = self.review(self.payload([candidate]))["effects"][0]
         self.assertEqual(effect["state"], "owner_unavailable")
-        self.assertEqual(file.read_text(), "## Current state\n\nA newer human edit.\n")
+        self.assertEqual(file.read_text(encoding="utf-8"), "## Current state\n\nA newer human edit.\n")
 
     def test_next_prompt_invalidates_old_review(self):
         self.start()
@@ -569,7 +569,7 @@ class AdapterTests(unittest.TestCase):
         if configured_entrypoint:
             entrypoint = Path(configured_entrypoint)
         elif (EXT / "config.json").is_file():
-            actual_config = json.loads((EXT / "config.json").read_text())
+            actual_config = json.loads((EXT / "config.json").read_text(encoding="utf-8"))
             entrypoint = Path(actual_config["skills_entrypoint"])
         else:
             self.skipTest("needs an AI-Verse-Skills checkout: set AIVERSE_TEST_SKILLS_ENTRYPOINT "
@@ -595,14 +595,14 @@ class AdapterTests(unittest.TestCase):
         skills.activate_generation(provider, generation)
         skills.setup_component(provider)
         config_file = self.root / ".aiverse/extensions" / ID / "config.json"
-        config = json.loads(config_file.read_text())
+        config = json.loads(config_file.read_text(encoding="utf-8"))
         config["skills_entrypoint"] = str(entrypoint)
-        config_file.write_text(json.dumps(config))
+        config_file.write_text(json.dumps(config), encoding="utf-8")
         registry_file = self.root / ".aiverse/extensions/registry.json"
-        registry = json.loads(registry_file.read_text())
+        registry = json.loads(registry_file.read_text(encoding="utf-8"))
         registry["extensions"]["ai-verse-brain"] = {
             "id": "ai-verse-brain", "supported": True, "installed": True, "enabled": True}
-        registry_file.write_text(json.dumps(registry))
+        registry_file.write_text(json.dumps(registry), encoding="utf-8")
         self.bridge = Bridge(self.root)
         self.start("workspace:alpha completed the verified review procedure.")
         self.bridge.hook(self.event("PostToolUse", tool_use_id="verified", tool_response={
@@ -645,7 +645,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(exact["status"], "ok")
         self.assertTrue(exact["exact_evidence"])
         file = self.root / item["evidence"]["path"]
-        file.write_text(file.read_text() + "\nSource changed after retrieval.\n")
+        file.write_text(file.read_text(encoding="utf-8") + "\nSource changed after retrieval.\n", encoding="utf-8")
         stale = self.bridge.owner("retrieve_history_progressive", request)
         self.assertEqual(stale["status"], "stale")
         self.assertFalse(stale["exact_evidence"])
@@ -723,7 +723,7 @@ class AdapterTests(unittest.TestCase):
         item = next(x for x in detail["items"] if x["id"] == identity)
         process = subprocess.run([sys.executable, str(EXT / "bridge.py"), "--root", str(self.root), "query",
             "--session", self.session, "--kind", "memory", "--depth", "source"],
-            input=json.dumps(item), text=True, capture_output=True, env=self.bridge.env)
+            input=json.dumps(item), text=True, capture_output=True, env=self.bridge.env, encoding="utf-8")
         self.assertEqual(process.returncode, 0, process.stdout)
         self.assertTrue(json.loads(process.stdout)["exact_evidence"])
 
@@ -732,7 +732,7 @@ class AdapterTests(unittest.TestCase):
         self.bridge.hook(self.event("PostToolUse", tool_use_id="actual", tool_response={"exit_code": 0, "output": "Unique observed validation succeeded."}))
         process = subprocess.run([sys.executable, str(EXT / "bridge.py"), "--root", str(self.root), "sources",
             "--session", self.session, "--match", "--source-kind", "tool"],
-            input="Unique observed validation succeeded.", text=True, capture_output=True, env=self.bridge.env)
+            input="Unique observed validation succeeded.", text=True, capture_output=True, env=self.bridge.env, encoding="utf-8")
         self.assertEqual(process.returncode, 0)
         self.assertEqual([s["source_id"] for s in json.loads(process.stdout)["sources"]], ["tool:actual"])
         self.assertNotIn("Unique observed validation", process.stdout)
@@ -815,22 +815,22 @@ class AdapterTests(unittest.TestCase):
             options = {"python": sys.executable, "node": shutil.which("node")}
             receipt = installer.install(self.root, options)
             self.assertFalse(receipt["trust_modified"])
-            config = json.loads((self.root / ".aiverse/extensions" / ID / "config.json").read_text())
+            config = json.loads((self.root / ".aiverse/extensions" / ID / "config.json").read_text(encoding="utf-8"))
             self.assertEqual(config["review_mode"], "off")
             self.assertIsNone(config["skills_root"])
             hooks = self.root / ".codex/hooks.json"
-            value = json.loads(hooks.read_text())
+            value = json.loads(hooks.read_text(encoding="utf-8"))
             value["hooks"]["Stop"][0]["hooks"].append({"type": "command", "command": "echo user-owned"})
-            hooks.write_text(json.dumps(value))
+            hooks.write_text(json.dumps(value), encoding="utf-8")
             installer.install(self.root, options)
-            self.assertIn("echo user-owned", hooks.read_text())
+            self.assertIn("echo user-owned", hooks.read_text(encoding="utf-8"))
             preserved = hooks.read_bytes()
             modified = json.loads(preserved)
             for group in modified["hooks"]["Stop"]:
                 for handler in group["hooks"]:
                     if "/bridge.py" in handler.get("command", ""):
                         handler["timeout"] = 99
-            hooks.write_text(json.dumps(modified))
+            hooks.write_text(json.dumps(modified), encoding="utf-8")
             with self.assertRaises(ValueError):
                 installer.install(self.root, options)
             hooks.write_bytes(preserved)
@@ -838,7 +838,7 @@ class AdapterTests(unittest.TestCase):
             try:
                 shutil.copytree(self.root, moved)
                 installer.install(moved, options)
-                moved_hooks = json.loads((moved / ".codex/hooks.json").read_text())
+                moved_hooks = json.loads((moved / ".codex/hooks.json").read_text(encoding="utf-8"))
                 commands = [h["command"] for groups in moved_hooks["hooks"].values() for g in groups for h in g["hooks"]]
                 self.assertEqual(sum(str(moved) in command for command in commands), 6)
                 import shlex
@@ -846,7 +846,7 @@ class AdapterTests(unittest.TestCase):
             finally:
                 shutil.rmtree(moved, ignore_errors=True)
             bridge = self.root / ".aiverse/extensions" / ID / "bridge.py"
-            bridge.write_text(bridge.read_text() + "\n# local change\n")
+            bridge.write_text(bridge.read_text(encoding="utf-8") + "\n# local change\n", encoding="utf-8")
             before = hooks.read_bytes()
             with self.assertRaises(ValueError):
                 installer.install(self.root, options)
@@ -872,7 +872,7 @@ class AdapterTests(unittest.TestCase):
             original_registry = registry.read_bytes()
             value = json.loads(original_hooks)
             value["hooks"]["Stop"][0]["hooks"][0]["timeout"] = 99
-            hooks.write_text(json.dumps(value))
+            hooks.write_text(json.dumps(value), encoding="utf-8")
             modified_hooks = hooks.read_bytes()
             with self.assertRaises(ValueError):
                 installer.remove(self.root)
@@ -898,10 +898,10 @@ class AdapterTests(unittest.TestCase):
 
             value = json.loads(original_hooks)
             value["hooks"]["Stop"][0]["hooks"].append({"type": "command", "command": "echo user-owned"})
-            hooks.write_text(json.dumps(value))
+            hooks.write_text(json.dumps(value), encoding="utf-8")
             installer.remove(self.root)
-            result_hooks = json.loads(hooks.read_text())
-            result_registry = json.loads(registry.read_text())
+            result_hooks = json.loads(hooks.read_text(encoding="utf-8"))
+            result_registry = json.loads(registry.read_text(encoding="utf-8"))
             self.assertEqual(result_hooks["hooks"]["Stop"][0]["hooks"],
                              [{"type": "command", "command": "echo user-owned"}])
             self.assertFalse(result_registry["extensions"][ID]["installed"])
@@ -932,7 +932,7 @@ class AdapterTests(unittest.TestCase):
             shutil.rmtree(target)
             hooks = self.root / ".codex/hooks.json"
             hooks.parent.mkdir(parents=True, exist_ok=True)
-            hooks.write_text(json.dumps({"hooks": {}}))
+            hooks.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
             registry = self.root / ".aiverse/extensions/registry.json"
             hooks_before = hooks.read_bytes()
             registry_before = registry.read_bytes()
@@ -949,7 +949,7 @@ class AdapterTests(unittest.TestCase):
 
             receipt = installer.install(self.root, options)
             self.assertTrue(receipt["installed"])
-            self.assertEqual(json.loads(hooks.read_text())["hooks"].keys(), {"UserPromptSubmit", "SessionStart", "PostToolUse", "Stop", "Interrupt", "SessionEnd"})
+            self.assertEqual(json.loads(hooks.read_text(encoding="utf-8"))["hooks"].keys(), {"UserPromptSubmit", "SessionStart", "PostToolUse", "Stop", "Interrupt", "SessionEnd"})
             self.assertEqual((self.root / "operator/context/CURRENT.md").read_bytes(), context_before)
         finally:
             installer.SOURCE = source

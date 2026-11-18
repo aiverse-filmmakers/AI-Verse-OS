@@ -26,7 +26,7 @@ from aiverse_brain.tick_output import build_tick_summary
 
 
 def run(command):
-    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    result = subprocess.run(command, text=True, capture_output=True, check=False, encoding="utf-8")
     if result.returncode != 0:
         raise AssertionError(
             f"command failed ({result.returncode}): {command!r}\n"

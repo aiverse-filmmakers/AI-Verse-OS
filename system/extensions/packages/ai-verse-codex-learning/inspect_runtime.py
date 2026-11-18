@@ -20,9 +20,9 @@ def inspect(root, config=None, proxy=False, codex=None):
             command += ["-c", value]
     stderr = Path(root) / "runtime/reports/codex-learning/runtime-inspect.stderr"
     stderr.parent.mkdir(parents=True, exist_ok=True)
-    with stderr.open("w") as errors:
+    with stderr.open("w", encoding="utf-8") as errors:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=errors, text=True, bufsize=1, cwd=root)
+                                   stderr=errors, text=True, bufsize=1, cwd=root, encoding="utf-8")
         selection = selectors.DefaultSelector()
         selection.register(process.stdout, selectors.EVENT_READ)
         def request(identity, method, params):
@@ -74,7 +74,7 @@ if __name__ == "__main__":
             subprocess.run(["git", "init", "--quiet", str(root)], check=True)
             subprocess.run([sys.executable, str(root / ".aiverse/extensions" / ID / "lifecycle.py"),
                             "--root", str(root), "install"], stdout=subprocess.DEVNULL, check=True)
-            (root / ".codex/config.toml").write_text("# Local hook configuration layer.\n")
+            (root / ".codex/config.toml").write_text("# Local hook configuration layer.\n", encoding="utf-8")
             print(json.dumps(inspect(root, ['projects."' + str(root) + '".trust_level="trusted"']), indent=2))
         finally:
             temporary.cleanup()

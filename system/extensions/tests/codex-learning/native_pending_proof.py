@@ -16,7 +16,7 @@ def durable_prompt(root, prompt):
         if any(row['text'] == prompt for row in page['messages']):
             return True
     for path in (root / 'archives/private-chat-history/v1').rglob('*.jsonl'):
-        for line in path.read_text().splitlines()[1:]:
+        for line in path.read_text(encoding="utf-8").splitlines()[1:]:
             row = json.loads(line)
             if row.get('role') == 'user' and row.get('text') == prompt:
                 return True
@@ -31,7 +31,7 @@ def kill_before_reply(command, root, env, server, prompt):
         release.wait(90)
     server.before_model = hold_response
     process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True, start_new_session=True)
+                               stderr=subprocess.PIPE, text=True, start_new_session=True, encoding="utf-8")
     try:
         assert arrived.wait(60), 'native resumed process must reach a real model request'
         assert server.crash_prompt_durable, 'submitted prompt must be durable before reply or process death'

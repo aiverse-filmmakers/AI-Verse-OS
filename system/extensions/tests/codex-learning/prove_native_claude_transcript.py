@@ -17,7 +17,7 @@ env.update(HOME=str(root / 'home'), CLAUDE_CONFIG_DIR=str(root / 'config'), ANTH
 launcher = [sys.argv[1]]
 if pathlib.Path(sys.argv[1]).resolve().suffix in {'.js', '.mjs', '.cjs'}:
     launcher.insert(0, 'node')
-r = subprocess.run(launcher + ['-p', '--verbose', '--output-format', 'stream-json', '--model', 'claude-sonnet-4-5', '--session-id', str(uuid.uuid4()), 'portable-claude-proof-prompt'], cwd=root / 'workspace', env=env, capture_output=True, text=True, timeout=90)
+r = subprocess.run(launcher + ['-p', '--verbose', '--output-format', 'stream-json', '--model', 'claude-sonnet-4-5', '--session-id', str(uuid.uuid4()), 'portable-claude-proof-prompt'], cwd=root / 'workspace', env=env, capture_output=True, text=True, timeout=90, encoding="utf-8")
 server.shutdown()
 if r.returncode != 0:
     raise SystemExit('native Claude synthetic turn failed')

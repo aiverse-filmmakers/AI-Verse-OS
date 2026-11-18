@@ -29,7 +29,7 @@ class DestinationTests(unittest.TestCase):
             with self.subTest(harness=harness):
                 scenario = Scenario(self, harness)
                 manifest = scenario.root / "workspaces/beta/WORKSPACE.yaml"
-                manifest.write_text(manifest.read_text() + 'aliases:\n  - "Skoolish"\n')
+                manifest.write_text(manifest.read_text(encoding="utf-8") + 'aliases:\n  - "Skoolish"\n', encoding="utf-8")
                 body(scenario)
 
     def review(self, sc, *candidates, persist=False):
@@ -50,7 +50,7 @@ class DestinationTests(unittest.TestCase):
             self.assertEqual([e["scope"] for e in receipt["effects"]], ["workspace:beta", "operator"])
             self.assertEqual(len(self.files(sc, "workspaces/beta")), 1)
             self.assertEqual(len(self.files(sc, "operator/memory")), 0)
-            self.assertIn("filmmaker based in Romania", (sc.root / "operator/profile/identity.md").read_text())
+            self.assertIn("filmmaker based in Romania", (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8"))
             self.assertTrue(receipt["digest_skipped_mixed"] is False)
         self.each(body)
 
@@ -72,7 +72,7 @@ class DestinationTests(unittest.TestCase):
     def test_an_ambiguous_name_asks_and_writes_nothing(self):
         def body(sc):
             manifest = sc.root / "workspaces/alpha/WORKSPACE.yaml"
-            manifest.write_text(manifest.read_text() + 'aliases:\n  - "Skoolish"\n')
+            manifest.write_text(manifest.read_text(encoding="utf-8") + 'aliases:\n  - "Skoolish"\n', encoding="utf-8")
             text = sc.prompt("Skoolish passed the milestone this morning.")
             turn = sc.turn()
             self.assertEqual(turn["allowed"], ["operator"])
@@ -133,7 +133,7 @@ class DestinationTests(unittest.TestCase):
             admitted = dict(fact, general_fact={"stated_by_operator_about_self": True, "contains_project_figures": False})
             receipt = self.review(sc, admitted)
             self.assertEqual(receipt["effects"][0]["scope"], "operator")
-            self.assertIn("morning person", (sc.root / "operator/profile/identity.md").read_text())
+            self.assertIn("morning person", (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8"))
         self.each(body)
 
     def test_a_general_fact_with_figures_or_project_text_is_refused(self):

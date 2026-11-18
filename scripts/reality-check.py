@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 HERE = ROOT / ".aiverse" / "reality-check"
 EXT = ROOT / ".aiverse/extensions/ai-verse-codex-learning"
 MEMORY = ROOT / "scripts/ai-verse-memory/memory.py"
-SETTINGS = json.loads((HERE / "settings.json").read_text()) if (HERE / "settings.json").exists() else {}
+SETTINGS = json.loads((HERE / "settings.json").read_text(encoding="utf-8")) if (HERE / "settings.json").exists() else {}
 NOW = datetime.now(timezone.utc)
 results = []
 
@@ -44,7 +44,7 @@ def events(days):
     since = (NOW - timedelta(days=days)).isoformat()
     rows = []
     if path.exists():
-        for line in path.read_text(errors="ignore").splitlines():
+        for line in path.read_text(errors="ignore", encoding="utf-8").splitlines():
             try:
                 row = json.loads(line)
             except ValueError:
@@ -61,7 +61,7 @@ if bridge.exists():
     for app, file in (("Claude Code", ROOT / ".claude/settings.local.json"), ("Codex", ROOT / ".codex/hooks.json")):
         if not file.exists():
             continue
-        stamps = set(re.findall(r"--build['\"]?\s+['\"]?([0-9a-f]{64})", file.read_text()))
+        stamps = set(re.findall(r"--build['\"]?\s+['\"]?([0-9a-f]{64})", file.read_text(encoding="utf-8")))
         check(stamps == {build}, f"{app} helpers can run",
               "the safety stamp matches" if stamps == {build} else "the safety stamp does not match, so the helpers refuse to run",
               "" if stamps == {build} else "Ask your assistant to reinstall the AI-Verse helpers for this project.")
@@ -98,7 +98,7 @@ check(archive_ok, "Original chats are saved locally",
       "" if archive_ok else "If you want it, ask your assistant to turn on private chat saving for this OS.")
 
 # 5. Every memory has search words.
-out = subprocess.run([sys.executable, str(MEMORY), "search-hooks", "--list"], capture_output=True, text=True, cwd=ROOT)
+out = subprocess.run([sys.executable, str(MEMORY), "search-hooks", "--list"], capture_output=True, text=True, cwd=ROOT, encoding="utf-8")
 if out.returncode == 0:
     missing = len([line for line in out.stdout.splitlines() if line.strip()])
     check(missing == 0, "Every memory has search words", f"{missing} without",
@@ -107,16 +107,16 @@ if out.returncode == 0:
 # 6. Memory search has not got worse.
 run = ROOT / "scripts/ai-verse-memory/recall-eval/run.py"
 if run.exists():
-    out = subprocess.run([sys.executable, str(run), "--quiet"], capture_output=True, text=True, cwd=ROOT)
+    out = subprocess.run([sys.executable, str(run), "--quiet"], capture_output=True, text=True, cwd=ROOT, encoding="utf-8")
     found = re.search(r"hit@5: (\d+)/(\d+)", out.stdout)
     if found:
         score = int(found.group(1))
         base_file = HERE / "baseline.json"
-        best = json.loads(base_file.read_text()).get("recall", score) if base_file.exists() else score
+        best = json.loads(base_file.read_text(encoding="utf-8")).get("recall", score) if base_file.exists() else score
         check(score >= best - 1, "Memory search is as good as before", f"{score}/{found.group(2)} (best so far {best})",
               "" if score >= best - 1 else "Something made memory search worse. Ask your assistant to look into it.")
         HERE.mkdir(parents=True, exist_ok=True)
-        base_file.write_text(json.dumps({"recall": max(score, best)}))
+        base_file.write_text(json.dumps({"recall": max(score, best)}), encoding="utf-8")
 
 # 7. Changes a reinstall or update would not keep.
 package = ROOT / "system/extensions/packages/ai-verse-codex-learning"
@@ -126,7 +126,7 @@ if package.exists() and EXT.exists():
           "they match" if not differ else "differ: " + ", ".join(sorted(differ)),
           "" if not differ else "Normal after an OS update until the helpers are refreshed; otherwise these are local edits.")
 _git = resolve_tool("git")
-status = subprocess.run([_git, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT) if _git else None
+status = subprocess.run([_git, "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, cwd=ROOT, encoding="utf-8") if _git else None
 edited = [line[3:] for line in status.stdout.splitlines() if line.strip()] if status else []
 check(not edited, "No unsaved edits to AI-Verse's own files",
       "none" if not edited else f"{len(edited)} edited: " + ", ".join(edited[:5]),

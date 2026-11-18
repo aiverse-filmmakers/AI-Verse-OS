@@ -15,7 +15,7 @@ from intent import IntentService
 class IntentTests(unittest.TestCase):
     def setUp(self):
         self.temp, self.root = fixture()
-        registry = json.loads((self.root/'.aiverse/extensions/registry.json').read_text())
+        registry = json.loads((self.root/'.aiverse/extensions/registry.json').read_text(encoding="utf-8"))
         registry['extensions']['ai-verse-brain'] = {'supported':True,'installed':True,'enabled':True}
         atomic_json(self.root/'.aiverse/extensions/registry.json',registry,self.root)
         from aiverse_brain.installation import initialize
@@ -103,20 +103,20 @@ class IntentTests(unittest.TestCase):
     def test_heading_alias_handover_and_frozen_sources(self):
         file=self.root/'operator/context/CURRENT.md'
         original='# Context\n\n## Current priority\n\n- Build a durable research practice.\n\n## Current facts\n\n- Available on weekdays.\n'
-        file.write_text(original)
+        file.write_text(original, encoding="utf-8")
         plan=self.service.plan('operator')
         self.assertEqual(len(plan['import_candidates']),1)
         self.handover()
-        self.assertEqual(file.read_text(),original)
+        self.assertEqual(file.read_text(encoding="utf-8"),original)
         self.assertEqual(self.service.snapshot('operator')['direction_owner'],'brain')
         self.assertEqual(self.service.snapshot('operator')['strategic_objects']['intents'][0]['payload']['statement'],'Build a durable research practice.')
-        result=subprocess.run(['node',str(self.root/'scripts/current-context.mjs'),'read','--root',str(self.root),'--scope','operator'],capture_output=True,text=True,check=True)
+        result=subprocess.run(['node',str(self.root/'scripts/current-context.mjs'),'read','--root',str(self.root),'--scope','operator'],capture_output=True,text=True,check=True, encoding="utf-8")
         self.assertNotIn('Build a durable research practice',json.loads(result.stdout)['current_context'])
 
     def test_import_confirmation_and_fingerprint(self):
         plan=self.service.plan('operator')
         with self.assertRaises(ValueError): self.service.handover('operator',plan['fingerprint'],False)
-        (self.root/'operator/context/CURRENT.md').write_text('## Current priority\n\n- Changed priority.\n')
+        (self.root/'operator/context/CURRENT.md').write_text('## Current priority\n\n- Changed priority.\n', encoding="utf-8")
         with self.assertRaises(ValueError): self.service.handover('operator',plan['fingerprint'],True)
         self.assertEqual(self.service.ownership.owner('operator'),'os')
 
@@ -191,10 +191,10 @@ class IntentTests(unittest.TestCase):
         with self.assertRaises(Refused): self.bridge.intent('capture','operator',data,session,turn['id'],turn['token'])
 
     def test_offline_and_routine_do_not_restore_os_strategy(self):
-        (self.root/'operator/context/CURRENT.md').write_text('## Current priority\n\n- Old strategic text.\n')
+        (self.root/'operator/context/CURRENT.md').write_text('## Current priority\n\n- Old strategic text.\n', encoding="utf-8")
         self.handover()
         self.assertEqual(self.service.relevant('operator','hey')['state'],'skipped-routine')
-        reg=json.loads((self.root/'.aiverse/extensions/registry.json').read_text())
+        reg=json.loads((self.root/'.aiverse/extensions/registry.json').read_text(encoding="utf-8"))
         reg['extensions']['ai-verse-brain']['enabled']=False
         atomic_json(self.root/'.aiverse/extensions/registry.json',reg,self.root)
         _,_,out=self.start('Which overall priority should guide this substantial task?')
@@ -212,7 +212,7 @@ class IntentTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.service.capture('operator',{**data,'statement':'Different target.'},'fixture:user','same-op')
 
     def test_intent_helper_tamper_fails_closed(self):
-        (self.root/'.aiverse/extensions'/ID/'intent.py').write_text('# replaced')
+        (self.root/'.aiverse/extensions'/ID/'intent.py').write_text('# replaced', encoding="utf-8")
         with self.assertRaises(Refused): self.bridge.intent_service()
 
     def test_public_purpose_reader_uses_brain_owner(self):
@@ -220,10 +220,10 @@ class IntentTests(unittest.TestCase):
         self.capture('My overall goal is a durable research practice.')
         config=self.root/'.aiverse/brain-purpose.json'
         atomic_json(config,{'python':sys.executable},self.root)
-        registry=json.loads((self.root/'.aiverse/extensions/registry.json').read_text())
+        registry=json.loads((self.root/'.aiverse/extensions/registry.json').read_text(encoding="utf-8"))
         registry['extensions']['ai-verse-brain']['public_purpose_reader']='.aiverse/extensions/'+ID+'/brain_read.py'
         atomic_json(self.root/'.aiverse/extensions/registry.json',registry,self.root)
-        result=subprocess.run(['node',str(self.root/'scripts/purpose-context.mjs'),'read','--root',str(self.root),'--scope','operator'],capture_output=True,text=True,check=True)
+        result=subprocess.run(['node',str(self.root/'scripts/purpose-context.mjs'),'read','--root',str(self.root),'--scope','operator'],capture_output=True,text=True,check=True, encoding="utf-8")
         self.assertIn('My overall goal is a durable research practice.',result.stdout)
         self.assertIn('ai-verse-brain',result.stdout)
 
@@ -370,7 +370,7 @@ class IntentTests(unittest.TestCase):
 
     def test_unavailable_goal_is_preserved_by_os_inbox_owner(self):
         self.handover()
-        registry=json.loads((self.root/'.aiverse/extensions/registry.json').read_text())
+        registry=json.loads((self.root/'.aiverse/extensions/registry.json').read_text(encoding="utf-8"))
         registry['extensions']['ai-verse-brain']['enabled']=False
         atomic_json(self.root/'.aiverse/extensions/registry.json',registry,self.root)
         result=self.capture('My overall goal is a durable research institute.')
@@ -383,8 +383,8 @@ class IntentTests(unittest.TestCase):
     def test_goal_delivery_survives_large_profile_under_prompt_budget(self):
         self.handover()
         self.capture('My overall goal is a durable research practice.')
-        (self.root/'operator/profile/identity.md').write_text('Identity detail and useful background. '*1000)
-        (self.root/'operator/profile/preferences.md').write_text('Relevant preferred working method and preferences. '*1000)
+        (self.root/'operator/profile/identity.md').write_text('Identity detail and useful background. '*1000, encoding="utf-8")
+        (self.root/'operator/profile/preferences.md').write_text('Relevant preferred working method and preferences. '*1000, encoding="utf-8")
         _,_,out=self.start('Plan substantial work against my overall research goal and preferred method.')
         text=out['hookSpecificOutput']['additionalContext']
         self.assertLessEqual(len(text.encode()),self.bridge.config['context_max_bytes'])

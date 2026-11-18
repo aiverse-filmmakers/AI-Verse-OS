@@ -11,7 +11,7 @@ SOURCE = Path(__file__).resolve().parents[1] / "scripts" / "reality-check.py"
 
 def run(root, *args):
     return subprocess.run([sys.executable, str(root / "scripts" / "reality-check.py"), *args],
-                          capture_output=True, text=True, cwd=root, check=True)
+                          capture_output=True, text=True, cwd=root, check=True, encoding="utf-8")
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     archive = root / "archives" / "private-chat-history" / "v1"
     archive.mkdir(parents=True)
-    (archive / "chat.jsonl").write_text("{}\n")
+    (archive / "chat.jsonl").write_text("{}\n", encoding="utf-8")
     payload = json.loads(run(root, "--json").stdout)
     archive_result = next(item for item in payload["results"] if item["title"] == "Original chats are saved locally")
     assert archive_result["ok"], archive_result

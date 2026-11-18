@@ -23,7 +23,7 @@ class TidyBase(unittest.TestCase):
             with self.subTest(harness=harness):
                 sc = Scenario(self, harness)
                 manifest = sc.root / "workspaces/beta/WORKSPACE.yaml"
-                manifest.write_text(manifest.read_text() + 'aliases:\n  - "Skoolish"\n')
+                manifest.write_text(manifest.read_text(encoding="utf-8") + 'aliases:\n  - "Skoolish"\n', encoding="utf-8")
                 body(sc)
 
     def seed(self, sc, text, ref, scope="operator", tags=""):
@@ -110,14 +110,14 @@ class TidyTests(TidyBase):
             kinds = sorted((i["kind"], i["traced"]) for i in plan["items"])
             self.assertEqual(kinds, [("move", False), ("move", True), ("notes", True), ("venture", False)])
             self.assertEqual(len(applied["applied"]), 4)
-            beta = "\n".join(p.read_text() for p in (sc.root / "workspaces/beta").rglob("mem-*.md"))
+            beta = "\n".join(p.read_text(encoding="utf-8") for p in (sc.root / "workspaces/beta").rglob("mem-*.md"))
             self.assertIn("81 members and 289 dollars", beta)
             self.assertIn("⚠️ guess", beta)  # the guessed copy keeps its marker
-            operator = "\n".join(p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md"))
+            operator = "\n".join(p.read_text(encoding="utf-8") for p in (sc.root / "operator/memory").rglob("mem-*.md"))
             self.assertIn("Moved to the Beta Study project", operator)
             self.assertIn("status: superseded", operator)
-            self.assertIn("Works on Beta Study ⚠️ guess", (sc.root / "operator/profile/identity.md").read_text())
-            self.assertIn("81 members", (sc.root / "workspaces/beta/context/CURRENT.md").read_text())
+            self.assertIn("Works on Beta Study ⚠️ guess", (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8"))
+            self.assertIn("81 members", (sc.root / "workspaces/beta/context/CURRENT.md").read_text(encoding="utf-8"))
             self.assertEqual(done["still_pending"], 0)
             # Next reply: the note is delivered once, in the agreed format.
             text = sc.prompt("Thanks. What next for Beta Study?")
@@ -163,11 +163,11 @@ class TidyTests(TidyBase):
             self.run_pass(sc)
             sc.prompt("Beta Study again please.")
             self.ledger(sc, count=5)
-            before = {p: p.read_text() for p in sc.root.rglob("*.md") if "runtime" not in str(p)}
+            before = {p: p.read_text(encoding="utf-8") for p in sc.root.rglob("*.md") if "runtime" not in str(p)}
             plan, applied, done = self.run_pass(sc)
             self.assertEqual(plan["items"], [])
             self.assertEqual(applied["applied"], [])
-            after = {p: p.read_text() for p in sc.root.rglob("*.md") if "runtime" not in str(p)}
+            after = {p: p.read_text(encoding="utf-8") for p in sc.root.rglob("*.md") if "runtime" not in str(p)}
             self.assertEqual(before, after)
             self.assertNotIn("tidying is due", sc.prompt("Nothing new to tidy."))
         self.each(body)
@@ -188,8 +188,8 @@ class TidyTests(TidyBase):
             turn = sc.turn()
             result = sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, number)
             self.assertEqual(result["state"], "undone")
-            self.assertNotIn("Works on Beta Study", (sc.root / "operator/profile/identity.md").read_text())
-            history = (sc.root / "operator/profile/AUTO-ORGANIZATION.json").read_text()
+            self.assertNotIn("Works on Beta Study", (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8"))
+            history = (sc.root / "operator/profile/AUTO-ORGANIZATION.json").read_text(encoding="utf-8")
             self.assertIn("Works on Beta Study", history)  # nothing is physically deleted
             # Remembered: reflecting again does not re-add it while the inputs are unchanged.
             sc.prompt("Beta Study once more.")
@@ -216,7 +216,7 @@ class TidyTests(TidyBase):
             self.assertEqual(sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, number)["state"], "undone")
             active = {}
             for path in (sc.root).rglob("mem-*.md"):
-                text = path.read_text()
+                text = path.read_text(encoding="utf-8")
                 if "status: active" in text:
                     active[path.name] = text
             joined = "\n".join(active.values())
@@ -235,14 +235,14 @@ class TidyTests(TidyBase):
             sc.bridge.hook({"session_id": sc.session, "cwd": str(sc.root), "hook_event_name": "Stop", "turn_id": sc.turn()["id"],
                             "permission_mode": "default", "last_assistant_message": f"ok\n(tidy note {note_id})"})
             identity = sc.root / "operator/profile/identity.md"
-            identity.write_text(identity.read_text().replace("Works on Beta Study", "Runs Beta Study"))
+            identity.write_text(identity.read_text(encoding="utf-8").replace("Works on Beta Study", "Runs Beta Study"), encoding="utf-8")
             data = sc.bridge.tidy().load()
             batch = next(b for b in data["batches"] if b["id"] == note_id)
             number = next(i["n"] for i in batch["items"] if data["actions"][i["action"]]["kind"] == "venture")
             turn = sc.turn()
             result = sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note_id, number)
             self.assertEqual(result["state"], "left-as-is")
-            self.assertIn("Runs Beta Study", identity.read_text())
+            self.assertIn("Runs Beta Study", identity.read_text(encoding="utf-8"))
         self.each(body)
 
     def test_only_projects_in_view_are_tidied_and_notes_stay_private(self):
@@ -253,7 +253,7 @@ class TidyTests(TidyBase):
             plan, _, _ = self.run_pass(sc)
             self.assertEqual({i["project"] for i in plan["items"]}, {"beta"})
             self.assertIn("Alpha Study has twelve", "\n".join(
-                p.read_text() for p in (sc.root / "operator/memory").rglob("mem-*.md") if "status: active" in p.read_text()))
+                p.read_text(encoding="utf-8") for p in (sc.root / "operator/memory").rglob("mem-*.md") if "status: active" in p.read_text(encoding="utf-8")))
             # A prompt in private project alpha must not receive beta's note.
             text = sc.prompt("What is up with Alpha Study?")
             self.assertNotIn("A tidy note is waiting", text)
@@ -300,7 +300,7 @@ class TidySafetyTests(TidyBase):
             if harness == "claude":
                 command += ["--harness", "claude"]
             command += ["reflect", "plan", "--session", session, "--turn", t["id"], "--token", t["token"]]
-            jobs.append(subprocess.Popen(command, stdout=subprocess.PIPE, text=True))
+            jobs.append(subprocess.Popen(command, stdout=subprocess.PIPE, text=True, encoding="utf-8"))
         outputs = [json.loads(job.communicate(timeout=90)[0]) for job in jobs]
         winners = [o for o in outputs if o.get("pass") == "planned"]
         self.assertEqual(len(winners), 1, outputs)
@@ -308,7 +308,7 @@ class TidySafetyTests(TidyBase):
     def test_a_crash_midway_is_finished_by_the_next_pass_and_still_produces_a_note(self):
         sc = Scenario(self, "claude")
         manifest = sc.root / "workspaces/beta/WORKSPACE.yaml"
-        manifest.write_text(manifest.read_text() + 'aliases:\n  - "Skoolish"\n')
+        manifest.write_text(manifest.read_text(encoding="utf-8") + 'aliases:\n  - "Skoolish"\n', encoding="utf-8")
         self.seed_world(sc)
         sc.prompt("Tell me where Beta Study stands today.")
         turn = sc.turn()
@@ -339,7 +339,7 @@ class TidySafetyTests(TidyBase):
         self.assertTrue(recovered)
         after = len(list((sc.root / "workspaces/beta").rglob("mem-*.md")))
         self.assertGreaterEqual(after, before)
-        self.assertEqual(len({p.read_text() for p in (sc.root / "workspaces/beta").rglob("mem-*.md")}), after, "no duplicate copies")
+        self.assertEqual(len({p.read_text(encoding="utf-8") for p in (sc.root / "workspaces/beta").rglob("mem-*.md")}), after, "no duplicate copies")
         tidy.done(sc.session, turn["id"], turn["token"])
         self.assertIn("A tidy note is waiting", sc.prompt("Beta Study again."))
 
@@ -386,11 +386,11 @@ class TidySafetyTests(TidyBase):
     def test_a_guess_stays_a_guess_through_a_second_pass(self):
         sc = Scenario(self, "claude")
         manifest = sc.root / "workspaces/beta/WORKSPACE.yaml"
-        manifest.write_text(manifest.read_text() + 'aliases:\n  - "Skoolish"\n')
+        manifest.write_text(manifest.read_text(encoding="utf-8") + 'aliases:\n  - "Skoolish"\n', encoding="utf-8")
         self.seed_world(sc)
         sc.prompt("Tell me where Beta Study stands today.")
         self.run_pass(sc)
-        copies = [p.read_text() for p in (sc.root / "workspaces/beta").rglob("mem-*.md") if "guess" in p.read_text()]
+        copies = [p.read_text(encoding="utf-8") for p in (sc.root / "workspaces/beta").rglob("mem-*.md") if "guess" in p.read_text(encoding="utf-8")]
         self.assertTrue(copies)
         tidy = sc.bridge.tidy()
         record = {"evidence_refs": [USER_REF.format(h="claude")], "tags": "tidy,guess,moved",
@@ -438,16 +438,16 @@ class TidyWholeTests(TidyBase):
 
     def active_text(self, sc, scope="operator"):
         base = sc.root / ("operator" if scope == "operator" else "workspaces/" + scope) / "memory"
-        return "\n".join(p.read_text() for p in base.rglob("mem-*.md") if "status: active" in p.read_text())
+        return "\n".join(p.read_text(encoding="utf-8") for p in base.rglob("mem-*.md") if "status: active" in p.read_text(encoding="utf-8"))
 
     def files(self, sc):
-        return {p: p.read_text() for p in sc.root.rglob("mem-*.md")}
+        return {p: p.read_text(encoding="utf-8") for p in sc.root.rglob("mem-*.md")}
 
     def age(self, sc, key, days):
         for path in sc.root.rglob("mem-*.md"):
-            if key in path.read_text():
+            if key in path.read_text(encoding="utf-8"):
                 path.write_text(re.sub(r"(?m)^created_at: .*$", "created_at: " + time.strftime(
-                    "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - days * 86400)), path.read_text()))
+                    "%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - days * 86400)), path.read_text(encoding="utf-8")), encoding="utf-8")
 
     def test_true_repeats_are_removed_over_batches_and_nothing_is_hard_deleted(self):
         def body(sc):
@@ -521,11 +521,11 @@ class TidyWholeTests(TidyBase):
             self.seed_world(sc)  # facts naming Beta Study, old project notes, a project without a venture line
             self.pair(sc, "Beta Study sends its newsletter on Fridays after lunch.")
             identity = sc.root / "operator/profile/identity.md"
-            profile = identity.read_text() if identity.exists() else ""
-            notes = (sc.root / "workspaces/beta/context/CURRENT.md").read_text()
+            profile = identity.read_text(encoding="utf-8") if identity.exists() else ""
+            notes = (sc.root / "workspaces/beta/context/CURRENT.md").read_text(encoding="utf-8")
             self.assertEqual(self.changed(self.finish(sc, mode="full")), 1)  # only the repeat, kept where it was
-            self.assertEqual(profile, identity.read_text() if identity.exists() else "")
-            self.assertEqual(notes, (sc.root / "workspaces/beta/context/CURRENT.md").read_text())
+            self.assertEqual(profile, identity.read_text(encoding="utf-8") if identity.exists() else "")
+            self.assertEqual(notes, (sc.root / "workspaces/beta/context/CURRENT.md").read_text(encoding="utf-8"))
             self.assertEqual(self.active_text(sc, "beta"), "")
             self.assertEqual(self.active_text(sc).count("newsletter on Fridays"), 1)
         self.each(body)
@@ -749,7 +749,7 @@ class TidyWholeTests(TidyBase):
     def edit(self, sc, key, **changes):
         """Change saved fields of the records containing key (to make records that look alike differ, or match)."""
         for path in sc.root.rglob("mem-*.md"):
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             if key not in text:
                 continue
             for name, value in changes.items():
@@ -757,20 +757,20 @@ class TidyWholeTests(TidyBase):
                     text = text.rstrip("\n") + "\n\n# Why it matters\n\n" + value + "\n"
                 else:
                     text = re.sub(rf"(?m)^{name}: .*$", f"{name}: {value}", text)
-            path.write_text(text)
+            path.write_text(text, encoding="utf-8")
 
     def test_records_with_a_different_reason_or_weight_are_not_repeats(self):
         def body(sc):
             self.pair(sc, self.DUP)
             self.pair(sc, "The studio pays contractors within ten days of the invoice.")
             for path in sc.root.rglob("mem-*.md"):  # change only the spaced-out twin of each pair
-                text = path.read_text()
+                text = path.read_text(encoding="utf-8")
                 if "The  studio" not in text:
                     continue
                 if self.KEY in text:
-                    path.write_text(text.rstrip("\n") + "\n\n# Why it matters\n\nCash flow depends on it.\n")
+                    path.write_text(text.rstrip("\n") + "\n\n# Why it matters\n\nCash flow depends on it.\n", encoding="utf-8")
                 else:
-                    path.write_text(re.sub(r"(?m)^importance: .*$", "importance: 5", text))
+                    path.write_text(re.sub(r"(?m)^importance: .*$", "importance: 5", text), encoding="utf-8")
             self.assertEqual(self.changed(self.finish(sc, mode="full")), 0)
         self.each(body)
 

@@ -23,7 +23,7 @@ def report(root, scope="operator", grace_seconds=60):
             continue
         if file.stat().st_size > 4_000_000:
             raise ValueError("diagnostic log exceeds maintenance budget")
-        for line in file.read_text().splitlines()[-5000:]:
+        for line in file.read_text(encoding="utf-8").splitlines()[-5000:]:
             try:
                 item = json.loads(line)
                 if isinstance(item, dict):
@@ -67,7 +67,7 @@ def report(root, scope="operator", grace_seconds=60):
         if feedback.stat().st_size > 1_000_000:
             raise ValueError("feedback exceeds maintenance budget")
         seen = {}
-        for line in feedback.read_text().splitlines():
+        for line in feedback.read_text(encoding="utf-8").splitlines():
             item = json.loads(line)
             if item.get("scope") == scope:
                 seen[item["memory_id"]] = item["rating"]
@@ -120,7 +120,7 @@ def main():
                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
         with bridge.lock("quality-feedback"):
             file = safe(bridge.runtime / "quality-feedback.jsonl", root)
-            with file.open("a") as stream:
+            with file.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(row) + "\n")
     result = report(root, args.scope)
     target = root / "runtime/reports/codex-learning" / ("maintenance-" + args.scope.replace(":", "-") + ".json")

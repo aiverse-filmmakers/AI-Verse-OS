@@ -32,7 +32,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name).resolve()
-        (self.root / "AI-VERSE.yaml").write_text("architecture: unified-workspace\n")
+        (self.root / "AI-VERSE.yaml").write_text("architecture: unified-workspace\n", encoding="utf-8")
         self.source = self.root / 'session.jsonl'
         self.host = Host(self.root, 'claude')
         self.event = {'session_id': 'session', 'cwd': str(self.root),
@@ -44,7 +44,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         with self.source.open('ab') as f: f.write(json.dumps(row, ensure_ascii=False).encode() + b'\n')
     def files(self): return list((self.root / 'archives').rglob('*.jsonl'))
     def messages(self):
-        return [json.loads(x) for x in self.files()[0].read_text().splitlines()][1:]
+        return [json.loads(x) for x in self.files()[0].read_text(encoding="utf-8").splitlines()][1:]
     def test_new_boundary_exact_capture_and_replay(self):
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
         text = '  café 中文\n\t  '
@@ -114,7 +114,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.event['hook_event_name'] = 'Stop'
         self.assertEqual(capture.capture(self.host, self.event)['pending_prompts'], 0)
         self.assertEqual(self.pending()[1][0]['messages'], [])
-        self.assertNotIn(self.event['prompt'], Path(self.root / listing['items'][0]['source']).read_text())
+        self.assertNotIn(self.event['prompt'], Path(self.root / listing['items'][0]['source']).read_text(encoding="utf-8"))
         self.assertEqual([m['text'] for m in self.messages()], [self.event['prompt'], 'reply'])
 
     def test_repeated_prompt_not_reconciled_against_an_old_identical_message(self):
@@ -282,7 +282,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         extension = self.root / '.aiverse/extensions/ai-verse-codex-learning'
         extension.mkdir(parents=True)
         config = extension / 'config.json'
-        config.write_text(json.dumps({'enabled': True, 'review_mode': 'off', 'chat_history': 'prospective'}))
+        config.write_text(json.dumps({'enabled': True, 'review_mode': 'off', 'chat_history': 'prospective'}), encoding="utf-8")
         previous = 'initial'
         for args in (['--chat-history', 'off'], ['--chat-history', 'prospective'],
                      ['--enabled', 'false'], ['--enabled', 'true']):
@@ -329,7 +329,7 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.host.harness = 'codex'
         self.source = self.root / 'rollout-session.jsonl'
         self.event['transcript_path'] = str(self.source)
-        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cli_version': '0.167.0', 'cwd': str(self.root)}}) + '\n')
+        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cli_version': '0.167.0', 'cwd': str(self.root)}}) + '\n', encoding="utf-8")
         self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
         rows = [
           {'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'injected context'}]}},

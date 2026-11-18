@@ -162,7 +162,7 @@ class TidyAuthorizationTests(TidyBase):
         def body(sc):
             note = self.run_beta_pass(sc)
             notes = sc.root / "workspaces/beta/context/CURRENT.md"
-            notes.write_text(notes.read_text().replace("Moved from your general notes:", "I rewrote this line:"))
+            notes.write_text(notes.read_text(encoding="utf-8").replace("Moved from your general notes:", "I rewrote this line:"), encoding="utf-8")
             data = sc.bridge.tidy().load()
             number = next(i["n"] for b in data["batches"] if b["id"] == note for i in b["items"]
                           if data["actions"][i["action"]]["kind"] == "notes")
@@ -170,7 +170,7 @@ class TidyAuthorizationTests(TidyBase):
             turn = sc.turn()
             result = sc.bridge.tidy().undo(sc.session, turn["id"], turn["token"], note, number)
             self.assertEqual(result["state"], "left-as-is")
-            self.assertIn("I rewrote this line:", notes.read_text())
+            self.assertIn("I rewrote this line:", notes.read_text(encoding="utf-8"))
         self.each(body)
 
     def test_unfinished_actions_keep_their_entries_pending(self):
@@ -218,7 +218,7 @@ class RaceTests(TidyBase):
             command = [sys.executable, str(sc.root / ".aiverse/extensions/ai-verse-codex-learning/bridge.py"), "--root", str(sc.root)]
             if harness == "claude":
                 command += ["--harness", "claude"]
-            job = subprocess.Popen(command + ["hook"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            job = subprocess.Popen(command + ["hook"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8")
             job.stdin.write(json.dumps(event))
             job.stdin.close()
             jobs.append(job)

@@ -23,9 +23,9 @@ class Scenario:
         test.addCleanup(self.temp.cleanup)
         if config:
             file = self.root / ".aiverse/extensions/ai-verse-codex-learning/config.json"
-            value = json.loads(file.read_text())
+            value = json.loads(file.read_text(encoding="utf-8"))
             value.update(config)
-            file.write_text(json.dumps(value))
+            file.write_text(json.dumps(value), encoding="utf-8")
         self.bridge = Bridge(self.root, harness=harness)
         self.session = harness + "-parity-0001"
         self.count = 0
@@ -43,7 +43,7 @@ class Scenario:
     def cli(self, *args, stdin=""):
         command = [sys.executable, str(self.root / ".aiverse/extensions/ai-verse-codex-learning/bridge.py"),
                    "--root", str(self.root), "--harness", self.harness]
-        return subprocess.run(command + list(args), input=stdin, capture_output=True, text=True, timeout=90)
+        return subprocess.run(command + list(args), input=stdin, capture_output=True, text=True, timeout=90, encoding="utf-8")
 
     def review_args(self):
         turn = self.turn()
@@ -53,7 +53,7 @@ class Scenario:
         """Submit through the real command line using the app's own transport."""
         if self.harness == "claude":
             note = self.root / "runtime/codex-learning/claude-input" / (self.turn()["id"] + "-review.json")
-            note.write_text(json.dumps(payload))
+            note.write_text(json.dumps(payload), encoding="utf-8")
             return self.cli(*self.review_args(), "--input-file", str(note))
         return self.cli(*self.review_args(), stdin=json.dumps(payload))
 
@@ -87,10 +87,10 @@ class ParityTests(unittest.TestCase):
                 "evidence": [{"source_id": "user", "quote": "give me answers as short paragraphs instead of bullet points"}]}
             second = sc.review_cli(sc.payload(correction))
             self.assertEqual(second.returncode, 0, second.stdout)
-            text = (sc.root / "operator/profile/preferences.md").read_text()
+            text = (sc.root / "operator/profile/preferences.md").read_text(encoding="utf-8")
             self.assertIn("short paragraphs", text)
             self.assertNotIn("short bullet points, not long", text)
-            history = "\n".join(p.read_text() for p in (sc.root / "operator/profile").rglob("*") if p.is_file())
+            history = "\n".join(p.read_text(encoding="utf-8") for p in (sc.root / "operator/profile").rglob("*") if p.is_file())
             label = "claude-code:user" if sc.harness == "claude" else "codex-desktop:user"
             self.assertIn(label, history)
             self.assertIn('user said: \\"give me answers as short paragraphs', history)
@@ -111,7 +111,7 @@ class ParityTests(unittest.TestCase):
     def test_key_preferences_come_first_and_the_review_command_survives_every_budget(self):
         def body(sc):
             (sc.root / "operator/profile/preferences.md").write_text(
-                "# Prefs\n\n## Communication\n\n- Never use dashes in anything you write for me.\n\n## Avoid\n\n- Avoid vague praise.\n")
+                "# Prefs\n\n## Communication\n\n- Never use dashes in anything you write for me.\n\n## Avoid\n\n- Avoid vague praise.\n", encoding="utf-8")
             for limit in (24000, 14000, 9000, 4096):
                 sc.bridge.config["context_max_bytes"] = limit
                 text = sc.prompt("Hello there, what is next today?")
@@ -136,7 +136,7 @@ class ParityTests(unittest.TestCase):
         def body(sc):
             sc.prompt("Check the folder.")
             note = sc.root / "runtime/codex-learning/claude-input" / "x-review.json"
-            note.write_text(json.dumps(EMPTY))
+            note.write_text(json.dumps(EMPTY), encoding="utf-8")
             result = sc.cli(*sc.review_args(), "--input-file", str(note))
             self.assertEqual(result.returncode, 0, result.stdout)
             self.assertFalse(note.exists())
@@ -165,7 +165,7 @@ class VentureTests(unittest.TestCase):
         def body(sc):
             self.submit(sc, "I run the Alpha community every day.",
                         self.venture(sc, {"text": "Runs the Alpha community", "project": "alpha"}, "I run the Alpha community"))
-            identity = (sc.root / "operator/profile/identity.md").read_text()
+            identity = (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8")
             self.assertIn("### What I run and work on", identity)
             self.assertIn("- Runs the Alpha community <!-- project:alpha -->", identity)
             correction = {"route": "profile", "parameters": {"correction": {
@@ -174,12 +174,12 @@ class VentureTests(unittest.TestCase):
                 "evidence": [{"source_id": "user", "quote": "I run and grow the Alpha community"}]}
             receipt = self.submit(sc, "Correction: I run and grow the Alpha community.", correction)
             self.assertEqual(receipt["effects"][0]["result"]["result"]["operator_profile"]["state"], "evolved")
-            identity = (sc.root / "operator/profile/identity.md").read_text()
+            identity = (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8")
             self.assertIn("- Runs and grows the Alpha community <!-- project:alpha -->", identity)
             # The same venture for the same project is not added a second time.
             self.submit(sc, "I look after the Alpha community too.",
                         self.venture(sc, {"text": "Looks after the Alpha community", "project": "alpha"}, "look after the Alpha community"))
-            self.assertEqual((sc.root / "operator/profile/identity.md").read_text().count("project:alpha"), 1)
+            self.assertEqual((sc.root / "operator/profile/identity.md").read_text(encoding="utf-8").count("project:alpha"), 1)
         self.each(body)
 
     def test_a_codex_and_a_claude_process_writing_at_once_lose_nothing(self):
@@ -193,13 +193,13 @@ class VentureTests(unittest.TestCase):
                                       "provenance": {"trigger_ref": f"race:{index}", "classifier": "test", "source": harness}},
                        "refs": [f"{harness}:turn:t{index}:source:abcd:sha256:" + "0" * 64], "effect_id": f"{harness}:s{index}:t{index}:0:feed"}
             command = base + ["--harness", harness, "owner", "learn"] if harness == "claude" else base + ["owner", "learn"]
-            jobs.append(subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            jobs.append(subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8"))
             jobs[-1].stdin.write(json.dumps(payload))
             jobs[-1].stdin.close()
         outputs = [job.stdout.read() for job in jobs]
         for job in jobs:
             job.wait(timeout=60)
         self.assertTrue(all(json.loads(out)["ok"] for out in outputs), outputs)
-        identity = (sc.root / "operator/profile/identity.md").read_text()
+        identity = (sc.root / "operator/profile/identity.md").read_text(encoding="utf-8")
         for index in range(6):
             self.assertIn(f"race fact {index}", identity)

@@ -13,17 +13,17 @@ REPO = Path(__file__).resolve().parents[4]
 
 def set_config(sc, **values):
     file = sc.root / ".aiverse/extensions/ai-verse-codex-learning/config.json"
-    config = json.loads(file.read_text())
+    config = json.loads(file.read_text(encoding="utf-8"))
     config.update(values)
-    file.write_text(json.dumps(config))
+    file.write_text(json.dumps(config), encoding="utf-8")
     sc.bridge.config.update(values)
 
 
 def add_development_project(sc):
     folder = sc.root / "workspaces/ai-verse-os-development"
     (folder / "context").mkdir(parents=True)
-    (folder / "WORKSPACE.yaml").write_text('schema_version: "2.0"\nid: ai-verse-os-development\nname: "AI-Verse OS Development"\nstatus: active\n')
-    (folder / "context/CURRENT.md").write_text("## Current state\n\n- Development fixture.\n")
+    (folder / "WORKSPACE.yaml").write_text('schema_version: "2.0"\nid: ai-verse-os-development\nname: "AI-Verse OS Development"\nstatus: active\n', encoding="utf-8")
+    (folder / "context/CURRENT.md").write_text("## Current state\n\n- Development fixture.\n", encoding="utf-8")
     return folder
 
 
@@ -60,14 +60,14 @@ class MotherListTests(unittest.TestCase):
             self.assertIn("\"route\":\"upgrade\"", text)
             receipt = self.review(sc, upgrade("AI-Verse OS should make the notes about what was saved shorter.", "AI-Verse OS told me what it saved in shorter notes"))
             self.assertEqual(receipt["effects"][0]["result"]["state"], "saved")
-            note = "\n".join(p.read_text() for p in folder.rglob("mem-*.md"))
+            note = "\n".join(p.read_text(encoding="utf-8") for p in folder.rglob("mem-*.md"))
             self.assertIn("upgrade-note", note)
             self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", note)
             # The view is rebuilt from a chat that may read the development project.
             sc.prompt("Show me the upgrade list please.", cwd=str(folder))
             turn = sc.turn()
             self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
-            view = (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text()
+            view = (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text(encoding="utf-8")
             self.assertIn("Derived view", view)
             self.assertIn("AI-Verse OS should make the notes about what was saved shorter.", view)
             self.assertEqual(sc.cli("reflect", "list").returncode, 2)
@@ -96,7 +96,7 @@ class MotherListTests(unittest.TestCase):
             sc.prompt("Show me the upgrade list please.", cwd=str(folder))
             turn = sc.turn()
             self.assertEqual(sc.cli("reflect", "list", "--session", sc.session, "--turn", turn["id"], "--token", turn["token"]).returncode, 0)
-            self.assertNotIn("ALPHA PRIVATE", (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text())
+            self.assertNotIn("ALPHA PRIVATE", (folder / "knowledge/AI-VERSE-OS-UPGRADE-LIST.md").read_text(encoding="utf-8"))
             # And a project chat with the switch on still cannot read the list through the owner door.
             sc.prompt("Back to Alpha Study.", cwd=alpha)
             turn = sc.turn()
@@ -151,9 +151,9 @@ class MotherListTests(unittest.TestCase):
         set_config(sc, maintainer_feedback=True)
         script = sc.root / ".aiverse/extensions/ai-verse-codex-learning/lifecycle.py"
         for command in ("install", "install"):
-            done = subprocess.run([sys.executable, str(script), "--root", str(sc.root), command], capture_output=True, text=True)
+            done = subprocess.run([sys.executable, str(script), "--root", str(sc.root), command], capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(done.returncode, 0, done.stderr)
-        config = json.loads((sc.root / ".aiverse/extensions/ai-verse-codex-learning/config.json").read_text())
+        config = json.loads((sc.root / ".aiverse/extensions/ai-verse-codex-learning/config.json").read_text(encoding="utf-8"))
         self.assertTrue(config["maintainer_feedback"])
 
 
@@ -190,16 +190,16 @@ class WordsAndReminderTests(unittest.TestCase):
                     self.assertIn(phrase, text)
 
     def test_the_reflect_capability_is_registered_and_mirrored(self):
-        registry = (REPO / "skills/registry.yaml").read_text()
+        registry = (REPO / "skills/registry.yaml").read_text(encoding="utf-8")
         self.assertIn("id: reflect", registry)
-        canonical = (REPO / "system/capabilities/reflect/SKILL.md").read_text()
+        canonical = (REPO / "system/capabilities/reflect/SKILL.md").read_text(encoding="utf-8")
         for mirror in (".claude/skills/reflect/SKILL.md", ".agents/skills/reflect/SKILL.md"):
-            self.assertEqual((REPO / mirror).read_text(), canonical)
+            self.assertEqual((REPO / mirror).read_text(encoding="utf-8"), canonical)
         for word in ("When to use", "Inputs", "Method", "Validation", "Failure behavior", "what I know about you"):
             self.assertIn(word, canonical)
 
     def test_agents_md_guides_helper_repair_without_guessing(self):
-        text = (REPO / "AGENTS.md").read_text()
+        text = (REPO / "AGENTS.md").read_text(encoding="utf-8")
         section = text.split("## Missing helpers rule", 1)[1].split("\n## ", 1)[0]
         for phrase in ("read-only doctor", "Open Settings, then Hooks, and approve the AI-Verse OS ones",
                        "diagnostics identify helpers waiting for approval", "unverified", "switched learning off on purpose",

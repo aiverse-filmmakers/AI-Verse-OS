@@ -37,7 +37,7 @@ try:
     for workspace in ["alpha", "beta"]:
         directory = root / "workspaces" / workspace
         directory.mkdir(parents=True)
-        (directory / "WORKSPACE.yaml").write_text('schema_version: "2.0"\nid: ' + workspace + '\nstatus: active\n')
+        (directory / "WORKSPACE.yaml").write_text('schema_version: "2.0"\nid: ' + workspace + '\nstatus: active\n', encoding="utf-8")
     entry = args.skills_source.resolve() / "installer/aiverse_skills.py"
     command = [sys.executable, str(entry), "--root", str(fixture.root)]
     configured = configure_member_skills(root, args.skills_source.resolve(), command, [*command, "status", "--json"])
@@ -67,7 +67,7 @@ try:
         return host.request_action(payload)
     package = root / "workspaces/alpha/inbox/method"
     package.mkdir(parents=True)
-    (package / "SKILL.md").write_text('---\nname: reusable-method\ndescription: >-\n  Verify a portable\n  procedure\n---\nUse explicit inputs and verify the result.\n')
+    (package / "SKILL.md").write_text('---\nname: reusable-method\ndescription: >-\n  Verify a portable\n  procedure\n---\nUse explicit inputs and verify the result.\n', encoding="utf-8")
     parameters = {"source_relative": "workspaces/alpha/inbox/method", "admission": library.PORTABILITY}
     preview = request("skills.library-import", parameters)
     assert preview["status"] == "succeeded" and not preview["effect_occurred"], preview
@@ -93,12 +93,12 @@ try:
     # A maintainer review is exact content evidence, never execution permission.
     reviewed_package = root / "workspaces/alpha/inbox/reviewed-method"
     reviewed_package.mkdir(parents=True)
-    (reviewed_package / "SKILL.md").write_text('---\nname: reviewed-method\ndescription: |-\n  Review a documentation example.\n  Verify dependencies.\n---\nUse explicit inputs.\n')
-    (reviewed_package / "mocking.md").write_text('Example: const client = new StripeClient(process.env.STRIPE_KEY);\n')
+    (reviewed_package / "SKILL.md").write_text('---\nname: reviewed-method\ndescription: |-\n  Review a documentation example.\n  Verify dependencies.\n---\nUse explicit inputs.\n', encoding="utf-8")
+    (reviewed_package / "mocking.md").write_text('Example: const client = new StripeClient(process.env.STRIPE_KEY);\n', encoding="utf-8")
     reviewed_parameters = {"source_relative": "workspaces/alpha/inbox/reviewed-method", "admission": library.PORTABILITY}
     refused = request("skills.library-import", reviewed_parameters)
     assert refused["status"] != "succeeded", refused
-    inspection = subprocess.run([*command, "library", "--library-root", str(personal), "inspect", "--source", str(reviewed_package)], capture_output=True, text=True, check=True)
+    inspection = subprocess.run([*command, "library", "--library-root", str(personal), "inspect", "--source", str(reviewed_package)], capture_output=True, text=True, check=True, encoding="utf-8")
     inspection = json.loads(inspection.stdout)
     review = {"source_revision": inspection["source_revision"], "findings": [{"path": f["path"], "code": f["code"]} for f in inspection["scan"]["findings"]], "reviewer": "fixture-maintainer", "reason": "Reviewed inert documentation example; grants no execution authority."}
     reviewed_parameters["security_review"] = review
@@ -113,7 +113,7 @@ try:
     checks += 1
     registry = root / ".aiverse/extensions/registry.json"
     registry.parent.mkdir(parents=True)
-    registry.write_text(json.dumps({"schema_version": "1.0", "extensions": {"ai-verse-brain": {"id": "ai-verse-brain", "supported": True, "installed": True, "enabled": True}}}))
+    registry.write_text(json.dumps({"schema_version": "1.0", "extensions": {"ai-verse-brain": {"id": "ai-verse-brain", "supported": True, "installed": True, "enabled": True}}}), encoding="utf-8")
     candidate_data = {"candidate_id": "runtime-shared-method", "scope": "workspace:alpha", "suggested_owner": "skills", "kind": "create", "summary": "Verified repeatable method", "skill_id": "learned-method",
                       "evidence_refs": ["run:fixture-success"], "success_signal": ["method succeeded"], "failure_signal": [], "risk": "low", "confidence": .95, "created_at": "2026-10-21T00:00:00Z",
                       "requested_capabilities": [], "requested_dependencies": [], "requires_connection": False, "requires_credential": False, "source_ownership": "agent_learned", "portability": library.PORTABILITY}
@@ -126,7 +126,7 @@ try:
     assert result["skills_result"]["state"] == "pending_approval", result
     assert len(library.read_index(personal)["skills"]) == 2
     proposal_id = result["skills_submission"]["proposal_id"]
-    promoted = subprocess.run([*command, "proposals", "apply", proposal_id, "--approved-by", "fixture-user", "--json"], capture_output=True, text=True, check=True)
+    promoted = subprocess.run([*command, "proposals", "apply", proposal_id, "--approved-by", "fixture-user", "--json"], capture_output=True, text=True, check=True, encoding="utf-8")
     promoted = json.loads(promoted.stdout)
     learned_id = promoted["member_import"]["qualified_id"]
     assert any(x["id"] == learned_id for x in host.list_capabilities("workspace:beta"))
@@ -148,7 +148,7 @@ try:
     original = config_file.read_bytes()
     moved = json.loads(original)
     moved["local_skills_root"] = str(fixture.base / "different-library")
-    config_file.write_text(json.dumps(moved))
+    config_file.write_text(json.dumps(moved), encoding="utf-8")
     try:
         require_member_state_preserved(snapshot, snapshot_member_state(root))
         raise AssertionError("provider-root drift was accepted")

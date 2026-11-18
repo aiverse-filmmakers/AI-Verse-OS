@@ -5,6 +5,7 @@
 // than on an English one. Anything that picks a winner, builds a stored list or is
 // compared in a test must use plain code unit order instead.
 
+// Note: ids containing underscores or mixed case can order differently from the old locale order (code unit order puts '-' before '_' and capitals first). That is intended.
 export function compareCodeUnits(left, right) {
   const a = String(left);
   const b = String(right);

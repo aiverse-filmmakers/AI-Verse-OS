@@ -1,0 +1,62 @@
+name: Learning tests on every system
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Linux runs the full self contained set of learning package tests. macOS and Windows run only the files
+# that really pass there. Nothing is skipped silently, the files left out are listed here with the reason.
+#
+# Left out on macOS and Windows (they pass on Linux, so they keep running there):
+#   test_chat_archive.py and test_claude_capture.py. The OS private chat archive refuses to work under a
+#   folder reached through a symlink ("ArchiveBlocked: symlink directory refused"), and macOS temp folders
+#   sit under the symlinked /var and /tmp, so 30 and 10 of their tests fail. These two files also check
+#   POSIX permission bits (0o077) and use chmod, which Windows does not have. Follow up: NEXT-ROUND.md.
+#   Windows also leaves out test_chat_placement_transport.py: the private archive refuses a folder whose
+#   POSIX permission bits cannot be set ("private archive directory exposes group/other permissions").
+#   It passes on Linux and macOS. test_package.py stays on Windows and needs the LF rules in .gitattributes.
+#   Windows also leaves out test_prospective_capture.py: 15 of its tests fail on the first real Windows run
+#   (an AppData path that does not exist for the test, and event lists that come back empty), which is a real
+#   Windows portability gap in the capture fixtures. It passes on Linux and macOS. Follow up: NEXT-ROUND.md.
+#   test_package passes on Windows with the LF rules in .gitattributes.
+#
+# Not run on any system here (they run on Linux in four-repo-acceptance.yml, where the Memory, Brain and
+# Skills repositories are checked out at pinned commits): test_bridge, test_chat_placement,
+# test_claude_harness, test_destinations, test_feedback, test_intent, test_negative, test_parity,
+# test_tidy. Each imports or starts code from one of those other repositories.
+jobs:
+  learning-self-contained:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            files: chat_archive chat_placement_transport claude_capture claude_transcript package prospective_capture secret_filter setup skill_usage tidy_outdated
+          - os: macos-latest
+            files: chat_placement_transport claude_transcript package prospective_capture secret_filter setup skill_usage tidy_outdated
+          - os: windows-latest
+            files: claude_transcript package secret_filter setup skill_usage tidy_outdated
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run the self contained learning tests
+        shell: bash
+        run: |
+          failed=""
+          for name in ${{ matrix.files }}; do
+            python -m unittest discover -s system/extensions/tests/codex-learning -p "test_${name}.py" -v || failed="$failed $name"
+          done
+          if [ -n "$failed" ]; then echo "Failed test files:$failed"; exit 1; fi

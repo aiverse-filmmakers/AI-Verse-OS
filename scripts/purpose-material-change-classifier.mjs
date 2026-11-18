@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './fixed-order.mjs';
 const MATERIAL_CHANGE_SCHEMA_VERSION = 'purpose.material-changes.v1';
 const MAX_CANDIDATES = 64;
 const MAX_CHANGES = 20;
@@ -151,7 +152,7 @@ function normalizeSourceRefs(value, scope, index) {
     const key = sourceRefKey(ref);
     if (!refs.has(key)) refs.set(key, ref);
   }
-  return [...refs.values()].sort((a, b) => sourceRefKey(a).localeCompare(sourceRefKey(b)));
+  return [...refs.values()].sort((a, b) => compareCodeUnits(sourceRefKey(a), sourceRefKey(b)));
 }
 
 function normalizeAffects(value, scope, index) {
@@ -164,7 +165,7 @@ function normalizeAffects(value, scope, index) {
     const key = canonicalRefKey(ref);
     if (!refs.has(key)) refs.set(key, ref);
   }
-  return [...refs.values()].sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
+  return [...refs.values()].sort((a, b) => compareCodeUnits(canonicalRefKey(a), canonicalRefKey(b)));
 }
 
 function normalizeRelevanceEffect(value, affects, index) {
@@ -180,15 +181,15 @@ function normalizeRelevanceEffect(value, affects, index) {
 function compareChanges(a, b) {
   const time = Date.parse(b.occurred_at) - Date.parse(a.occurred_at);
   if (time !== 0) return time;
-  const dimensions = a.materiality.join('\u0000').localeCompare(b.materiality.join('\u0000'));
+  const dimensions = compareCodeUnits(a.materiality.join('\u0000'), b.materiality.join('\u0000'));
   if (dimensions !== 0) return dimensions;
-  const affects = (a.affects ?? []).map(canonicalRefKey).join('\u0001').localeCompare((b.affects ?? []).map(canonicalRefKey).join('\u0001'));
+  const affects = compareCodeUnits((a.affects ?? []).map(canonicalRefKey).join('\u0001'), (b.affects ?? []).map(canonicalRefKey).join('\u0001'));
   if (affects !== 0) return affects;
-  const refs = a.source_refs.map(sourceRefKey).join('\u0001').localeCompare(b.source_refs.map(sourceRefKey).join('\u0001'));
+  const refs = compareCodeUnits(a.source_refs.map(sourceRefKey).join('\u0001'), b.source_refs.map(sourceRefKey).join('\u0001'));
   if (refs !== 0) return refs;
-  const event = a.event.localeCompare(b.event);
+  const event = compareCodeUnits(a.event, b.event);
   if (event !== 0) return event;
-  return a.effect.localeCompare(b.effect);
+  return compareCodeUnits(a.effect, b.effect);
 }
 
 export function classifyPurposeMaterialChanges(scope, candidates = []) {

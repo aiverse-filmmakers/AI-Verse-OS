@@ -39,6 +39,7 @@ fs.mkdirSync(path.join(root, 'operator', 'inbox'), { recursive: true });
 fs.mkdirSync(path.join(root, 'workspaces'), { recursive: true });
 fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
 fs.copyFileSync(components, path.join(root, 'scripts', 'components.mjs'));
+fs.copyFileSync(path.join(path.dirname(components), 'fixed-order.mjs'), path.join(root, 'scripts', 'fixed-order.mjs'));
 
 function invoke(args, expected) {
   const proc = spawnSync(process.execPath, [cli, ...args], {

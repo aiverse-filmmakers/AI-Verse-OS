@@ -9,8 +9,8 @@ export function planGrowth(nodes, links) {
     if (!byId.has(a) || !byId.has(b)) continue;
     adjacent.get(a).push({id:b, link}); adjacent.get(b).push({id:a, link});
   }
-  const ranked = [...nodes].sort((a,b) => (b.source === 'wiki') - (a.source === 'wiki') || (b.degree || 0) - (a.degree || 0) || a.id.localeCompare(b.id));
-  for (const list of adjacent.values()) list.sort((a,b) => (byId.get(b.id).degree || 0) - (byId.get(a.id).degree || 0) || a.id.localeCompare(b.id));
+  const ranked = [...nodes].sort((a,b) => (b.source === 'wiki') - (a.source === 'wiki') || (b.degree || 0) - (a.degree || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (const list of adjacent.values()) list.sort((a,b) => (byId.get(b.id).degree || 0) - (byId.get(a.id).degree || 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const seen = new Set(), records = [], byNode = new Map();
   const append = (node, parent = null, link = null) => {
     const record = {node, parent, link, index:records.length, home:{x:node.x,y:node.y,z:node.z}, born:0, origin:null};

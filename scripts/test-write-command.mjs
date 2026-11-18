@@ -12,6 +12,7 @@ import {
   enqueueWriteCommand,
   submitWriteCommand,
 } from './write-command.mjs';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 function fixture(status = 'active') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-write-command-'));
@@ -80,7 +81,7 @@ function snapshotCanonical(root) {
       else if (entry.isDirectory()) items.push([rel, 'dir']);
       else items.push([rel, 'other']);
     }
-    return [relative, items.sort((a, b) => a[0].localeCompare(b[0]))];
+    return [relative, items.sort((a, b) => compareCodeUnits(a[0], b[0]))];
   });
 }
 

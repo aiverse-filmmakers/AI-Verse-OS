@@ -53,7 +53,7 @@ export async function buildGraph(configFile = path.join(HERE,'brain.config.json'
     if (stat.isSymbolicLink()) { warnings.push(`Skipped symbolic link: ${slash(dir)}`); return; }
     if (stat.isFile()) { if (/\.(md|txt)$/i.test(dir)) await add(dir,source); return; }
     if (!stat.isDirectory() || within(await fs.realpath(dir),HERE)) return;
-    for (const e of (await fs.readdir(dir,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))) {
+    for (const e of (await fs.readdir(dir,{withFileTypes:true})).sort((a,b)=>(a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
       if (records.size >= config.maxNodes) return;
       if (e.name.startsWith('.') || blocked.has(e.name) || e.isSymbolicLink()) continue;
       const file = path.join(dir,e.name), rel = slash(path.relative(base,file));

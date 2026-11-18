@@ -3,7 +3,7 @@ import * as THREE from 'three';
 export function composeGlobe(nodes, sources) {
   // Deterministic equal-area latitude samples: a round silhouette at every angle.
   sources.forEach((source, sector) => {
-    const list = nodes.filter((n) => n.source === source.id).sort((a, b) => a.id.localeCompare(b.id));
+    const list = nodes.filter((n) => n.source === source.id).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     list.forEach((n, i) => {
       const y = 1 - 2 * ((i + .5) / list.length);
       const turn = (i * .61803398875) % 1;

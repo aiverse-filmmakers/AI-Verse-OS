@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { composePurposeContext } from './purpose-context-core.mjs';
 import { PURPOSE_OPTIONAL_OWNER_BACKED_DOMAIN_NAMES } from './purpose-context-rich-domains.mjs';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-purpose-initiative-status-'));
 const scope = 'workspace:film';
@@ -87,7 +88,7 @@ try {
   assert.equal(projection.provenance.projection_owner, 'ai-verse-os');
   assert.deepEqual(
     Object.fromEntries(projection.initiatives.map((item) => [item.id, item.status])),
-    Object.fromEntries([...statusById].sort(([left], [right]) => left.localeCompare(right))),
+    Object.fromEntries([...statusById].sort(([left], [right]) => compareCodeUnits(left, right))),
   );
   for (const initiative of projection.initiatives) {
     assert.equal(initiative.canonical_ref.owner, 'ai-verse-brain');

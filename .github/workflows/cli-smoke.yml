@@ -6,6 +6,7 @@ on:
     paths:
       - 'bin/**'
       - 'scripts/components.mjs'
+      - 'scripts/fixed-order.mjs'
       - 'scripts/test-cli-lifecycle.mjs'
       - 'package.json'
       - '.gitignore'
@@ -14,6 +15,7 @@ on:
     paths:
       - 'bin/**'
       - 'scripts/components.mjs'
+      - 'scripts/fixed-order.mjs'
       - 'scripts/test-cli-lifecycle.mjs'
       - 'package.json'
       - '.gitignore'

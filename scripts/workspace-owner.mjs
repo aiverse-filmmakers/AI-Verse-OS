@@ -105,12 +105,34 @@ function cleanAliases(value) {
   return list;
 }
 
+// Letters with an accent fold to their plain letter (NFKD, then drop the combining marks), so
+// "București" becomes "bucuresti". A few letters have no combining form and are mapped by hand.
+const UNFOLDABLE_LETTERS = { 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'đ': 'd', 'ð': 'd', 'þ': 'th', 'ł': 'l', 'ı': 'i' };
+
+function foldToAscii(value) {
+  return value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/[ßæœøđðþłı]/g, (letter) => UNFOLDABLE_LETTERS[letter]);
+}
+
+// A name with no Latin letters or digits (Japanese, Arabic, emoji only, ...) still gets a safe,
+// stable id: "workspace-" plus the first 8 hex characters of the SHA-256 of the name.
+function fallbackId(value) {
+  const digest = crypto.createHash('sha256').update(value.normalize('NFKC').trim().toLowerCase(), 'utf8').digest('hex');
+  return `workspace-${digest.slice(0, 8)}`;
+}
+
 function slugify(value) {
-  return value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 128).replace(/-+$/g, '');
+  const slug = foldToAscii(value).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 128).replace(/-+$/g, '');
+  return slug || fallbackId(value);
 }
 
 function normalizedName(value) {
-  return value.toLowerCase().normalize('NFKC').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  const folded = foldToAscii(value.normalize('NFKC')).replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  // Names with no Latin letters or digits must not all collapse to one empty name.
+  return folded || value.normalize('NFKC').trim().toLowerCase();
 }
 
 function containsSecretLike(value) {

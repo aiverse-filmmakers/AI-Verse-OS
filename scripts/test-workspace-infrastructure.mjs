@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const script = path.join(repoRoot, 'scripts', 'workspace-infrastructure.mjs');
@@ -52,7 +53,7 @@ function run(root) {
 function snapshot(root) {
   const rows = [];
   const visit = (directory) => {
-    const entries = fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    const entries = fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => compareCodeUnits(a.name, b.name));
     for (const entry of entries) {
       const target = path.join(directory, entry.name);
       const rel = path.relative(root, target).split(path.sep).join('/');

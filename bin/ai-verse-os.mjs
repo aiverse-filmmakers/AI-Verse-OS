@@ -590,7 +590,7 @@ function update(options) {
   if (!commandVersion('git')) fail('Git is required to update AI-Verse OS.');
 
   const dirty = run('git', ['-C', root, 'status', '--porcelain', '--untracked-files=no'], { capture: true }).stdout.trim();
-  if (dirty) fail('Tracked system files have local changes. Commit, stash, or revert them before updating. User-owned ignored data is preserved.');
+  if (dirty) fail('Some of the OS system files in this folder have been changed, so the update stopped and changed nothing. Your own data (workspaces, memory, connections) is untouched. To get the official system files back, run: ai-verse-os reinstall --force. Careful: that replaces your edits to the system files.');
 
   const before = readSetup(root);
   run('git', ['-C', root, 'fetch', 'origin', 'main'], { capture: options.json });

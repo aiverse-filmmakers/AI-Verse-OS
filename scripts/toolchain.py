@@ -51,7 +51,7 @@ def _developer_tools_installed():
     """Apple's /usr/bin shims pop up an install dialog unless the developer tools really exist."""
     if not _DEV_TOOLS:
         try:
-            r = _RUN(["/usr/bin/xcode-select", "-p"], capture_output=True, text=True, timeout=15, shell=False)
+            r = _RUN(["/usr/bin/xcode-select", "-p"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, shell=False)
             _DEV_TOOLS.append(r.returncode == 0 and bool(r.stdout.strip()))
         except (OSError, subprocess.SubprocessError):
             _DEV_TOOLS.append(False)
@@ -67,7 +67,7 @@ def _env_get(env, name):
 
 def _version_of(file):
     try:
-        r = _RUN([str(file), "--version"], capture_output=True, text=True, timeout=15, shell=False)
+        r = _RUN([str(file), "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, shell=False)
     except (OSError, subprocess.SubprocessError):
         return None
     return parse_version(f"{r.stdout} {r.stderr}") if r.returncode == 0 else None

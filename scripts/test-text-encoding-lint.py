@@ -92,11 +92,16 @@ def flag(call):
         if mode is None or _is_binary(mode):
             return None  # default mode is binary
         return None if _has_encoding(call, 2) else name
-    if name in SUBPROCESS_NAMES and owner in {"subprocess", None}:
+    # Any call that asks for text output must name its encoding, whatever alias it goes through
+    # (for example _RUN = subprocess.run), so this check does not look at the function name.
+    process_like = name in SUBPROCESS_NAMES or any(
+        _keyword(call, hint) is not None for hint in ("capture_output", "stdout", "stderr", "shell", "check")
+    )
+    if process_like:
         for option in ("text", "universal_newlines"):
             item = _keyword(call, option)
             if item is not None and _truthy(item.value):
-                return None if _keyword(call, "encoding") is not None else f"subprocess.{name}"
+                return None if _keyword(call, "encoding") is not None else f"text call {name}"
     return None
 
 
@@ -141,7 +146,7 @@ class TextEncodingLintTests(unittest.TestCase):
             'subprocess.Popen(["x"], universal_newlines=True)\n'
             'check_output(["x"], text=True)\n'
         )
-        self.assertEqual(len(bare_text_calls(bad)), 15)
+        self.assertEqual(len(bare_text_calls(bad)), 16)
 
     def test_scanner_accepts_explicit_or_binary(self):
         good = (

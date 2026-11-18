@@ -125,7 +125,7 @@ fi
 say "Commit under test"
 SRC="$REPO"; [ "$WIN" = 1 ] && SRC="$(cygpath -m "$REPO")"
 if [ "$WIN" = 1 ]; then GITBIN="$("$NODE" "$REPO/scripts/toolchain.mjs" resolve git)"; else GITBIN="$(command -v git)"; fi
-"$GITBIN" -c safe.directory='*' -C "$TARGET" fetch -q "$SRC" HEAD || fail "could not fetch the commit under test from $SRC"
+"$GITBIN" -c safe.directory='*' -C "$TARGET" fetch -q --depth=1 --update-shallow "$SRC" HEAD || fail "could not fetch the commit under test from $SRC"
 "$GITBIN" -C "$TARGET" checkout -q --detach FETCH_HEAD || fail "could not check out the commit under test"
 [ "$("$GITBIN" -C "$TARGET" rev-parse HEAD)" = "$CM_HEAD" ] || fail "the install folder is not at the commit under test ($CM_HEAD)"
 echo "install folder is at $CM_HEAD"

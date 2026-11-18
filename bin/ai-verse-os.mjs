@@ -191,7 +191,7 @@ function validateInstall(root) {
     '.claude/skills/3d-brain/SKILL.md',
     '.agents/skills/3d-brain/SKILL.md',
     'scripts/components.mjs',
-    'scripts/fixed-order.mjs',
+    // Do not add new files here until the accepted release contains them: installs validate the accepted release tree.
   ];
   return required.filter(item => !fs.existsSync(path.join(root, item)));
 }

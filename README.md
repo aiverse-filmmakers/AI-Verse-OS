@@ -2,7 +2,9 @@
 
 **AI-Verse OS** is the host constitution for AI-Verse. It owns workspace scope, host structure, current operating context, routing, the permission check for outside actions, Data writes and deletions, and component composition. It does not take canonical Brain, Memory, Data, Skills, Connections, or automation state away from their owning components.
 
-**AI-Verse Community:** https://www.skool.com/bogdans-ai-verse-4398
+**This is your OS.** The folder the installer creates belongs to you. You can change it, move it, keep it on your computer only, or cut it off from the internet whenever you like.
+
+**Official AI-Verse help and questions:** the AI-Verse Community, https://www.skool.com/bogdans-ai-verse-4398
 
 ## Install
 
@@ -28,13 +30,6 @@ ai-verse-os install
 ```
 
 Installation only makes the OS runtime available. It does **not** attach sibling components, initialize their canonical stores, transfer Brain authority, authorize external accounts, or grant broader permissions.
-
-The previously frozen five-component first-member beta remains reproducible from exact immutable refs:
-
-- [Five-Component First Member Beta Install](docs/FIVE-COMPONENT-BETA-INSTALL.md)
-- [Five-Component Release Status](docs/FIVE-COMPONENT-RELEASE-STATUS.md)
-
-Do not substitute moving `main` branches when reproducing that frozen gate.
 
 ## Security
 
@@ -178,19 +173,25 @@ It does not automatically promote the candidate into Knowledge, Decisions, Memor
 
 ## Update / disable / uninstall
 
-Update tracked OS runtime files without touching ignored user-owned state:
+Your OS folder is yours. You do not have to keep it connected to any online copy, and you never need to run Git commands yourself. Updates come from the AI-Verse installer, which brings the accepted release.
+
+Update the OS system files without touching your own files (notes, knowledge, workspaces and settings, which Git ignores):
 
 ```bash
 ai-verse-os update --dir ./AI-Verse-OS
 ```
 
-If tracked OS files need to be restored deliberately:
+If you changed any OS system file, update stops and tells you before it changes anything. It never overwrites your edits.
+
+Today the update command fetches the release through the connection named `origin` that the installer set up in your folder (the official AI-Verse source). If you remove that connection, `update` and `reinstall` cannot run until you reconnect it or install again. Everything else keeps working, and your folder stays complete and usable.
+
+To put the OS system files back to the official copy on purpose:
 
 ```bash
 ai-verse-os reinstall --force --dir ./AI-Verse-OS
 ```
 
-Reinstall restores tracked runtime files from `origin/main` while preserving ignored canonical user state, component attachment state, and `.aiverse/os/setup.json`.
+Reinstall replaces the OS's own system files with the official copy, so any edits you made to those files are discarded without a separate warning. That is why it needs `--force`. Your own files (notes, knowledge, workspaces, connections, automations, component attachment state and `.aiverse/os/setup.json`) are kept.
 
 AI-Verse OS itself has no meaningful enabled/disabled toggle in the public beta. Optional components expose enable/disable through their own lifecycle where meaningful.
 
@@ -258,7 +259,7 @@ automations/policies/
 apps/
 ```
 
-Local lifecycle/attachment state under `.aiverse/` is intentionally outside tracked upstream system files.
+Local lifecycle/attachment state under `.aiverse/` is intentionally outside the tracked system files.
 
 `runtime/` is derived/disposable. If deleting runtime destroys irreplaceable truth, that truth is in the wrong layer.
 

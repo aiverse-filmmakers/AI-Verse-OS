@@ -31,13 +31,6 @@ ai-verse-os install
 
 Installation only makes the OS runtime available. It does **not** attach sibling components, initialize their canonical stores, transfer Brain authority, authorize external accounts, or grant broader permissions.
 
-The previously frozen five-component first-member beta remains reproducible from exact immutable refs:
-
-- [Five-Component First Member Beta Install](docs/FIVE-COMPONENT-BETA-INSTALL.md)
-- [Five-Component Release Status](docs/FIVE-COMPONENT-RELEASE-STATUS.md)
-
-Do not substitute moving `main` branches when reproducing that frozen gate.
-
 ## Security
 
 Read the [member security guide](docs/MEMBER-SECURITY-GUIDE.md). AI-Verse OS reduces the risk from outside content and untrusted skills. It cannot remove that risk.

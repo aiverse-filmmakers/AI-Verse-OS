@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 export const COMPONENT_LIFECYCLE_SCHEMA = '1.0';
 export const COMPONENT_LIFECYCLE_PROVIDER = 'ai-verse-os/component-lifecycle-v1';
@@ -361,7 +362,7 @@ export function inspectComponents(rootInput, profile = 'detected') {
 
   byId.set('aiverse-skills', skillsState());
 
-  const components = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const components = [...byId.values()].sort((a, b) => compareCodeUnits(a.id, b.id));
   const required = [...PROFILES[profile]];
   const state = aggregateState(components, required, lock);
   const notReadyRequired = required.filter(id => components.find(item => item.id === id)?.state !== 'ready');

@@ -1,3 +1,4 @@
+import { compareCodeUnits } from './fixed-order.mjs';
 const MATERIAL_CHANGE_SCHEMA_VERSION = 'purpose.material-changes.v1';
 const RELEVANCE_SECTIONS = Object.freeze(['goals', 'strategies', 'initiatives']);
 const RELEVANCE_TARGET_OWNERS = new Set(['ai-verse-os', 'ai-verse-brain']);
@@ -103,7 +104,7 @@ export function applyPurposeMaterialChangeRelevance(envelope, projection) {
     applied += 1;
   }
 
-  unmatched.sort((a, b) => canonicalRefKey(a).localeCompare(canonicalRefKey(b)));
+  unmatched.sort((a, b) => compareCodeUnits(canonicalRefKey(a), canonicalRefKey(b)));
   output.recent_material_changes = structuredClone(projection.changes);
   output.section_states ??= {};
   output.section_states.material_change_relevance = {

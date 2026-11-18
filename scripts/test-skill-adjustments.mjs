@@ -7,13 +7,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { selectCapability } from './capability-resolver.mjs';
 import { readAdjustment, listAdjustments, saveAdjustment, removeAdjustment, SAVED_MESSAGE } from './skill-adjustments.mjs';
+import { compareCodeUnits } from './fixed-order.mjs';
 
 const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aiverse-adjustments-check-')));
 let checks = 0;
 function test(name, run) { run(); checks++; }
 const hashTree = dir => {
   const h = crypto.createHash('sha256');
-  const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+  const walk = d => { for (const e of fs.readdirSync(d, { withFileTypes: true }).sort((a, b) => compareCodeUnits(a.name, b.name))) {
     const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else h.update(e.name).update(fs.readFileSync(p)); } };
   walk(dir); return h.digest('hex');
 };

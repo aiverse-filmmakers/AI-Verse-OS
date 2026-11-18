@@ -253,7 +253,7 @@ def move_skills(root: Path) -> dict:
     entry, managed = config.get("skills_entrypoint"), config.get("skills_root")
     if entry and Path(entry).is_file():
         result = subprocess.run([sys.executable, entry, "--root", managed, "library", "--library-root", str(new),
-                                 "configure-learning", "--apply"], capture_output=True, text=True)
+                                 "configure-learning", "--apply"], capture_output=True, text=True, encoding="utf-8")
         if result.returncode != 0:
             config_file.write_bytes(before)
             return {"state": "refused", "message": "The skills library did not accept the new folder, so the setting "
@@ -261,7 +261,7 @@ def move_skills(root: Path) -> dict:
     sync = root / "scripts" / "sync-my-skills.mjs"
     node = resolve_tool("node")
     if sync.is_file() and node:
-        subprocess.run([node, str(sync)], capture_output=True, text=True, cwd=root)
+        subprocess.run([node, str(sync)], capture_output=True, text=True, cwd=root, encoding="utf-8")
     return {"state": "moved", "from": str(old), "to": str(new),
             "message": f"Your own skills now live in my-skills inside this folder. The old folder {old} is untouched; "
                        "delete it yourself once you have checked everything works."}

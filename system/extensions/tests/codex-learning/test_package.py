@@ -37,7 +37,7 @@ class PackageTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=30, encoding="utf-8",
             )
             response = json.loads(result.stdout)
             self.assertFalse(response["includes_operator_data"])

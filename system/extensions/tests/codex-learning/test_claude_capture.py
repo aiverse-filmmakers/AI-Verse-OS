@@ -40,21 +40,21 @@ class CaptureFixtureTests(unittest.TestCase):
         for location in ("operator/context", "workspaces", ".aiverse/extensions/ai-verse-codex-learning"):
             (self.root / location).mkdir(parents=True, exist_ok=True)
         (self.root / "operator/context/CURRENT.md").write_text(
-            "# Context\n\n## Current state\n\n- synthetic operator state.\n"
+            "# Context\n\n## Current state\n\n- synthetic operator state.\n", encoding="utf-8"
         )
         for workspace in ("alpha", "beta"):
             folder = self.root / "workspaces" / workspace
             (folder / "context").mkdir(parents=True)
             (folder / "WORKSPACE.yaml").write_text(
-                f'schema_version: "2.0"\nid: {workspace}\nname: "{workspace.title()}"\nstatus: active\n'
+                f'schema_version: "2.0"\nid: {workspace}\nname: "{workspace.title()}"\nstatus: active\n', encoding="utf-8"
             )
-            (folder / "context/CURRENT.md").write_text("## Current state\n\n- fixture state\n")
+            (folder / "context/CURRENT.md").write_text("## Current state\n\n- fixture state\n", encoding="utf-8")
         registry = {"schema_version": "1.0", "extensions": {
             "ai-verse-codex-learning": {
                 "id": "ai-verse-codex-learning", "supported": True,
                 "installed": True, "enabled": True,
             }}}
-        (self.root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry))
+        (self.root / ".aiverse/extensions/registry.json").write_text(json.dumps(registry), encoding="utf-8")
         self.provider = tempfile.TemporaryDirectory(prefix="synthetic-claude-provider-")
         self.addCleanup(self.provider.cleanup)
         self.session = "fixture-session-01"
@@ -273,8 +273,8 @@ class CaptureFixtureTests(unittest.TestCase):
         self.path.write_bytes(record("user", "Changed", self.session))
         self.assertEqual(capture_hook(self.bridge, self.host_event())["status"], "blocked")
         archive = list((self.root / "archives/private-chat-history/v1/operator").glob("*.jsonl"))[0]
-        self.assertIn("First", archive.read_text())
-        self.assertNotIn("Changed", archive.read_text())
+        self.assertIn("First", archive.read_text(encoding="utf-8"))
+        self.assertNotIn("Changed", archive.read_text(encoding="utf-8"))
 
     def test_later_source_truncation_cannot_report_success_or_erase_archive(self):
         self.enable_fixture_capture()
@@ -287,7 +287,7 @@ class CaptureFixtureTests(unittest.TestCase):
         result = capture_hook(self.bridge, self.host_event())
         self.assertEqual(result["status"], "blocked")
         archive = list((self.root / "archives/private-chat-history/v1/operator").glob("*.jsonl"))[0]
-        rows = [json.loads(line) for line in archive.read_text().splitlines()]
+        rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines()]
         self.assertEqual([row["text"] for row in rows[1:]], ["First", "Second"])
 
     def test_missing_path_and_wrong_session_name_are_blocked(self):
@@ -433,7 +433,7 @@ class CaptureFixtureTests(unittest.TestCase):
         self.path.write_bytes(record("user", "Visible", self.session))
         policy = self.root / "automations/policies/action-permissions.yaml"
         policy.parent.mkdir(parents=True, exist_ok=True)
-        policy.write_text("schema_version: invalid\napproval:\n  external_actions: allow\n")
+        policy.write_text("schema_version: invalid\napproval:\n  external_actions: allow\n", encoding="utf-8")
         self.assertEqual(capture_hook(self.bridge, self.host_event())["status"], "blocked")
         self.assertFalse((self.root / "archives/private-chat-history").exists())
 
@@ -444,7 +444,7 @@ class CaptureFixtureTests(unittest.TestCase):
         marker = self.bridge.session_path(self.session).with_suffix(".cancel")
         marker.write_text(json.dumps({
             "session_id": self.session, "original_turn_id": turn["id"]
-        }))
+        }), encoding="utf-8")
         self.assertEqual(capture_hook(self.bridge, self.host_event())["status"], "blocked")
         self.assertFalse((self.root / "archives/private-chat-history").exists())
 

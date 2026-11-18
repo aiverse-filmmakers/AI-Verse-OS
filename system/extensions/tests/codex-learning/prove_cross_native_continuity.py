@@ -54,7 +54,7 @@ def main():
                     ANTHROPIC_BASE_URL=f'http://127.0.0.1:{server.server_port}',
                     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', DISABLE_AUTOUPDATER='1')
                 settings = base / ('claude-settings-' + str(phase) + '.json')
-                settings.write_text(json.dumps(claude_definition(root, sys.executable, build=build)))
+                settings.write_text(json.dumps(claude_definition(root, sys.executable, build=build)), encoding="utf-8")
                 command = [sys.argv[1], '-p', '--settings', str(settings), '--model', 'claude-sonnet-4-5',
                            '--session-id', str(uuid.uuid4()), prompt]
             else:
@@ -62,7 +62,7 @@ def main():
                 Path(env['CODEX_HOME']).mkdir()
                 folder = root / '.codex'
                 folder.mkdir(exist_ok=True)
-                (folder/'hooks.json').write_text(json.dumps(definition(root, sys.executable, build=build)))
+                (folder/'hooks.json').write_text(json.dumps(definition(root, sys.executable, build=build)), encoding="utf-8")
                 approve_fixture(sys.argv[2], root, env)
                 command = [sys.argv[2], 'exec', '--skip-git-repo-check', '--json',
                     '-c','features.codex_hooks=true','-c','model="gpt-5.2"','-c','model_provider="proof"',
@@ -71,13 +71,13 @@ def main():
                     '-c','model_providers.proof.wire_api="responses"',
                     '-c','model_providers.proof.requires_openai_auth=false',prompt]
             try:
-                result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=150)
+                result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=150, encoding="utf-8")
                 if result.returncode or server.reply not in result.stdout:
                     raise AssertionError('native cross-interface fixture conversation failed')
                 if prior_reply and not getattr(server, 'saw_expected_context', False):
                     contexts = []
                     for file in (root/'runtime/codex-learning/sessions').glob('*.json'):
-                        state = json.loads(file.read_text())
+                        state = json.loads(file.read_text(encoding="utf-8"))
                         delivered = state.get('context_delivery', {})
                         contexts.append({'bytes': delivered.get('prompt_bytes'),
                                          'memory_items': len(delivered.get('memory_item_ids', []))})

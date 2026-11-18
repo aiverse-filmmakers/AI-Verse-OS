@@ -1370,7 +1370,7 @@ class AIverseOSHost:
             input=json.dumps(dict(parameters), ensure_ascii=False, separators=(",", ":")),
             text=True,
             capture_output=True,
-            shell=False,
+            shell=False, encoding="utf-8",
         )
         if proc.returncode != 0:
             detail = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"

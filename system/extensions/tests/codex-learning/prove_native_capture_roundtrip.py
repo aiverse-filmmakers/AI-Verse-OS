@@ -34,17 +34,17 @@ def prepare(root, memory_source):
     shutil.copytree(PACKAGE, target, ignore=shutil.ignore_patterns('__pycache__'))
     for name in ('operator/profile', 'operator/context', 'operator/memory', 'workspaces'):
         (root / name).mkdir(parents=True, exist_ok=True)
-    (root / 'operator/profile/preferences.md').write_text('# Preferences\n')
-    (root / 'operator/context/CURRENT.md').write_text('# Context\n\n## Current state\n\nSynthetic capture proof.\n')
+    (root / 'operator/profile/preferences.md').write_text('# Preferences\n', encoding="utf-8")
+    (root / 'operator/context/CURRENT.md').write_text('# Context\n\n## Current state\n\nSynthetic capture proof.\n', encoding="utf-8")
     registry = {'schema_version': '1.0', 'extensions': {
         bridge.ID: {'id': bridge.ID, 'supported': True, 'installed': True, 'enabled': True},
         'ai-verse-memory': {'id': 'ai-verse-memory', 'supported': True, 'installed': True,
                             'enabled': True, 'engine': 'scripts/ai-verse-memory/memory.py'}}}
-    (root / '.aiverse/extensions/registry.json').write_text(json.dumps(registry))
+    (root / '.aiverse/extensions/registry.json').write_text(json.dumps(registry), encoding="utf-8")
     config = {'schema_version': 1, 'enabled': True, 'review_mode': 'off',
               'reflection_enabled': False, 'chat_history': 'prospective',
               'runtime_path': str(Path(shutil.which('node')).parent), 'skills_root': str(root / 'skills')}
-    (target / 'config.json').write_text(json.dumps(config))
+    (target / 'config.json').write_text(json.dumps(config), encoding="utf-8")
     memory = bridge.load_module(destination / 'memory.py', '_native_capture_proof_memory')
     memory.ensure_layout(root, memory.MODE_NATIVE)
     memory.rebuild(silent=True, root=root, mode=memory.MODE_NATIVE)
@@ -78,7 +78,7 @@ def main():
         settings = claude_definition(root, sys.executable,
             build=hashlib.sha256((PACKAGE / 'bridge.py').read_bytes()).hexdigest())
         settings_path = base / 'settings.json'
-        settings_path.write_text(json.dumps(settings))
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if k in ('PATH', 'TMPDIR', 'SYSTEMROOT')}
         env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(config),
             ANTHROPIC_BASE_URL=f'http://127.0.0.1:{server.server_port}',
@@ -90,13 +90,13 @@ def main():
         command = launcher + ['-p', '--settings', str(settings_path), '--model', 'claude-sonnet-4-5',
             '--session-id', str(uuid.uuid4()), 'portable-claude-proof-prompt']
         try:
-            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(command, cwd=root, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8")
             if result.returncode != 0 or 'portable-claude-proof-reply' not in result.stdout:
                 raise SystemExit('first native synthetic conversation failed')
             # A separate native process resumes the same session. Identical
             # user text is a new message, never content-deduplicated history.
             resumed = ['--resume' if arg == '--session-id' else arg for arg in command]
-            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(resumed, cwd=root, env=env, capture_output=True, text=True, timeout=120, encoding="utf-8")
             if result.returncode:
                 raise SystemExit('resumed native conversation failed')
             crash_prompt = 'durable prompt before killed native reply café 🧪'
@@ -112,9 +112,9 @@ def main():
             print('Native hook archive proof failed; content-free lifecycle diagnostics follow')
             for file in (root / 'runtime').rglob('*.jsonl'):
                 if file.is_file():
-                    print(file.read_text()[-4000:])
+                    print(file.read_text(encoding="utf-8")[-4000:])
             raise SystemExit('native lifecycle did not create exactly one private archive')
-        messages = [json.loads(line) for line in files[0].read_text().splitlines()][1:]
+        messages = [json.loads(line) for line in files[0].read_text(encoding="utf-8").splitlines()][1:]
         assert [row['text'] for row in messages[:4]] == ['portable-claude-proof-prompt', 'portable-claude-proof-reply'] * 2
         assert len(messages) in {4, 5}
         if len(messages) == 5:

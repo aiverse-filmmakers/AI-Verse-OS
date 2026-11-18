@@ -476,7 +476,7 @@ class ArchiveFixtureTests(unittest.TestCase):
         self.assertEqual(len(v1.splitlines()), 4)
         legacy_root = Path(self.tmp.name) / "legacy-os"
         legacy_root.mkdir()
-        (legacy_root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n")
+        (legacy_root / "AI-VERSE.yaml").write_text("schema_version: '2.0'\n", encoding="utf-8")
         legacy = self.archive(root=legacy_root)
         for e in events:
             self.assertEqual(legacy.append(e).status, "saved")

@@ -15,7 +15,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 env = {k: v for (k, v) in os.environ.items() if k in ('PATH', 'TMPDIR', 'SYSTEMROOT')}
 env.update(HOME=str(root / 'home'), CODEX_HOME=str(root / 'codex'))
 args = [sys.argv[1], 'exec', '--skip-git-repo-check', '--json', '-c', 'model="gpt-5.2"', '-c', 'model_provider="proof"', '-c', 'model_providers.proof.name="Offline fixture"', '-c', f'model_providers.proof.base_url="http://127.0.0.1:{server.server_port}/v1"', '-c', 'model_providers.proof.wire_api="responses"', '-c', 'model_providers.proof.requires_openai_auth=false', 'portable-native-proof-prompt']
-r = subprocess.run(args, cwd=root / 'workspace', env=env, capture_output=True, text=True, timeout=90)
+r = subprocess.run(args, cwd=root / 'workspace', env=env, capture_output=True, text=True, timeout=90, encoding="utf-8")
 server.shutdown()
 if r.returncode != 0:
     raise SystemExit('native Codex synthetic turn failed')

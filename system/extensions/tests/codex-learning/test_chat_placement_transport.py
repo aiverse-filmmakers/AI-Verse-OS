@@ -17,7 +17,7 @@ class PlacementTransportTests(unittest.TestCase):
     def setUp(self):
         fixture.ArchiveFixtureTests.setUp(self)
         self.root = self.root.resolve()
-        (self.root / 'AI-VERSE.yaml').write_text('architecture: unified-workspace\n')
+        (self.root / 'AI-VERSE.yaml').write_text('architecture: unified-workspace\n', encoding="utf-8")
         fixture.ArchiveFixtureTests.workspace(self, 'film')
         self.chat = fixture.ArchiveFixtureTests.archive(self)
         self.chat.append(fixture.event())

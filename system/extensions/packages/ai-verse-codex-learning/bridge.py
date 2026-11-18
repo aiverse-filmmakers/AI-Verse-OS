@@ -123,7 +123,7 @@ def atomic_json(path, value, boundary):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, name = tempfile.mkstemp(prefix=".replace-", dir=path.parent)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             json.dump(value, stream, ensure_ascii=False, sort_keys=True, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -585,7 +585,7 @@ def yaml_list(text, key):
 
 INPUT_LIMIT = 2_000_000
 CLAUDE_CONTEXT_BYTES = 9000  # Claude Code spills additionalContext above 10,000 characters.
-REFLECT_SHA256 = "f14a309470beb64436218ee2b841a5dab7f9bff7924a9bc00bd2d159bcb20bb3"  # refreshed with the package hashes
+REFLECT_SHA256 = "43c76461f2b52475bbea7b40de18d35d1542c2f0cbd02127045d52cf6f5b40bf"  # refreshed with the package hashes
 INTENT_ENGINE_SHA256 = "f418171e744ce5a8a288a2683cc6c21c319aa478ba9cbe5a2e43657440de5e49"
 
 
@@ -596,7 +596,7 @@ class Bridge:
         self.harness = harness
         self.labels = HARNESSES[harness]
         self.root = Path(root).resolve()
-        manifest = safe(self.root / "AI-VERSE.yaml", self.root, file=True).read_text()
+        manifest = safe(self.root / "AI-VERSE.yaml", self.root, file=True).read_text(encoding="utf-8")
         if not re.search(r'^architecture:\s*["\']?unified-workspace', manifest, re.M):
             raise Refused("incompatible OS architecture")
         self.extension = self.root / ".aiverse/extensions" / ID
@@ -680,7 +680,7 @@ class Bridge:
         path = self.session_path(session).with_suffix(".lock")
         safe(path, self.root)
         fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "r+") as stream:
+        with os.fdopen(fd, "r+", encoding="utf-8") as stream:
             with file_lock(stream):
                 yield
 
@@ -715,7 +715,7 @@ class Bridge:
         if path.exists() and path.stat().st_size > 2_000_000:
             os.replace(path, self.runtime / "events.previous.jsonl")
         fd = os.open(path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "w") as stream:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def intent_service(self):
@@ -859,7 +859,7 @@ class Bridge:
     def manifest(self, workspace):
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,127}", workspace) or workspace == "_template":
             raise Refused("invalid workspace identity")
-        text = safe(self.root / "workspaces" / workspace / "WORKSPACE.yaml", self.root, file=True).read_text()
+        text = safe(self.root / "workspaces" / workspace / "WORKSPACE.yaml", self.root, file=True).read_text(encoding="utf-8")
         fields = {}
         for key in ("schema_version", "id", "name", "status", "purpose", "type"):
             hits = re.findall(rf"^{key}:\s*(.*?)\s*$", text, re.M)
@@ -962,7 +962,7 @@ class Bridge:
         location = (self.root / "operator/context/CURRENT.md" if scope == "operator"
                     else self.root / "workspaces" / scope[10:] / "context/CURRENT.md")
         safe(location, self.root)
-        result["source_sha256"] = digest(location.read_text()) if location.exists() else digest("")
+        result["source_sha256"] = digest(location.read_text(encoding="utf-8")) if location.exists() else digest("")
         return result
 
     def command_prefix(self):
@@ -1139,7 +1139,7 @@ class Bridge:
         if not file.exists() or file.stat().st_size > 4_000_000:
             return {"current_build_prompt_observed": False, "current_build_review_observed": False}
         rows = []
-        for line in file.read_text().splitlines()[-5000:]:
+        for line in file.read_text(encoding="utf-8").splitlines()[-5000:]:
             try:
                 row = json.loads(line)
                 if row.get("build") == self.build and row.get("harness", "codex") == "codex":
@@ -1168,7 +1168,7 @@ class Bridge:
         for name in ("identity.md", "preferences.md"):
             file = self.root / "operator/profile" / name
             if file.exists():
-                text = safe(file, self.root, file=True).read_text()
+                text = safe(file, self.root, file=True).read_text(encoding="utf-8")
                 if not SECRET.search(text):
                     text = visible_profile_text(text, self.readable_projects(state, event), state["scope"] == "operator")
                     profile[name] = small_window(text, prompt)
@@ -1894,8 +1894,8 @@ def current_write(root, host, module, payload):
     lock_path = file.parent / ".codex-operational-write.lock"
     safe(lock_path, root)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "r+") as lock, file_lock(lock):
-        before = file.read_text() if file.exists() else ""
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock, file_lock(lock):
+        before = file.read_text(encoding="utf-8") if file.exists() else ""
         marker = f"<!-- codex-effect:{digest(payload['effect_id'])} -->"
         if marker in before:
             return {"state": "existing", "changed": False, "source": str(file.relative_to(root))}
@@ -1921,7 +1921,7 @@ def current_write(root, host, module, payload):
             after = (before.rstrip() or "# Current Context") + "\n\n## " + heading + "\n\n- " + parameters["text"] + " " + marker + "\n"
         fd, temp = tempfile.mkstemp(prefix=".codex-current-", dir=file.parent)
         try:
-            with os.fdopen(fd, "w") as output:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
                 output.write(after)
                 output.flush()
                 os.fsync(output.fileno())
@@ -1958,8 +1958,8 @@ def current_remove(root, host, payload):
         raise Refused("removal needs the hash of the line that was written")
     lock_path = file.parent / ".codex-operational-write.lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "r+") as lock, file_lock(lock):
-        before = file.read_text()
+    with os.fdopen(fd, "r+", encoding="utf-8") as lock, file_lock(lock):
+        before = file.read_text(encoding="utf-8")
         lines = before.splitlines(keepends=True)
         found = [line for line in lines if marker in line]
         if not found:
@@ -1969,7 +1969,7 @@ def current_remove(root, host, payload):
         kept = [line for line in lines if marker not in line]
         fd2, temp = tempfile.mkstemp(prefix=".codex-current-", dir=file.parent)
         try:
-            with os.fdopen(fd2, "w") as output:
+            with os.fdopen(fd2, "w", encoding="utf-8", newline="\n") as output:
                 output.write("".join(kept))
                 output.flush()
                 os.fsync(output.fileno())
@@ -2071,7 +2071,7 @@ def reflect_attention(bridge, memory, scopes, projects=frozenset()):
         if folder.is_dir() and folder.name not in projects:
             hidden.add(folder.name.replace("-", " ").casefold())
             manifest = folder / "WORKSPACE.yaml"
-            found = re.search(r'^name:\s*"?([^"\n]+)"?', manifest.read_text(errors="ignore"), re.M) if manifest.is_file() else None
+            found = re.search(r'^name:\s*"?([^"\n]+)"?', manifest.read_text(errors="ignore", encoding="utf-8"), re.M) if manifest.is_file() else None
             if found:
                 hidden.add(found.group(1).strip().casefold())
     hooks, dated, records = [], [], []
@@ -2145,7 +2145,7 @@ def reflect_scan(bridge, module, host, payload):
         if notes.is_file():
             safe(notes, bridge.root)
             age = round((time.time() - notes.stat().st_mtime) / 86400, 1)
-            sha = digest(notes.read_text())
+            sha = digest(notes.read_text(encoding="utf-8"))
         result["workspaces"][project] = {"name": meta.get("name", project), "status": meta.get("status"),
                                          "aliases": meta.get("aliases", []), "notes_age_days": age, "notes_sha256": sha}
     wanted = {"operator", *("workspace:" + p for p in projects)}
@@ -2331,7 +2331,7 @@ def run_owner(bridge, operation, payload):
         if not node:
             raise Refused("OS inbox owner unavailable: Node is missing")
         proc = subprocess.run([node, "--input-type=module", "--eval", code],
-                              input=json.dumps(request), text=True, capture_output=True, env=env, cwd=bridge.root)
+                              input=json.dumps(request), text=True, capture_output=True, env=env, cwd=bridge.root, encoding="utf-8")
         if proc.returncode:
             raise Refused("OS inbox owner refused pending learning")
         return json.loads(proc.stdout)

@@ -37,9 +37,9 @@ class SkillUsageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "calls.txt"
             fake = Path(tmp) / "aiverse_skills.py"
-            fake.write_text("import sys\nopen(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" % str(log))
+            fake.write_text("import sys\nopen(%r, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n" % str(log), encoding="utf-8")
             self.assertTrue(bridge.record_skill_use({"skills_entrypoint": str(fake), "skills_root": "/r"}, "copywriting"))
-            self.assertEqual(log.read_text().strip(), "--root /r usage record copywriting --json")
+            self.assertEqual(log.read_text(encoding="utf-8").strip(), "--root /r usage record copywriting --json")
 
 
 
@@ -49,9 +49,9 @@ class ProjectSkillNotesTests(unittest.TestCase):
         base = root / "workspaces" / "alpha"
         folder = base / "context" / "skill-adjustments"
         folder.mkdir(parents=True)
-        (base / "WORKSPACE.yaml").write_text("id: alpha\n")
+        (base / "WORKSPACE.yaml").write_text("id: alpha\n", encoding="utf-8")
         for name, text in notes.items():
-            (folder / f"{name}.md").write_text(text)
+            (folder / f"{name}.md").write_text(text, encoding="utf-8")
         return root
 
     def test_skill_note_and_other_note_names_are_attached(self):
@@ -82,8 +82,8 @@ class ProjectSkillNotesTests(unittest.TestCase):
             root = Path(tmp)
             base = root / "workspaces" / "alpha"
             (base / "context").mkdir(parents=True)
-            (base / "WORKSPACE.yaml").write_text("id: alpha\n")
-            (Path(elsewhere) / "copywriting.md").write_text("secret")
+            (base / "WORKSPACE.yaml").write_text("id: alpha\n", encoding="utf-8")
+            (Path(elsewhere) / "copywriting.md").write_text("secret", encoding="utf-8")
             (base / "context" / "skill-adjustments").symlink_to(elsewhere)
             self.assertIsNone(bridge.project_skill_notes(root, "workspace:alpha", "copywriting"))
 

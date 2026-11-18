@@ -82,7 +82,7 @@ def discover(root, options):
     node = Path(node).resolve()
     binding_cli = root / "scripts/capability-configuration-cli.mjs"
     if binding_cli.is_file():
-        result = subprocess.run([str(node), str(binding_cli), "--root", str(root)], input=json.dumps({"operation": "read"}), capture_output=True, text=True, check=True)
+        result = subprocess.run([str(node), str(binding_cli), "--root", str(root)], input=json.dumps({"operation": "read"}), capture_output=True, text=True, check=True, encoding="utf-8")
         binding = json.loads(result.stdout)
         if binding.get("configured"):
             options = dict(options)

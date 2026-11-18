@@ -59,7 +59,7 @@ class Tidy:
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.m.safe(self.lockfile, self.b.root)
         fd = os.open(self.lockfile, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "r+") as stream:
+        with os.fdopen(fd, "r+", encoding="utf-8") as stream:
             with self.m.file_lock(stream, timeout):
                 yield
 

@@ -615,7 +615,7 @@ function update(options) {
 }
 
 function reinstall(options) {
-  if (!options.force) fail('reinstall requires --force because it restores tracked OS files to origin/main while preserving ignored user-owned state.');
+  if (!options.force) fail('reinstall requires --force because it replaces the OS system files with the official copy, discarding any edits you made to them. Your own notes, knowledge, workspaces and settings are kept.');
   const root = resolveRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
   if (!fs.existsSync(path.join(root, '.git'))) fail('This installation is not a Git checkout.');
@@ -640,7 +640,7 @@ function reinstall(options) {
     canonical_user_state_purged: false,
   };
   if (options.json) emit(result, true);
-  else out('✓ AI-Verse OS tracked runtime files reinstalled. Ignored canonical user state and setup state were preserved.');
+  else out('✓ AI-Verse OS system files reinstalled. Any edits you made to them were replaced. Your own files and setup were kept.');
 }
 
 function components(options) {
@@ -717,6 +717,7 @@ function onboard(options) {
   out('AI-Verse OS first use');
   out('--------------------');
   out(`OS: ${root}`);
+  out('This is your OS. Everything in this folder is yours.');
   out('Start with a real request. AI-Verse will learn missing context progressively.');
   out('Optional deep intake remains available through the onboard capability.');
   if (claude) {

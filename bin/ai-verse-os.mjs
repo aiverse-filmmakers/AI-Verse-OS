@@ -618,7 +618,7 @@ function update(options) {
   if (!commandVersion('git')) fail('Git is required to update AI-Verse OS.');
 
   const dirty = run('git', ['-C', root, 'status', '--porcelain', '--untracked-files=no'], { capture: true }).stdout.trim();
-  if (dirty) fail('Tracked system files have local changes. Commit, stash, or revert them before updating. User-owned ignored data is preserved.');
+  if (dirty) fail('Some of the OS system files in this folder have been changed, so the update stopped and changed nothing. Your own data (workspaces, memory, connections) is untouched. To get the official system files back, run: ai-verse-os reinstall --force. Careful: that replaces your edits to the system files.');
 
   const before = readSetup(root);
   fetchSource(root, options);
@@ -774,7 +774,7 @@ function saveBeforeReinstall(root, accepted, options) {
 }
 
 function reinstall(options) {
-  if (!options.force) fail('reinstall requires --force because it restores tracked OS files to the accepted release while preserving ignored user-owned state.');
+  if (!options.force) fail('reinstall requires --force because it replaces the OS system files with the official copy, discarding any edits you made to them. Your own notes, knowledge, workspaces and settings are kept.');
   const root = resolveRepairableRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
   if (!fs.existsSync(path.join(root, '.git'))) fail('This installation is not a Git checkout.');
@@ -809,7 +809,7 @@ function reinstall(options) {
   };
   if (options.json) emit(result, true);
   else {
-    out('✓ AI-Verse OS tracked runtime files reinstalled to the accepted release. Ignored canonical user state and setup state were preserved.');
+    out('✓ AI-Verse OS system files reinstalled. Any edits you made to them were replaced. Your own files and setup were kept.');
     if (saved.backup_dir) out(`Your edited files were saved first in: ${saved.backup_dir}`);
     if (saved.index_backup_ref) out(`Your staged changes were saved first under the git reference: ${saved.index_backup_ref} (see them with: git show ${saved.index_backup_ref})`);
     if (saved.backup_ref) out(`Your own commits were saved first under the git reference: ${saved.backup_ref}`);
@@ -890,6 +890,7 @@ function onboard(options) {
   out('AI-Verse OS first use');
   out('--------------------');
   out(`OS: ${root}`);
+  out('This is your OS. Everything in this folder is yours.');
   out('Start with a real request. AI-Verse will learn missing context progressively.');
   out('Optional deep intake remains available through the onboard capability.');
   if (claude) {

@@ -284,6 +284,24 @@ try {
     assert.equal(fs.readFileSync(backed, 'utf8'), 'two\n');
   }
 
+  // 16. Both directions together: a file where the release has a folder, and a folder where the release has a file.
+  const k = freshInstall();
+  const releaseFiles = git(k, ['ls-files']).split('\n').filter(Boolean);
+  const nested = releaseFiles.find((f2) => f2.includes('/') && f2.split('/').length === 2 && f2.startsWith('scripts/'));
+  assert.ok(nested, 'expected a file inside scripts/');
+  git(k, ['rm', '-rq', 'scripts']);
+  git(k, ['rm', '-q', 'CLAUDE.md']);
+  git(k, ['commit', '-q', '-m', 'drop a folder and a file']);
+  write(path.join(k, 'scripts'), 'MY FILE WHERE A FOLDER GOES\n');
+  write(path.join(k, 'CLAUDE.md', 'inner.txt'), 'MY FOLDER WHERE A FILE GOES\n');
+  r = cliRun(['reinstall', '--force', '--dir', k, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.deepEqual([...out.backed_up_untracked_files].sort(), ['CLAUDE.md/inner.txt', 'scripts']);
+  assert.equal(read(path.join(out.backup_dir, 'scripts')), 'MY FILE WHERE A FOLDER GOES\n');
+  assert.equal(read(path.join(out.backup_dir, 'CLAUDE.md', 'inner.txt')), 'MY FOLDER WHERE A FILE GOES\n');
+  assert.ok(fs.statSync(path.join(k, 'scripts')).isDirectory() && fs.statSync(path.join(k, 'CLAUDE.md')).isFile());
+
   console.log('Reinstall accepted release tests passed');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

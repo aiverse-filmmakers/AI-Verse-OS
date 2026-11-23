@@ -677,8 +677,12 @@ function saveBeforeReinstall(root, accepted, options) {
 
   // Untracked or ignored files the reset would overwrite: same path as a release file, or below a path where the release has a file.
   const releaseSet = new Set(gitRaw(['ls-tree', '-r', '-z', '--name-only', accepted]).split('\0').filter(Boolean));
+  const releaseDirs = new Set();
+  for (const rel of releaseSet) {
+    for (let at = rel.indexOf('/'); at !== -1; at = rel.indexOf('/', at + 1)) releaseDirs.add(rel.slice(0, at));
+  }
   const collides = (rel) => {
-    if (releaseSet.has(rel)) return true;
+    if (releaseSet.has(rel) || releaseDirs.has(rel)) return true;
     for (let at = rel.indexOf('/'); at !== -1; at = rel.indexOf('/', at + 1)) {
       if (releaseSet.has(rel.slice(0, at))) return true;
     }

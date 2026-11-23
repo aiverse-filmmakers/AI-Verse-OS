@@ -75,6 +75,45 @@ def digest(value):
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+
+CONSENT_KEEP = 200
+
+
+def record_consent_digest(root, runtime, session, role, text, turn_id=None):
+    """Keep the fingerprint of a real chat message so the OS can later check a consent claim.
+
+    Only fingerprints are kept, never the words. The OS host adapter reads this file before it
+    creates a permanent bot or a recurring automation (FL-09). Stored per chat session.
+    """
+    if role not in {"user", "assistant"} or not isinstance(text, str) or not text.strip():
+        return
+    path = safe(Path(runtime) / "consent" / (digest(session) + ".jsonl"), root)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    rows = []
+    if path.is_file() and path.stat().st_size <= 2_000_000:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                rows.append(row)
+    now = time.time()
+    for form in dict.fromkeys([text, text.strip()]):
+        rows.append({"role": role, "digest": "sha256:" + hashlib.sha256(form.encode("utf-8")).hexdigest(),
+                     "ts": now, "turn": turn_id if isinstance(turn_id, str) else None})
+    rows = rows[-CONSENT_KEEP:]
+    fd, name = tempfile.mkstemp(prefix=".replace-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
 def utc():
     return datetime.now(timezone.utc).isoformat()
 
@@ -669,6 +708,13 @@ class Bridge:
         return (registry.get("schema_version") == "1.0" and entry.get("id") == ID
                 and all(entry.get(k) is True for k in ("supported", "installed", "enabled"))
                 and self.config["enabled"])
+
+    def record_consent(self, session, role, text, turn_id=None):
+        # A failure here must never stop the chat hook. The OS then simply finds no proof of consent.
+        try:
+            record_consent_digest(self.root, self.runtime, session, role, text, turn_id)
+        except (Refused, OSError, ValueError):
+            pass
 
     def session_path(self, session):
         if not isinstance(session, str) or not SAFE_ID.fullmatch(session):
@@ -1424,6 +1470,7 @@ class Bridge:
                     self.save(state)
                     result = self.context(state, "", kind, tidy=False)
                 else:
+                    self.record_consent(session, "user", event.get("prompt"), event.get("turn_id"))
                     try:
                         dest = self.destinations(event["cwd"], prompt)
                         suggestion = (old or {}).get("suggested_save")
@@ -1522,6 +1569,7 @@ class Bridge:
                                "additionalContext": "\n\n".join(parts)}} if parts else {})
                 elif kind == "Stop":
                     message = event.get("last_assistant_message") or ""
+                    self.record_consent(session, "assistant", message, turn.get("id"))
                     self.add_source(turn, "assistant", "assistant", message)
                     if message.strip():
                         turn["suggested_save"] = suggested_save(message)

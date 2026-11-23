@@ -109,6 +109,12 @@ jobs:
 
           host=adapter.AIverseOSHost(root)
           user_text="Every Monday at 09:00 Europe/Bucharest, review the Client Alpha delivery checklist."
+          bridge_dir = root / "system" / "extensions" / "packages" / "ai-verse-codex-learning"
+          bridge_spec = importlib.util.spec_from_file_location("consent_bridge", bridge_dir / "bridge.py")
+          bridge = importlib.util.module_from_spec(bridge_spec)
+          sys.path.insert(0, str(bridge_dir))
+          bridge_spec.loader.exec_module(bridge)
+          bridge.record_consent_digest(root, root / "runtime" / "codex-learning", "session_automation_acceptance", "user", user_text, "turn-fixture")
           request={
               "request_id":"req_automation_consent",
               "action_class":"modify_canonical_state",

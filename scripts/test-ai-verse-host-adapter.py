@@ -45,6 +45,17 @@ def load_adapter(path: Path):
     return module
 
 
+def record_real_message(root: Path, session_id: str, role: str, text: str) -> None:
+    """Record a chat message the way the chat hook does, so consent proof can be checked (FL-09)."""
+    bridge_dir = root / "system" / "extensions" / "packages" / "ai-verse-codex-learning"
+    spec = importlib.util.spec_from_file_location("aiverse_os_consent_bridge", bridge_dir / "bridge.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.path.insert(0, str(bridge_dir))
+    spec.loader.exec_module(module)
+    module.record_consent_digest(root, root / "runtime" / "codex-learning", session_id, role, text, "turn-fixture")
+
+
 def skills_pin(skills_entrypoint: Path, skills_root: Path):
     result = run([
         sys.executable,
@@ -754,6 +765,12 @@ def main() -> int:
         }
 
     direct_host._run_multiple_bots_create_durable = fake_create_durable_bot
+    record_real_message(
+        direct_host.root,
+        "session-permanent-bot-acceptance",
+        "user",
+        "Create me a permanent Client Alpha review bot.",
+    )
     permanent_bot_request = {
         "request_id": "explicit-permanent-bot-client-alpha",
         "action_class": "modify_canonical_state",
@@ -876,6 +893,7 @@ def main() -> int:
 
     direct_host._run_automations_create_definition = fake_create_automation_definition
     user_schedule_text = "Every Monday at 09:00 Europe/Bucharest, review the Client Alpha delivery checklist."
+    record_real_message(direct_host.root, "session-automation-acceptance", "user", user_schedule_text)
     automation_request = {
         "request_id": "explicit-automation-client-alpha",
         "action_class": "modify_canonical_state",

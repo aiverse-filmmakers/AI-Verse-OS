@@ -170,6 +170,52 @@ def _load_module(path: Path, name: str):
     return module
 
 
+# Proof that the operator really said yes (FL-09). The chat hook keeps a fingerprint of every real
+# user and assistant message of a chat. A consent claim counts only if its fingerprint is there.
+_CONSENT_MAX_AGE_SECONDS = 2 * 60 * 60
+_CONSENT_FILE_LIMIT = 2_000_000
+
+
+def _consent_rows(root: Path, session_id: str) -> list:
+    path = root / "runtime" / "codex-learning" / "consent" / (hashlib.sha256(session_id.encode("utf-8")).hexdigest() + ".jsonl")
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > _CONSENT_FILE_LIMIT:
+            return []
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if (isinstance(row, dict) and row.get("role") in {"user", "assistant"}
+                and isinstance(row.get("digest"), str) and isinstance(row.get("ts"), (int, float))):
+            rows.append(row)
+    return rows
+
+
+def _verify_consent_evidence(root: Path, consent: Mapping[str, Any], session_id: str, label: str) -> None:
+    """Refuse unless the chat hook recorded the operator's real message (and the recommendation it answers)."""
+    now = time.time()
+    rows = [row for row in _consent_rows(root, session_id) if 0 <= now - row["ts"] <= _CONSENT_MAX_AGE_SECONDS]
+    user_at = [i for i, row in enumerate(rows) if row["role"] == "user" and row["digest"] == consent.get("user_message_digest")]
+    if not user_at:
+        raise AdapterError(
+            f"{label} needs the operator's real message. The chat hook has no recent record of it, "
+            "so the OS cannot confirm the operator said yes. Ask the operator to say it again in the chat."
+        )
+    if consent.get("mode") == "affirmative_to_recommendation":
+        before = [i for i, row in enumerate(rows) if row["role"] == "assistant"
+                  and row["digest"] == consent.get("recommendation_message_digest") and i < user_at[-1]]
+        if not before:
+            raise AdapterError(
+                f"{label} says the operator agreed to a recommendation, but the chat hook has no record "
+                "of that recommendation before the operator's answer."
+            )
+
+
 def _fingerprint(request: Mapping[str, Any]) -> str:
     keys = (
         "action_class",
@@ -1981,6 +2027,7 @@ class AIverseOSHost:
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", session_id)
         ):
             raise AdapterError("bots.permanent trusted provenance IDs are invalid")
+        _verify_consent_evidence(self.root, consent, session_id, "bots.permanent")
 
         name = parameters.get("name")
         role_title = parameters.get("role_title")
@@ -2156,6 +2203,7 @@ class AIverseOSHost:
             or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", session_id)
         ):
             raise AdapterError("automations.create trusted provenance IDs are invalid")
+        _verify_consent_evidence(self.root, consent, session_id, "automations.create")
 
         name = parameters.get("name")
         objective = parameters.get("objective")

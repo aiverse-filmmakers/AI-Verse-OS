@@ -236,6 +236,54 @@ try {
   assert.equal(head(d), acceptedSha);
   assert.equal(read(path.join(out.backup_dir, 'README.md')), 'DETACHED EDIT\n');
 
+  // 13. An untracked folder where the accepted release has a file is backed up, not deleted by the reset.
+  const f = freshInstall();
+  git(f, ['rm', '-q', 'CLAUDE.md']);
+  git(f, ['commit', '-q', '-m', 'drop CLAUDE.md']);
+  write(path.join(f, 'CLAUDE.md', 'deep', 'mine.txt'), 'MY FOLDER FILE\n');
+  r = cliRun(['reinstall', '--force', '--dir', f, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.deepEqual(out.backed_up_untracked_files, ['CLAUDE.md/deep/mine.txt']);
+  assert.equal(read(path.join(out.backup_dir, 'CLAUDE.md', 'deep', 'mine.txt')), 'MY FOLDER FILE\n');
+  assert.ok(fs.statSync(path.join(f, 'CLAUDE.md')).isFile());
+
+  // 14. Only a deleted tracked file: it is restored, and no backup folder is reported or created.
+  const g = freshInstall();
+  fs.rmSync(path.join(g, 'README.md'));
+  r = cliRun(['reinstall', '--force', '--dir', g, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.equal(out.backup_dir, null);
+  assert.ok(!fs.existsSync(path.join(g, '.aiverse-backups')));
+  assert.ok(fs.existsSync(path.join(g, 'README.md')));
+
+  // 15. The exclude file keeps bytes that are not valid UTF-8, and a tracked file whose name is not valid UTF-8 is backed up under its own name.
+  const h = freshInstall();
+  const excludeFile = path.join(h, '.git', 'info', 'exclude');
+  const oldBytes = Buffer.concat([fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile) : Buffer.alloc(0), Buffer.from([0x23, 0x20, 0xff, 0xfe, 0x0a])]);
+  fs.writeFileSync(excludeFile, oldBytes);
+  write(path.join(h, 'README.md'), 'EDIT FOR EXCLUDE\n');
+  let oddName = null;
+  const oddBuffer = Buffer.concat([Buffer.from(path.join(h, 'odd-')), Buffer.from([0xff]), Buffer.from('.txt')]);
+  try {
+    fs.writeFileSync(oddBuffer, 'one\n');
+    git(h, ['add', '-A']);
+    git(h, ['commit', '-q', '-m', 'odd name']);
+    fs.writeFileSync(oddBuffer, 'two\n');
+    oddName = true;
+  } catch { /* some file systems refuse names that are not valid UTF-8; then only the exclude check runs */ }
+  r = cliRun(['reinstall', '--force', '--dir', h, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  const newBytes = fs.readFileSync(excludeFile);
+  assert.ok(newBytes.subarray(0, oldBytes.length).equals(oldBytes), 'existing exclude bytes must be unchanged');
+  assert.match(newBytes.toString('latin1'), /\/\.aiverse-backups\//);
+  if (oddName) {
+    const backed = Buffer.concat([Buffer.from(out.backup_dir), Buffer.from('/odd-'), Buffer.from([0xff]), Buffer.from('.txt')]);
+    assert.equal(fs.readFileSync(backed, 'utf8'), 'two\n');
+  }
+
   console.log('Reinstall accepted release tests passed');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

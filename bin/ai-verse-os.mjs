@@ -76,7 +76,7 @@ function run(command, args = [], options = {}) {
   }
   const result = spawnSync(file, args, {
     cwd: options.cwd,
-    encoding: 'utf8',
+    encoding: options.raw ? 'buffer' : 'utf8',
     stdio: options.capture ? 'pipe' : 'inherit',
     shell: false,
     env: options.env || toolEnv({ tools: Object.fromEntries(TOOLS.map(t => [t, { path: toolPath(t) }])) }),
@@ -653,13 +653,21 @@ function backupStamp() {
 }
 
 // Save everything the reset would discard: edited tracked files, untracked or ignored files that sit where the
-// accepted release has a file, and local commits (under a backup ref).
+// accepted release has a file (or inside a folder path where it has a file), and local commits (under a backup ref).
+// File names are handled as raw bytes (kept as latin1 strings internally) so names that are not valid UTF-8 survive.
 function saveBeforeReinstall(root, accepted, options) {
   const git = (args) => run('git', ['-C', root, ...args], { capture: true, allowFailure: true });
+  const gitRaw = (args) => {
+    const result = run('git', ['-C', root, ...args], { capture: true, allowFailure: true, raw: true });
+    return Buffer.isBuffer(result.stdout) ? result.stdout.toString('latin1') : '';
+  };
   const saved = { backup_dir: null, edited_files: [], deleted_files: [], colliding_files: [], backup_ref: null };
+  const shown = (rel) => Buffer.from(rel, 'latin1').toString('utf8');
+  const rootBytes = Buffer.from(root, 'utf8');
+  const bytesPath = (base, rel) => Buffer.concat([base, Buffer.from('/'), Buffer.from(rel, 'latin1')]);
+  const parentOf = (buf) => buf.subarray(0, buf.lastIndexOf(0x2f));
 
-  const status = git(['status', '--porcelain', '-z', '--untracked-files=no']).stdout || '';
-  const entries = status.split('\0').filter(Boolean);
+  const entries = gitRaw(['status', '--porcelain', '-z', '--untracked-files=no']).split('\0').filter(Boolean);
   const files = [];
   for (let k = 0; k < entries.length; k += 1) {
     const code = entries[k].slice(0, 2);
@@ -667,47 +675,56 @@ function saveBeforeReinstall(root, accepted, options) {
     if (code.includes('R') || code.includes('C')) k += 1; // the next entry is the old name of a rename
   }
 
-  // Untracked or ignored files that the reset would overwrite (same path, or a file where the release has a folder).
-  const releasePaths = (git(['ls-tree', '-r', '-z', '--name-only', accepted]).stdout || '').split('\0').filter(Boolean);
-  const releaseSet = new Set(releasePaths);
-  const releaseDirs = new Set();
-  for (const rel of releasePaths) {
-    for (let at = rel.indexOf('/'); at !== -1; at = rel.indexOf('/', at + 1)) releaseDirs.add(rel.slice(0, at));
-  }
+  // Untracked or ignored files the reset would overwrite: same path as a release file, or below a path where the release has a file.
+  const releaseSet = new Set(gitRaw(['ls-tree', '-r', '-z', '--name-only', accepted]).split('\0').filter(Boolean));
+  const collides = (rel) => {
+    if (releaseSet.has(rel)) return true;
+    for (let at = rel.indexOf('/'); at !== -1; at = rel.indexOf('/', at + 1)) {
+      if (releaseSet.has(rel.slice(0, at))) return true;
+    }
+    return false;
+  };
   const loose = [
-    ...(git(['ls-files', '-z', '--others', '--exclude-standard']).stdout || '').split('\0'),
-    ...(git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard']).stdout || '').split('\0'),
+    ...gitRaw(['ls-files', '-z', '--others', '--exclude-standard']).split('\0'),
+    ...gitRaw(['ls-files', '-z', '--others', '--ignored', '--exclude-standard']).split('\0'),
   ].filter((rel) => rel && !rel.startsWith('.aiverse-backups/'));
-  const colliding = [...new Set(loose)].filter((rel) => releaseSet.has(rel) || releaseDirs.has(rel));
+  const colliding = [...new Set(loose)].filter(collides);
 
   const stamp = backupStamp();
-  if (files.length || colliding.length) {
-    let dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}`);
-    for (let n = 2; fs.existsSync(dir); n += 1) dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}-${n}`);
-    const copy = (rel, list) => {
-      const from = path.join(root, rel);
-      let stat = null;
-      try { stat = fs.lstatSync(from); } catch {}
-      if (!stat) { saved.deleted_files.push(rel); return; }
-      const to = path.join(dir, rel);
-      fs.mkdirSync(path.dirname(to), { recursive: true });
-      if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
-      else if (stat.isFile()) fs.copyFileSync(from, to);
-      else return;
-      list.push(rel);
-    };
-    for (const rel of files) copy(rel, saved.edited_files);
-    for (const rel of colliding) copy(rel, saved.colliding_files);
+  let dir = null;
+  const ensureDir = () => {
+    if (dir) return dir;
+    let candidate = path.join(root, '.aiverse-backups', `reinstall-${stamp}`);
+    for (let n = 2; fs.existsSync(candidate); n += 1) candidate = path.join(root, '.aiverse-backups', `reinstall-${stamp}-${n}`);
+    dir = candidate;
+    return dir;
+  };
+  const copy = (rel, list) => {
+    const from = bytesPath(rootBytes, rel);
+    let stat = null;
+    try { stat = fs.lstatSync(from); } catch {}
+    if (!stat) { saved.deleted_files.push(shown(rel)); return; }
+    if (!stat.isSymbolicLink() && !stat.isFile()) return;
+    const to = bytesPath(Buffer.from(ensureDir(), 'utf8'), rel);
+    fs.mkdirSync(parentOf(to), { recursive: true });
+    if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from, { encoding: 'buffer' }), to);
+    else fs.copyFileSync(from, to);
+    list.push(shown(rel));
+  };
+  for (const rel of files) copy(rel, saved.edited_files);
+  for (const rel of colliding) copy(rel, saved.colliding_files);
+  if (dir) {
     saved.backup_dir = dir;
-    // Keep the backups out of git so they are never swept up or removed by later git work.
+    // Keep the backups out of git. The exclude file is handled as bytes so nothing already in it is changed.
     const excludeRel = git(['rev-parse', '--git-path', 'info/exclude']).stdout.trim();
     if (excludeRel) {
       const exclude = path.resolve(root, excludeRel);
-      let text = '';
-      try { text = fs.readFileSync(exclude, 'utf8'); } catch {}
-      if (!text.split(/\r?\n/).includes('/.aiverse-backups/')) {
+      let bytes = Buffer.alloc(0);
+      try { bytes = fs.readFileSync(exclude); } catch {}
+      if (!bytes.toString('latin1').split(/\r?\n/).includes('/.aiverse-backups/')) {
         fs.mkdirSync(path.dirname(exclude), { recursive: true });
-        fs.writeFileSync(exclude, `${text}${text && !text.endsWith('\n') ? '\n' : ''}/.aiverse-backups/\n`, 'utf8');
+        const gap = bytes.length && bytes[bytes.length - 1] !== 0x0a ? '\n' : '';
+        fs.writeFileSync(exclude, Buffer.concat([bytes, Buffer.from(`${gap}/.aiverse-backups/\n`, 'utf8')]));
       }
     }
   }

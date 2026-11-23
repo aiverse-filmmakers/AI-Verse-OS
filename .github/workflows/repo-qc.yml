@@ -66,6 +66,9 @@ jobs:
       - name: Test the one line install in scratch folders
         run: node scripts/test-cli-install.mjs
 
+      - name: Test reinstall uses the accepted release and keeps member edits
+        run: node scripts/test-reinstall-accepted.mjs
+
       - name: Test progressive onboarding contract
         run: node scripts/test-progressive-onboarding.mjs
 

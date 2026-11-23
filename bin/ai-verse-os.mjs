@@ -40,12 +40,23 @@ const REPO_URL = process.env.AI_VERSE_OS_REPO_URL || DEFAULT_REPO;
 const INSTALL_COMMAND = 'npx --yes https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main install';
 const SETUP_MARKER_REL = '.aiverse/os/setup.json';
 
+// Remove credentials (user:password@ or tokens inside a URL) from any text before it is shown.
+function redact(text) {
+  let value = String(text ?? '');
+  if (REPO_URL) value = value.split(REPO_URL).join(redactUrl(REPO_URL));
+  return value.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\/\s@]+@/gi, '$1');
+}
+
+function redactUrl(url) {
+  return String(url).replace(/([a-z][a-z0-9+.-]*:\/\/)[^\/\s@]+@/i, '$1');
+}
+
 function out(message = '') {
   process.stdout.write(`${message}\n`);
 }
 
 function fail(message, code = 1) {
-  process.stderr.write(`AI-Verse OS: ${message}\n`);
+  process.stderr.write(`AI-Verse OS: ${redact(message)}\n`);
   process.exit(code);
 }
 
@@ -74,7 +85,7 @@ function run(command, args = [], options = {}) {
   });
   if (result.error) {
     if (options.allowFailure) return result;
-    fail(`Could not run ${command}: ${result.error.message}`);
+    fail(`Could not run ${command}: ${redact(result.error.message)}`);
   }
   if (result.status !== 0 && !options.allowFailure) {
     const detail = options.capture ? (result.stderr || result.stdout || '').trim() : '';
@@ -155,6 +166,24 @@ function realPathOrPlanned(candidate) {
       rest.push(path.basename(current));
       current = parent;
     }
+  }
+}
+
+// A folder that is clearly an AI-Verse OS checkout even when AGENTS.md or AI-VERSE.yaml was deleted by mistake.
+function isRepairableRoot(candidate) {
+  if (!fs.existsSync(path.join(candidate, '.git'))) return false;
+  return ['AGENTS.md', 'AI-VERSE.yaml', 'CLAUDE.md', 'skills/registry.yaml', 'release/component-release.json', 'scripts/components.mjs']
+    .some((item) => fs.existsSync(path.join(candidate, item)));
+}
+
+function resolveRepairableRoot(options) {
+  let current = path.resolve(options.dir || process.cwd());
+  while (true) {
+    if (isRoot(current) || isRepairableRoot(current)) return current;
+    if (options.dir) return null;
+    const parent = path.dirname(current);
+    if (parent === current) return null;
+    current = parent;
   }
 }
 
@@ -422,7 +451,7 @@ async function install(options) {
     out('AI-Verse OS installer');
     out('----------------------');
     out(`Git: ${gitVersion}`);
-    out(`Source: ${REPO_URL}`);
+    out(`Source: ${redactUrl(REPO_URL)}`);
     out(`Install to: ${target}`);
   }
 
@@ -593,7 +622,7 @@ function update(options) {
   if (dirty) fail('Tracked system files have local changes. Commit, stash, or revert them before updating. User-owned ignored data is preserved.');
 
   const before = readSetup(root);
-  run('git', ['-C', root, 'fetch', 'origin', 'main'], { capture: options.json });
+  fetchSource(root, options);
   const accepted = acceptedCommit(root, 'FETCH_HEAD');
   run('git', ['-C', root, 'merge', '--ff-only', accepted], { capture: options.json });
   if (run('git', ['-C', root, 'merge-base', '--is-ancestor', accepted, 'HEAD'], { allowFailure: true, capture: true }).status !== 0) fail('Update stopped: the installed version does not include the accepted release.');
@@ -614,16 +643,87 @@ function update(options) {
   else out('✓ AI-Verse OS is up to date. Setup and ignored user-owned state were preserved.');
 }
 
+// Fetch main from the installer's own known source, never from the folder's own origin remote.
+function fetchSource(root, options) {
+  const result = run('git', ['-C', root, 'fetch', '--quiet', REPO_URL, 'main'], { capture: true, allowFailure: true });
+  if (result.error || result.status !== 0) fail('Could not download the AI-Verse OS release from its source. Check the connection and the source address, then try again. Nothing was changed.');
+}
+
+function backupStamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+}
+
+// Save everything the reset would discard: edited tracked files as copies, local commits under a backup ref.
+function saveBeforeReinstall(root, accepted, options) {
+  const git = (args) => run('git', ['-C', root, ...args], { capture: true, allowFailure: true });
+  const saved = { backup_dir: null, edited_files: [], deleted_files: [], backup_ref: null };
+
+  const status = git(['status', '--porcelain', '-z', '--untracked-files=no']).stdout || '';
+  const entries = status.split('\0').filter(Boolean);
+  const files = [];
+  for (let k = 0; k < entries.length; k += 1) {
+    const code = entries[k].slice(0, 2);
+    files.push(entries[k].slice(3));
+    if (code.includes('R') || code.includes('C')) k += 1; // the next entry is the old name of a rename
+  }
+  const stamp = backupStamp();
+  if (files.length) {
+    let dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}`);
+    for (let n = 2; fs.existsSync(dir); n += 1) dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}-${n}`);
+    for (const rel of files) {
+      const from = path.join(root, rel);
+      let stat = null;
+      try { stat = fs.lstatSync(from); } catch {}
+      if (!stat) { saved.deleted_files.push(rel); continue; }
+      const to = path.join(dir, rel);
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
+      else if (stat.isFile()) fs.copyFileSync(from, to);
+      else continue;
+      saved.edited_files.push(rel);
+    }
+    saved.backup_dir = dir;
+    // Keep the backups out of git so they are never swept up or removed by later git work.
+    const excludeRel = git(['rev-parse', '--git-path', 'info/exclude']).stdout.trim();
+    if (excludeRel) {
+      const exclude = path.resolve(root, excludeRel);
+      let text = '';
+      try { text = fs.readFileSync(exclude, 'utf8'); } catch {}
+      if (!text.split(/\r?\n/).includes('/.aiverse-backups/')) {
+        fs.mkdirSync(path.dirname(exclude), { recursive: true });
+        fs.writeFileSync(exclude, `${text}${text && !text.endsWith('\n') ? '\n' : ''}/.aiverse-backups/\n`, 'utf8');
+      }
+    }
+  }
+
+  const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).stdout.trim();
+  if (head) {
+    const lost = git(['rev-list', '--max-count=1', head, '--not', accepted]).stdout.trim();
+    if (lost) {
+      const ref = `refs/aiverse-backups/reinstall-${stamp}`;
+      let name = ref;
+      for (let n = 2; git(['rev-parse', '--verify', '--quiet', name]).status === 0; n += 1) name = `${ref}-${n}`;
+      const made = git(['update-ref', name, head]);
+      if (made.status !== 0) fail('Reinstall stopped before changing anything: your own saved changes could not be backed up.');
+      saved.backup_ref = name;
+    }
+  }
+  return saved;
+}
+
 function reinstall(options) {
-  if (!options.force) fail('reinstall requires --force because it restores tracked OS files to origin/main while preserving ignored user-owned state.');
-  const root = resolveRoot(options);
+  if (!options.force) fail('reinstall requires --force because it restores tracked OS files to the accepted release while preserving ignored user-owned state.');
+  const root = resolveRepairableRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
   if (!fs.existsSync(path.join(root, '.git'))) fail('This installation is not a Git checkout.');
   if (!commandVersion('git')) fail('Git is required to reinstall AI-Verse OS.');
 
   const before = readSetup(root);
-  run('git', ['-C', root, 'fetch', 'origin', 'main'], { capture: options.json });
-  run('git', ['-C', root, 'reset', '--hard', 'origin/main'], { capture: options.json });
+  fetchSource(root, options);
+  const accepted = acceptedCommit(root, 'FETCH_HEAD');
+  const saved = saveBeforeReinstall(root, accepted, options);
+  run('git', ['-C', root, 'reset', '--hard', '--quiet', accepted], { capture: true });
+  if (run('git', ['-C', root, 'rev-parse', 'HEAD'], { capture: true }).stdout.trim() !== accepted) fail('Reinstall stopped: the restored version is not the accepted release.');
   const missing = validateInstall(root);
   if (missing.length) fail(`Reinstall validation failed. Missing: ${missing.join(', ')}`);
   const after = readSetup(root);
@@ -638,9 +738,17 @@ function reinstall(options) {
     tracked_files_restored: true,
     setup_preserved: before.setup_at ? before.setup_at === after.setup_at : after.configured === false,
     canonical_user_state_purged: false,
+    backup_dir: saved.backup_dir,
+    backed_up_files: saved.edited_files,
+    deleted_files_restored: saved.deleted_files,
+    backup_ref: saved.backup_ref,
   };
   if (options.json) emit(result, true);
-  else out('✓ AI-Verse OS tracked runtime files reinstalled. Ignored canonical user state and setup state were preserved.');
+  else {
+    out('✓ AI-Verse OS tracked runtime files reinstalled to the accepted release. Ignored canonical user state and setup state were preserved.');
+    if (saved.backup_dir) out(`Your edited files were saved first in: ${saved.backup_dir}`);
+    if (saved.backup_ref) out(`Your own commits were saved first under the git reference: ${saved.backup_ref}`);
+  }
 }
 
 function components(options) {

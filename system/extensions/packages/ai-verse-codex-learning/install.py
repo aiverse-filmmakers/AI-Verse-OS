@@ -237,7 +237,14 @@ def _restore_bytes(path, payload):
             pass
 
 
+def _refuse_read_only(path):
+    """os.replace would silently overwrite a read only file, so refuse it and leave it untouched."""
+    if path.exists() and (not os.access(path, os.W_OK) or not stat.S_IMODE(path.stat().st_mode) & 0o222):
+        raise ValueError(f"existing file {path.name} is read only; it was left untouched, make it writable or move it")
+
+
 def _atomic_write_bytes(path, payload):
+    _refuse_read_only(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -509,6 +516,8 @@ def claude_install(root, options):
     settings_file, record_file = claude_paths(root)
     safe(settings_file, root)
     safe(record_file, root)
+    _refuse_read_only(settings_file)
+    _refuse_read_only(record_file)
     receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
     python = str(Path(options.get("python") or receipt.get("python") or sys.executable).absolute())
     build = sha(root / f".aiverse/extensions/{ID}/bridge.py")
@@ -554,9 +563,30 @@ def claude_install(root, options):
             allow.append(rule)
             added.append(rule)
     record["added_allow_rules"] = added
-    settings["autoMemoryEnabled"] = False
+    requested = options.get("auto_memory")
+    if requested not in (None, "off", "keep", "unasked"):
+        raise ValueError("auto memory choice must be off, keep or unasked")
+    # The choice is remembered, so a later refresh (for example after an update) never flips it.
+    # "unasked" means nobody was asked: memory is not switched off and no choice is stored.
+    choice = requested if requested in ("off", "keep") else record.get("auto_memory_choice")
+    if not choice:
+        choice = "off" if (record.get("written_auto_memory") is False
+                           or (requested is None and before_record is None)) else "keep"
+    if choice == "off":
+        settings["autoMemoryEnabled"] = False
+        record["written_auto_memory"] = False
+    else:
+        if record.get("written_auto_memory") is False and settings.get("autoMemoryEnabled") is False:
+            previous = record.get("original_auto_memory", {})
+            if previous.get("present"):
+                settings["autoMemoryEnabled"] = previous["value"]
+            else:
+                del settings["autoMemoryEnabled"]
+        record.pop("written_auto_memory", None)
+    if requested != "unasked":
+        record["auto_memory_choice"] = choice
 
-    record.update({"written_hooks": generated["hooks"], "written_auto_memory": False, "build": build,
+    record.update({"written_hooks": generated["hooks"], "build": build,
                    "python": python, "updated_at": utc()})
     data = _claude_dump(settings)
     record["settings_sha256"] = sha_bytes(data)
@@ -566,7 +596,8 @@ def claude_install(root, options):
         _claude_rollback(settings_file, record_file, before_settings, before_record)
         raise
     return {"state": "installed", "settings": str(settings_file), "build": build,
-            "allow_rules_added": list(added), "auto_memory": "off for this project",
+            "allow_rules_added": list(added),
+            "auto_memory": "off for this project" if choice == "off" else "left on, as chosen",
             "exact_restore_ok": record["exact_restore_ok"], "codex_modified": False,
             "next_step": "Start a new Claude Code chat from this folder. The first time, Claude Code may ask you to trust the folder."}
 
@@ -628,7 +659,7 @@ def claude_remove(root):
             del permissions["allow"]
         if "permissions" in settings and not permissions and "permissions" not in original:
             del settings["permissions"]
-        if settings.get("autoMemoryEnabled") == record.get("written_auto_memory") and "autoMemoryEnabled" in settings:
+        if "written_auto_memory" in record and settings.get("autoMemoryEnabled") == record["written_auto_memory"] and "autoMemoryEnabled" in settings:
             previous = record.get("original_auto_memory", {})
             if previous.get("present"):
                 settings["autoMemoryEnabled"] = previous["value"]
@@ -662,7 +693,9 @@ def claude_doctor(root, python=None):
         result["guidance"].append(str(error))
         return result
     if record_file.exists():
-        result["exact_restore_ok"] = read_json(record_file, root).get("exact_restore_ok")
+        saved = read_json(record_file, root)
+        result["exact_restore_ok"] = saved.get("exact_restore_ok")
+        result["auto_memory_choice"] = saved.get("auto_memory_choice") or ("off" if saved.get("written_auto_memory") is False else "keep")
     bridge = root / f".aiverse/extensions/{ID}/bridge.py"
     build = sha(bridge) if bridge.is_file() else None
     builds = set()
@@ -705,7 +738,7 @@ def claude_doctor(root, python=None):
         result["state"] = "refresh-needed"
         result["guidance"].append("The Claude hooks point at an older build: run claude-install again to refresh.")
     elif (result["package_files_verified"] and result["hooks_present"] == 5 and not result["allow_rules_missing"]
-          and result["auto_memory_off"] and result["build_matches"]):
+          and (result["auto_memory_off"] or result.get("auto_memory_choice") == "keep") and result["build_matches"]):
         result["state"] = "ready" if result["execution_observed"] and result["review_observed"] else "installed"
         if result["state"] == "installed":
             result["guidance"].append("Hooks are in place. Open a new Claude Code chat in this folder to see them run.")
@@ -789,6 +822,7 @@ def main():
     p.add_argument("--output")
     for name in ("metadata", "python", "node", "skills-root", "skills-entrypoint", "codex"):
         p.add_argument("--" + name)
+    p.add_argument("--auto-memory", choices=["off", "keep", "unasked"], help="claude-install only: switch Claude's own memory off for this project, keep it on, or (unasked) keep it on without storing a choice")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
     options = vars(args)

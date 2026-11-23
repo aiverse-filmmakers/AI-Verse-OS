@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { TOOLS, prepareToolchain, resolveTool, toolPath, toolEnv } from '../scripts/toolchain.mjs';
+import { connectSafely, connectionStatus, connectionLines } from './connect-claude.mjs';
 
 // The OS version has one authority: release/component-release.json (the accepted
 // release descriptor). The CLI never carries its own number, and it asks the
@@ -133,6 +134,10 @@ function parse(argv) {
       options.apply = true;
     } else if (token === '--force') {
       options.force = true;
+    } else if (token === '--turn-off-claude-memory') {
+      options.memory = 'off';
+    } else if (token === '--keep-claude-memory') {
+      options.memory = 'keep';
     } else if (token === '--help' || token === '-h') {
       options.help = true;
     } else if (token === '--version' || token === '-v') {
@@ -375,6 +380,7 @@ function usage() {
   out('  ai-verse-os status [--dir folder] [--profile detected|core] [--json]');
   out('  ai-verse-os doctor [--dir folder] [--profile detected|core] [--json]');
   out('  ai-verse-os update [--dir folder] [--json]');
+  out('  ai-verse-os connect [--dir folder] [--turn-off-claude-memory | --keep-claude-memory] [--json]');
   out('  ai-verse-os reinstall --force [--dir folder] [--json]');
   out('  ai-verse-os onboard [--dir folder]');
   out('  ai-verse-os components <status|doctor|setup|reconcile|descriptor> [component] [--apply] [--json]');
@@ -473,12 +479,15 @@ async function install(options) {
     setup_required: true,
     next: 'setup',
   };
-  if (options.json) emit(result, true);
-  else {
+  if (!options.json) {
     out('✓ AI-Verse OS installed');
     out('Install does not attach sibling components, transfer authority, or grant permissions.');
-    out(`Next: ai-verse-os setup --dir "${target}"`);
+    out('');
   }
+  result.connection = await connectSafely(target, { json: options.json, memory: options.memory });
+  if (result.connection.state === 'not-connected') process.exitCode = 3;
+  if (options.json) emit(result, true);
+  else out(`Next: ai-verse-os setup --dir "${target}"`);
 }
 
 async function setup(options) {
@@ -494,6 +503,16 @@ async function setup(options) {
   const marker = writeSetup(root, profile, before.state === 'ready' && before.profile === profile ? before : null);
   const current = statusObject(root, { profile });
   const changed = !(before.state === 'ready' && before.profile === profile && applied.report.mutated !== true);
+  if (!options.json) {
+    out(`AI-Verse OS setup: ${current.state}`);
+    out(`Profile: ${profile}`);
+    for (const action of applied.report.actions || []) {
+      if (action.automatic === false) out(`Next owner action for ${action.component}: ${action.command}`);
+    }
+    out('Setup does not transfer Brain authority, authorize external accounts, or broaden permissions.');
+    out('');
+  }
+  const connection = await connectSafely(root, { json: options.json, memory: options.memory });
 
   const result = {
     schema_version: LIFECYCLE_SCHEMA,
@@ -508,18 +527,12 @@ async function setup(options) {
     setup: marker,
     component_setup: applied.report,
     grants: marker.grants,
+    connection,
   };
 
   if (options.json) emit(result, true);
-  else {
-    out(`AI-Verse OS setup: ${current.state}`);
-    out(`Profile: ${profile}`);
-    for (const action of applied.report.actions || []) {
-      if (action.automatic === false) out(`Next owner action for ${action.component}: ${action.command}`);
-    }
-    out('Setup does not transfer Brain authority, authorize external accounts, or broaden permissions.');
-  }
   if (!current.ready) process.exitCode = 2;
+  else if (connection.state === 'not-connected') process.exitCode = 3;
 }
 
 function status(options) {
@@ -539,12 +552,14 @@ function status(options) {
     return;
   }
   const result = statusObject(root, { profile: options.profile || undefined });
-  if (options.json) emit(result, true);
+  const connection = connectionStatus(root);
+  if (options.json) emit({ ...result, connection }, true);
   else {
     out(`AI-Verse OS status: ${result.state}`);
     out(`Root: ${root}`);
     out(`Profile: ${result.profile}`);
     out(`Ready: ${result.ready ? 'yes' : 'no'}`);
+    for (const line of connectionLines(connection)) out(line);
   }
   if (!result.ready) process.exitCode = 2;
 }
@@ -571,6 +586,7 @@ function doctor(options) {
   const missing = validateInstall(root);
   const toolsOk = TOOLS.every(t => toolchain[t].path);
   const structural = missing.length === 0 && toolsOk;
+  const connection = connectionStatus(root);
   const doctorResult = {
     ...result,
     command: 'doctor',
@@ -592,6 +608,7 @@ function doctor(options) {
       components: { ok: result.components?.ready === true, state: result.components?.state ?? 'unknown' },
     },
     ready: structural && result.ready,
+    connection,
   };
   doctorResult.state = doctorResult.ready ? 'ready' : result.state === 'ready' ? 'unhealthy' : result.state;
   doctorResult.health = doctorResult.ready ? 'healthy' : (doctorResult.state === 'unhealthy' ? 'unhealthy' : 'not-ready');
@@ -604,6 +621,7 @@ function doctor(options) {
     out(`${missing.length ? '✗' : '✓'} Core architecture`);
     out(`${result.setup.state === 'ready' ? '✓' : '!'} Setup: ${result.setup.state}`);
     out(`${result.components?.ready ? '✓' : '!'} Composed profile: ${result.components?.state}`);
+    for (const line of connectionLines(connection)) out(`${connection.connected ? '✓' : '!'} ${line}`);
     out('Depth checked: structural, setup, attachment/discovery, runtime, dependency, system/composed.');
     out('Operational owner-specific checks are not claimed by the OS doctor.');
     out(doctorResult.ready ? '\nAI-Verse OS is ready.' : '\nAI-Verse OS is not ready.');
@@ -611,7 +629,7 @@ function doctor(options) {
   if (!doctorResult.ready) process.exitCode = 2;
 }
 
-function update(options) {
+async function update(options) {
   const root = resolveRoot(options);
   if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
   if (!fs.existsSync(path.join(root, '.git'))) fail('This installation is not a Git checkout, so the CLI cannot update it safely.');
@@ -638,8 +656,24 @@ function update(options) {
     root,
     setup_preserved: before.setup_at ? before.setup_at === after.setup_at : after.configured === false,
   };
+  if (!options.json) {
+    out('✓ AI-Verse OS is up to date. Setup and ignored user-owned state were preserved.');
+    out('');
+  }
+  result.connection = await connectSafely(root, { json: options.json, memory: options.memory });
+  if (result.connection.state === 'not-connected') process.exitCode = 3;
   if (options.json) emit(result, true);
-  else out('✓ AI-Verse OS is up to date. Setup and ignored user-owned state were preserved.');
+}
+
+async function connect(options) {
+  const root = resolveRoot(options);
+  if (!root) fail('AI-Verse OS installation not found. Run inside it or use --dir <folder>.');
+  const missing = validateInstall(root);
+  if (missing.length) fail(`OS installation is incomplete. Missing: ${missing.join(', ')}`);
+  await requirePrerequisites(options);
+  const connection = await connectSafely(root, { json: options.json, memory: options.memory });
+  if (options.json) emit({ schema_version: LIFECYCLE_SCHEMA, command: 'connect', component_id: 'ai-verse-os', root, connection }, true);
+  if (connection.state === 'not-connected') process.exitCode = 3;
 }
 
 // Fetch main from the installer's own known source, never from the folder's own origin remote.
@@ -890,6 +924,7 @@ function onboard(options) {
   out('AI-Verse OS first use');
   out('--------------------');
   out(`OS: ${root}`);
+  for (const line of connectionLines(connectionStatus(root))) out(line);
   out('This is your OS. Everything in this folder is yours.');
   out('Start with a real request. AI-Verse will learn missing context progressively.');
   out('Optional deep intake remains available through the onboard capability.');
@@ -928,7 +963,8 @@ switch (command) {
   case 'setup': await setup(options); break;
   case 'status': status(options); break;
   case 'doctor': doctor(options); break;
-  case 'update': update(options); break;
+  case 'update': await update(options); break;
+  case 'connect': await connect(options); break;
   case 'reinstall': reinstall(options); break;
   case 'onboard': onboard(options); break;
   case 'components': components(options); break;

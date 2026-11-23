@@ -207,4 +207,26 @@ OSCLI=("$NODE" "$TARGET/bin/ai-verse-os.mjs")
 "${OSCLI[@]}" status --dir "$TARGET" --json > "$BASE/cm-status-$LEG-$PHASE.json" || fail "status failed"
 "$NODE" -e "const x=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')); if(!x.state) process.exit(1); console.log('state:', x.state)" "$BASE/cm-status-$LEG-$PHASE.json" || fail "status gave no state"
 "${OSCLI[@]}" doctor --dir "$TARGET" --json >/dev/null || fail "doctor failed"
+
+# Step 6 (FL-78): the OS connects Claude Code by itself. The member has an empty .claude folder in HOME and
+# nothing else; the run cannot ask a question, so Claude's own memory stays on. This cannot prove that Claude
+# loads the hooks, the restart, the trust prompt or Codex approval.
+say "Connect Claude Code"
+mkdir -p "$HOME/.claude"
+export AI_VERSE_OS_APPS=claude AI_VERSE_OS_TEST=1
+CONNECT_OUT="$("${OSCLI[@]}" setup --dir "$TARGET" 2>&1)" || fail "setup failed while connecting Claude Code: $CONNECT_OUT"
+printf '%s\n' "$CONNECT_OUT"
+printf '%s\n' "$CONNECT_OUT" | grep -q 'OS connected: 5 of 5 helpers on' || fail "setup did not report the connection in plain words"
+printf '%s\n' "$CONNECT_OUT" | grep -qi 'codex' && fail "a Claude member was shown Codex words"
+SETTINGS="$TARGET/.claude/settings.local.json"
+[ -f "$SETTINGS" ] || fail "no Claude settings file was written"
+HOOKS="$("$NODE" -e "const s=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));console.log(Object.values(s.hooks||{}).reduce((n,g)=>n+g.reduce((m,x)=>m+x.hooks.length,0),0))" "$SETTINGS")"
+[ "$HOOKS" = 5 ] || fail "expected 5 Claude hooks in the settings file, found $HOOKS"
+AGAIN="$("${OSCLI[@]}" setup --dir "$TARGET" 2>&1)" || fail "second setup failed"
+printf '%s\n' "$AGAIN" | grep -q 'Nothing changed' || fail "a second setup did not say that nothing changed"
+for cmd in status doctor; do
+  LINE="$("${OSCLI[@]}" $cmd --dir "$TARGET" 2>&1)"
+  printf '%s\n' "$LINE" | grep -q 'OS connected: 5 of 5 helpers on' || fail "$cmd did not print the connection line"
+done
+unset AI_VERSE_OS_APPS AI_VERSE_OS_TEST
 printf '\nCLEAN MACHINE OK (%s/%s/%s)\n' "$LEG" "$PHASE" "$VARIANT"

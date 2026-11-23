@@ -237,7 +237,14 @@ def _restore_bytes(path, payload):
             pass
 
 
+def _refuse_read_only(path):
+    """os.replace would silently overwrite a read only file, so refuse it and leave it untouched."""
+    if path.exists() and (not os.access(path, os.W_OK) or not stat.S_IMODE(path.stat().st_mode) & 0o222):
+        raise ValueError(f"existing file {path.name} is read only; it was left untouched, make it writable or move it")
+
+
 def _atomic_write_bytes(path, payload):
+    _refuse_read_only(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
@@ -509,6 +516,8 @@ def claude_install(root, options):
     settings_file, record_file = claude_paths(root)
     safe(settings_file, root)
     safe(record_file, root)
+    _refuse_read_only(settings_file)
+    _refuse_read_only(record_file)
     receipt = read_json(root / f".aiverse/extensions/{ID}/install-receipt.json", root)
     python = str(Path(options.get("python") or receipt.get("python") or sys.executable).absolute())
     build = sha(root / f".aiverse/extensions/{ID}/bridge.py")

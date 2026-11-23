@@ -213,7 +213,7 @@ OSCLI=("$NODE" "$TARGET/bin/ai-verse-os.mjs")
 # loads the hooks, the restart, the trust prompt or Codex approval.
 say "Connect Claude Code"
 mkdir -p "$HOME/.claude"
-export AI_VERSE_OS_APPS=claude
+export AI_VERSE_OS_APPS=claude AI_VERSE_OS_TEST=1
 CONNECT_OUT="$("${OSCLI[@]}" setup --dir "$TARGET" 2>&1)" || fail "setup failed while connecting Claude Code: $CONNECT_OUT"
 printf '%s\n' "$CONNECT_OUT"
 printf '%s\n' "$CONNECT_OUT" | grep -q 'OS connected: 5 of 5 helpers on' || fail "setup did not report the connection in plain words"
@@ -228,5 +228,5 @@ for cmd in status doctor; do
   LINE="$("${OSCLI[@]}" $cmd --dir "$TARGET" 2>&1)"
   printf '%s\n' "$LINE" | grep -q 'OS connected: 5 of 5 helpers on' || fail "$cmd did not print the connection line"
 done
-unset AI_VERSE_OS_APPS
+unset AI_VERSE_OS_APPS AI_VERSE_OS_TEST
 printf '\nCLEAN MACHINE OK (%s/%s/%s)\n' "$LEG" "$PHASE" "$VARIANT"

@@ -118,7 +118,8 @@ function exists(file) {
 // ---------------------------------------------------------------------------
 
 export function detectApps(env = process.env) {
-  const override = (env.AI_VERSE_OS_APPS || '').trim().toLowerCase();
+  // The override exists for tests and CI only: it is ignored unless AI_VERSE_OS_TEST=1.
+  const override = env.AI_VERSE_OS_TEST === '1' ? (env.AI_VERSE_OS_APPS || '').trim().toLowerCase() : '';
   if (override) {
     const names = override.split(/[\s,]+/).filter(Boolean);
     return { claude: names.includes('claude'), codex: names.includes('codex'), source: 'override' };
@@ -355,6 +356,7 @@ export function connectionLines(status) {
 
 function failureWords(error) {
   const text = String(error || '');
+  if (/read only/.test(text)) return 'A settings file for this folder is read only, so it was left exactly as it was. Make it writable (or move it), then run: ai-verse-os connect';
   if (/not valid JSON|not a JSON object|malformed/.test(text)) return 'Your Claude settings file for this folder (.claude/settings.local.json) could not be read, so it was left exactly as it was. Fix or move that file, then run: ai-verse-os connect';
   if (/edited since install/.test(text)) return 'Someone edited the helper entries in .claude/settings.local.json. They were left exactly as they were. Put them back, or remove the helper entries, then run: ai-verse-os connect';
   if (/preserve locally modified|preserve unsupported|preserve unknown/.test(text)) return 'A helper file in .aiverse/extensions was changed by hand, so it was not replaced. Nothing was overwritten. Ask for help in the AI-Verse community, or move that folder aside and run: ai-verse-os connect';
@@ -422,7 +424,7 @@ async function settleMemoryChoice(root, status, ctx) {
     writeChoice(root, choice, 'asked');
     return { choice, how: 'asked', asked: true };
   }
-  writeChoice(root, 'keep', 'not asked');
+  // A choice that was never asked is not stored: this run keeps memory on, a later run that can ask will ask.
   return { choice: 'keep', how: 'not asked', asked: false };
 }
 
@@ -458,7 +460,7 @@ export async function connectAll(root, options = {}) {
 
   // 2. Say first what will happen, but only when something has to change.
   const preChoice = readChoice(root);
-  const memoryUnsettled = claudeMemoryNeeds && !ctx.memory && !preChoice;
+  const memoryUnsettled = claudeMemoryNeeds && ctx.interactive && !ctx.memory && !preChoice;
   const needsWork = !before.connected || (ctx.memory && ctx.memory !== preChoice) || memoryUnsettled;
   if (!needsWork) {
     for (const line of connectionLines(before)) ctx.say(line);

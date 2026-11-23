@@ -49,7 +49,8 @@ function reset() {
 function cli(args, apps, extraEnv = {}) {
   const env = { ...process.env, HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, 'AppData', 'Local'), CI: 'true', ...extraEnv };
   delete env.AI_VERSE_OS_APPS;
-  if (apps !== undefined) env.AI_VERSE_OS_APPS = apps;
+  delete env.AI_VERSE_OS_TEST;
+  if (apps !== undefined) { env.AI_VERSE_OS_APPS = apps; env.AI_VERSE_OS_TEST = '1'; }
   const result = spawnSync(process.execPath, [path.join(root, 'bin', 'ai-verse-os.mjs'), ...args, '--dir', root], { encoding: 'utf8', env, cwd: root, input: '' });
   return { status: result.status, out: `${result.stdout || ''}${result.stderr || ''}`, stdout: result.stdout || '' };
 }
@@ -105,7 +106,7 @@ try {
     for (const command of commands) assert.ok(command.includes(build), 'every hook carries the installed build');
     assert.equal(settings.permissions.allow.length, 7);
     assert.ok(!('autoMemoryEnabled' in settings), 'memory is left on when the run could not ask');
-    assert.equal(JSON.parse(fs.readFileSync(connectFile, 'utf8')).claude_memory, 'keep');
+    assert.ok(!fs.existsSync(connectFile), 'a choice that was never asked must not be stored');
 
     // status and doctor print the same plain line, read only.
     const s = cli(['status'], 'claude');
@@ -188,12 +189,47 @@ try {
     fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
     fs.writeFileSync(settingsFile, '{ this is not json', 'utf8');
     const r = cli(['connect'], 'claude');
-    assert.equal(r.status, 2);
+    assert.equal(r.status, 3, 'an incomplete connection exits 3');
     assert.match(r.out, /could not be read, so it was left exactly as it was/);
     assert.match(r.out, /run: ai-verse-os connect/);
     assert.ok(!/Traceback|\bat .*\.mjs/.test(r.out), 'no stack trace for a member');
     assert.equal(fs.readFileSync(settingsFile, 'utf8'), '{ this is not json');
     noDashProse(r.out);
+  }
+
+  // 7b. A read only settings file is refused untouched, with exit 3 and a plain message.
+  if (process.platform !== 'win32' && !(process.getuid && process.getuid() === 0)) {
+    reset();
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    const original = `${JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] } }, null, 2)}\n`;
+    fs.writeFileSync(settingsFile, original, 'utf8');
+    fs.chmodSync(settingsFile, 0o444);
+    try {
+      const r = cli(['connect'], 'claude');
+      assert.equal(r.status, 3, r.out);
+      assert.match(r.out, /is read only, so it was left exactly as it was/);
+      assert.equal(fs.readFileSync(settingsFile, 'utf8'), original);
+      assert.equal(fs.statSync(settingsFile).mode & 0o777, 0o444);
+      const s = cli(['setup'], 'claude');
+      assert.equal(s.status, 3, s.out);
+      noDashProse(r.out);
+    } finally {
+      fs.chmodSync(settingsFile, 0o644);
+    }
+  }
+
+  // 7c. The app override is for tests only: without AI_VERSE_OS_TEST=1 it is ignored.
+  {
+    reset();
+    const env = { ...process.env, HOME: home, USERPROFILE: home, LOCALAPPDATA: path.join(home, 'AppData', 'Local'), CI: 'true', AI_VERSE_OS_APPS: 'claude' };
+    delete env.AI_VERSE_OS_TEST;
+    const r = spawnSync(process.execPath, [path.join(root, 'bin', 'ai-verse-os.mjs'), 'connect', '--dir', root], { encoding: 'utf8', env, cwd: root, input: '' });
+    // A machine that really has Claude on PATH cannot show the difference, so only assert when it has none.
+    if (spawnSync('claude', ['--version'], { env }).error) {
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /no Claude Code or Codex was found/);
+      assert.ok(!fs.existsSync(settingsFile));
+    }
   }
 
   // 8. A Codex only member: Codex words only, no Claude settings written.

@@ -457,6 +457,7 @@ async function install(options) {
     out('');
   }
   result.connection = await connectSafely(target, { json: options.json, memory: options.memory });
+  if (result.connection.state === 'not-connected') process.exitCode = 3;
   if (options.json) emit(result, true);
   else out(`Next: ai-verse-os setup --dir "${target}"`);
 }
@@ -503,6 +504,7 @@ async function setup(options) {
 
   if (options.json) emit(result, true);
   if (!current.ready) process.exitCode = 2;
+  else if (connection.state === 'not-connected') process.exitCode = 3;
 }
 
 function status(options) {
@@ -631,6 +633,7 @@ async function update(options) {
     out('');
   }
   result.connection = await connectSafely(root, { json: options.json, memory: options.memory });
+  if (result.connection.state === 'not-connected') process.exitCode = 3;
   if (options.json) emit(result, true);
 }
 
@@ -642,7 +645,7 @@ async function connect(options) {
   await requirePrerequisites(options);
   const connection = await connectSafely(root, { json: options.json, memory: options.memory });
   if (options.json) emit({ schema_version: LIFECYCLE_SCHEMA, command: 'connect', component_id: 'ai-verse-os', root, connection }, true);
-  if (!connection.connected && connection.state !== 'no-apps') process.exitCode = 2;
+  if (connection.state === 'not-connected') process.exitCode = 3;
 }
 
 function reinstall(options) {

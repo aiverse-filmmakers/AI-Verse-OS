@@ -57,6 +57,9 @@ jobs:
       - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
 
+      - name: Test doctor only claims depths it measured
+        run: node scripts/test-doctor-honesty.mjs
+
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 

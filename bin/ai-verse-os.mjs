@@ -549,6 +549,20 @@ function status(options) {
   if (!result.ready) process.exitCode = 2;
 }
 
+function doctorDepths({ missing, toolchain, result }) {
+  const resolved = TOOLS.every(t => Boolean(toolchain[t]?.path) && Boolean(toolchain[t]?.version));
+  return {
+    structural: missing.length === 0,
+    setup: result.setup?.state === 'ready',
+    attachment_discovery: result.components?.depth_checked?.attachment_discovery === true,
+    // resolveTool starts each tool with --version, and only accepts one that meets the minimum.
+    runtime: resolved,
+    dependency: resolved,
+    operational: false,
+    system_composed: result.components?.state === 'ready' && result.components?.ready === true,
+  };
+}
+
 function doctor(options) {
   const root = resolveRoot(options);
   if (!root) {
@@ -574,15 +588,8 @@ function doctor(options) {
   const doctorResult = {
     ...result,
     command: 'doctor',
-    depth_checked: {
-      structural: true,
-      setup: true,
-      attachment_discovery: true,
-      runtime: true,
-      dependency: true,
-      operational: false,
-      system_composed: true,
-    },
+    // Each flag is true only when that depth was measured here and passed.
+    depth_checked: doctorDepths({ missing, toolchain, result }),
     checks: {
       node: { ok: Boolean(toolchain.node.path), version: toolchain.node.version, source: toolchain.node.source },
       python: { ok: Boolean(toolchain.python.path), version: toolchain.python.version, source: toolchain.python.source },
@@ -604,8 +611,11 @@ function doctor(options) {
     out(`${missing.length ? '✗' : '✓'} Core architecture`);
     out(`${result.setup.state === 'ready' ? '✓' : '!'} Setup: ${result.setup.state}`);
     out(`${result.components?.ready ? '✓' : '!'} Composed profile: ${result.components?.state}`);
-    out('Depth checked: structural, setup, attachment/discovery, runtime, dependency, system/composed.');
-    out('Operational owner-specific checks are not claimed by the OS doctor.');
+    const passed = Object.entries(doctorResult.depth_checked).filter(([, ok]) => ok).map(([name]) => name.replace(/_/g, ' '));
+    const failed = Object.entries(doctorResult.depth_checked).filter(([name, ok]) => !ok && name !== 'operational').map(([name]) => name.replace(/_/g, ' '));
+    out(`Checked and passed: ${passed.length ? passed.join(', ') : 'nothing'}.`);
+    if (failed.length) out(`Not passed: ${failed.join(', ')}.`);
+    out('Operational owner-specific checks are not run by the OS doctor.');
     out(doctorResult.ready ? '\nAI-Verse OS is ready.' : '\nAI-Verse OS is not ready.');
   }
   if (!doctorResult.ready) process.exitCode = 2;

@@ -384,13 +384,15 @@ export function inspectComponents(rootInput, profile = 'detected') {
       path: REGISTRY_REL,
     },
     registry_lock: lock,
+    // True only for what this inspection really did. It reads the registry and the files the
+    // registry names. It does not start any component, so runtime and dependency stay false here.
     depth_checked: {
-      structural: true,
-      attachment_discovery: true,
-      dependency: true,
-      runtime: true,
+      structural: lock.state === 'absent',
+      attachment_discovery: lock.state === 'absent' && registry.state !== undefined,
+      dependency: false,
+      runtime: false,
       operational: false,
-      system_composed: true,
+      system_composed: state === 'ready' && notReadyRequired.length === 0,
     },
     components,
   };

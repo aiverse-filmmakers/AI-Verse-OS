@@ -75,6 +75,19 @@ def digest(value):
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+def chat_saving_paused(bridge):
+    """Apps whose chat format this OS does not recognise right now (FL-29). Empty when all is well."""
+    try:
+        notes = read_json(bridge.runtime / "chat-saving-paused.json", bridge.root)
+    except (Refused, OSError, ValueError):
+        return {}
+    if not isinstance(notes, dict):
+        return {}
+    build = hashlib.sha256((Path(__file__).with_name("prospective_capture.py")).read_bytes()).hexdigest()
+    return {app: {"reason": note.get("reason"), "app_version": note.get("app_version"), "since": note.get("at")}
+            for app, note in notes.items() if isinstance(note, dict) and note.get("build") == build}
+
+
 def utc():
     return datetime.now(timezone.utc).isoformat()
 
@@ -1374,6 +1387,12 @@ class Bridge:
                         safe(Path(__file__).with_name("prospective_capture.py"), self.root, file=True),
                         "_aiverse_prospective_capture")
                     receipt = collector.capture(self, event)
+                    if (receipt.get("status") == "paused"
+                            and event.get("hook_event_name") in {"Stop", "SessionEnd"}
+                            and isinstance(result, dict)):
+                        notice = collector.pause_notice(self)
+                        if notice:
+                            result["systemMessage"] = notice
                     if (receipt.get("status") in {"blocked", "pending", "partial"}
                             and event.get("hook_event_name") in {"Stop", "SessionEnd"}
                             and not receipt.get("reason", "").startswith("private session")
@@ -2599,6 +2618,7 @@ def main():
                       "project_hook_file": str(bridge.root / ".codex/hooks.json"),
                       "hook_definition_present": (bridge.root / ".codex/hooks.json").is_file(),
                       "hook_execution": bridge.execution_summary(),
+                      "chat_saving_paused": chat_saving_paused(bridge),
                       "desktop_activation": "Use genuine app callbacks plus fresh-chat source recall; metadata does not identify the UI client."}
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 0

@@ -8,14 +8,103 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_capture import CaptureBlocked, MAX_SOURCE_BYTES, _supplied_source
 from chat_archive import ArchiveEvent, ChatArchive, MAX_ARCHIVE_BYTES, MAX_BATCH_EVENTS, stage_prompt, reconcile_prompts
 
 PROTOCOL = "native-transcript-prospective/v1"
-CODEX_VERSIONS = {"0.167.0", "0.167.0-alpha.3.2"}
-CLAUDE_VERSIONS = {"2.1.316"}
+APP_NAMES = {"claude": "Claude Code", "codex": "Codex"}
+PAUSE_FILE = "chat-saving-paused.json"
+
+
+class FormatChanged(CaptureBlocked):
+    """The app stores chats in a shape this OS does not recognise. Saving for that app pauses."""
+    status = "paused"
+
+    def __init__(self, reason, version=None):
+        super().__init__(reason)
+        self.version = version if isinstance(version, str) and len(version) <= 64 else None
+
+
+def _pause_path(bridge):
+    runtime = getattr(bridge, "runtime", None)
+    return Path(runtime) / PAUSE_FILE if runtime else None
+
+
+def _read_pauses(bridge):
+    path = _pause_path(bridge)
+    try:
+        if path is None or path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+            return {}
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_pauses(bridge, pauses):
+    path = _pause_path(bridge)
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(pauses, sort_keys=True, indent=2) + "\n")
+    tmp.replace(path)
+
+
+def _current_build(bridge=None):
+    # The pause is tied to the exact reader code. An OS update that changes it ends the pause.
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def active_pause(bridge):
+    """The pause note for this app, or None. A pause ends when the OS update changes the hook build."""
+    pauses = _read_pauses(bridge)
+    note = pauses.get(bridge.harness)
+    if not isinstance(note, dict):
+        return None
+    if note.get("build") != _current_build(bridge):
+        pauses.pop(bridge.harness, None)
+        try:
+            _write_pauses(bridge, pauses)
+        except OSError:
+            pass
+        return None
+    return note
+
+
+def _record_pause(bridge, exc):
+    pauses = _read_pauses(bridge)
+    pauses[bridge.harness] = {
+        "reason": str(exc)[:200], "app_version": exc.version,
+        "build": _current_build(bridge), "announced": False,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    _write_pauses(bridge, pauses)
+
+
+def pause_message(bridge):
+    name = APP_NAMES.get(bridge.harness, bridge.harness)
+    return (f"AI-Verse paused saving this chat because {name} now stores chats in a way this version of AI-Verse "
+            "OS does not recognise. Messages saved before are safe. Saving starts again after the next "
+            "AI-Verse OS update.")
+
+
+def pause_notice(bridge):
+    """The one plain message about a pause: returned once, then remembered as shown."""
+    note = active_pause(bridge)
+    if not note or note.get("announced"):
+        return None
+    pauses = _read_pauses(bridge)
+    pauses[bridge.harness]["announced"] = True
+    try:
+        _write_pauses(bridge, pauses)
+    except OSError:
+        pass
+    return pause_message(bridge)
 
 
 def _digest(raw):
@@ -45,6 +134,62 @@ def _rows(raw):
         offset += len(line)
 
 
+def _check_format(row, harness):
+    """Check that a transcript record has the shape this OS knows. Any app version may pass."""
+    if not isinstance(row.get("type"), str):
+        raise FormatChanged("record has no type")
+    if harness == "claude":
+        version = row.get("version")
+        if row["type"] not in {"user", "assistant"}:
+            return
+        message = row.get("message")
+        if not isinstance(message, dict):
+            raise FormatChanged("chat record has no message", version)
+        if message.get("role", row["type"]) != row["type"]:
+            raise FormatChanged("message role differs from record type", version)
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict) or not isinstance(block.get("type"), str):
+                    raise FormatChanged("content block has an unknown shape", version)
+                if block["type"] == "text" and not isinstance(block.get("text"), str):
+                    raise FormatChanged("text block has no text", version)
+        elif not isinstance(content, str):
+            raise FormatChanged("message content has an unknown shape", version)
+        return
+    payload = row.get("payload")
+    if row["type"] in {"session_meta", "turn_context", "response_item"} and not isinstance(payload, dict):
+        raise FormatChanged("record has no payload")
+    if row["type"] == "session_meta":
+        version = payload.get("cli_version")
+        if not isinstance(payload.get("id"), str):
+            raise FormatChanged("session record has no id", version)
+        if "cwd" in payload and not isinstance(payload["cwd"], str):
+            raise FormatChanged("session record has an unknown folder shape", version)
+    elif row["type"] == "response_item" and payload.get("type") == "message":
+        if payload.get("role") not in {"user", "assistant", "developer", "system"}:
+            raise FormatChanged("message has an unknown role")
+        content = payload.get("content")
+        if not isinstance(content, list) or any(
+                not isinstance(b, dict) or not isinstance(b.get("type"), str) for b in content):
+            raise FormatChanged("message content has an unknown shape")
+        for b in content:
+            if b["type"] in {"input_text", "output_text"} and not isinstance(b.get("text"), str):
+                raise FormatChanged("text block has no text")
+        meta = payload.get("internal_chat_message_metadata_passthrough")
+        if meta is not None and (not isinstance(meta, dict)
+                                 or not isinstance(meta.get("content_item_kinds", []), list)
+                                 or not isinstance(meta.get("content_item_metadata", []), list)):
+            raise FormatChanged("message metadata has an unknown shape")
+
+
+def _check_roles(rows, harness, start):
+    """A real exchange needs a recognised user message next to the replies."""
+    roles = {role for offset, _, row in rows if offset >= start for _, role, _ in _text(row, harness)}
+    if "assistant" in roles and "user" not in roles:
+        raise FormatChanged("replies were found but no user message was recognised")
+
+
 def _text(record, harness):
     if harness == "claude":
         if record.get("type") not in {"user", "assistant"}:
@@ -57,12 +202,12 @@ def _text(record, harness):
         message = record.get("message", {})
         role = record["type"]
         if not isinstance(message, dict) or message.get("role", role) != role:
-            raise CaptureBlocked("ambiguous message role")
+            raise FormatChanged("ambiguous message role")
         content = message.get("content")
         if isinstance(content, str):
             return [(0, role, content)]
         if not isinstance(content, list):
-            raise CaptureBlocked("unsupported message content")
+            raise FormatChanged("unsupported message content")
         if role == "user" and any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
             return []
         return [(i, role, b["text"]) for i, b in enumerate(content)
@@ -89,7 +234,7 @@ def _text(record, harness):
             return []
     content = message.get("content")
     if not isinstance(content, list):
-        raise CaptureBlocked("unsupported native content")
+        raise FormatChanged("unsupported native content")
     return [(i, role, b["text"]) for i, b in enumerate(content)
             if isinstance(b, dict) and b.get("type") in {"input_text", "output_text"}
             and isinstance(b.get("text"), str)]
@@ -119,6 +264,7 @@ def _snapshot(stream, size, bridge, event, scope, session, start):
             terminated = False
             break
         row = _json(line)
+        _check_format(row, bridge.harness)
         visible = _text(row, bridge.harness)
         payload = row.get("payload", {}) if bridge.harness == "codex" else row
         if bridge.harness == "codex" and row.get("type") in {"session_meta", "turn_context"}:
@@ -178,6 +324,9 @@ def _capture(bridge, event):
     session = event.get("session_id")
     if not isinstance(session, str) or not session or len(session) > 128:
         return {"status": "blocked", "reason": "invalid session"}
+    note = active_pause(bridge)
+    if note:
+        return {"status": "paused", "reason": note.get("reason", "chat format not recognised")}
     journal_id = None
     try:
         with bridge.lock(session):
@@ -257,12 +406,10 @@ def _capture(bridge, event):
             if bridge.harness == "codex":
                 if not rows or rows[0][2].get("type") != "session_meta" or rows[0][2].get("payload", {}).get("id") != session:
                     raise CaptureBlocked("native session metadata mismatch")
-                if rows[0][2]["payload"].get("cli_version") not in CODEX_VERSIONS:
-                    raise CaptureBlocked("native Codex version not qualified")
-            if bridge.harness == "claude":
-                if any(_text(row, "claude") and row.get("version") not in CLAUDE_VERSIONS
-                       for _, _, row in rows):
-                    raise CaptureBlocked("native Claude version not qualified")
+            # No app version is pinned. Every record was shape checked while streaming, and a
+            # reply with no recognisable user message pauses saving for this app (FL-29).
+            if event.get("hook_event_name") in {"Stop", "SessionEnd"}:
+                _check_roles(rows, bridge.harness, boundary.get("start", 0) if boundary else 0)
             if not boundary:
                 pending = state.get("chat_history_pending")
                 if pending != {"session": session, "scope": scope, "harness": bridge.harness, "epoch": epoch}:
@@ -341,6 +488,12 @@ def _capture(bridge, event):
                     "source_end_offset": receipt.checkpoint_source_end_offset,
                     "interrupted": interrupted,
                     "coverage": "native visible text; attachments not embedded"}
+    except FormatChanged as exc:
+        try:
+            _record_pause(bridge, exc)
+        except OSError:
+            pass
+        return {"status": "paused", "reason": str(exc)}
     except CaptureBlocked as exc:
         return {"status": "blocked", "reason": str(exc),
                 **({"pending_journal_id": journal_id} if journal_id else {})}

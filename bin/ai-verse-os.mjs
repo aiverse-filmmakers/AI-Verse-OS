@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { TOOLS, prepareToolchain, resolveTool, toolPath, toolEnv } from '../scripts/toolchain.mjs';
@@ -549,6 +550,28 @@ function status(options) {
   if (!result.ready) process.exitCode = 2;
 }
 
+// Chat saving pauses for an app whose chat file format the reader no longer recognises (FL-29).
+// The pause ends by itself when an OS update changes the reader, so only pauses made by the
+// reader now installed are reported.
+function chatSavingPauses(root) {
+  const readers = [
+    path.join(root, '.aiverse', 'extensions', 'ai-verse-codex-learning', 'prospective_capture.py'),
+    path.join(root, 'system', 'extensions', 'packages', 'ai-verse-codex-learning', 'prospective_capture.py'),
+  ];
+  const reader = readers.find(file => fs.existsSync(file));
+  const file = path.join(root, 'runtime', 'codex-learning', 'chat-saving-paused.json');
+  if (!reader || !fs.existsSync(file)) return [];
+  try {
+    const build = crypto.createHash('sha256').update(fs.readFileSync(reader)).digest('hex');
+    const notes = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Object.entries(notes)
+      .filter(([, note]) => note && typeof note === 'object' && note.build === build)
+      .map(([app, note]) => ({ app, reason: String(note.reason ?? ''), app_version: note.app_version ?? null, since: note.at ?? null }));
+  } catch {
+    return [];
+  }
+}
+
 function doctor(options) {
   const root = resolveRoot(options);
   if (!root) {
@@ -571,6 +594,7 @@ function doctor(options) {
   const missing = validateInstall(root);
   const toolsOk = TOOLS.every(t => toolchain[t].path);
   const structural = missing.length === 0 && toolsOk;
+  const chatPauses = chatSavingPauses(root);
   const doctorResult = {
     ...result,
     command: 'doctor',
@@ -590,6 +614,7 @@ function doctor(options) {
       core_files: { ok: missing.length === 0, missing },
       setup: { ok: result.setup.state === 'ready', state: result.setup.state },
       components: { ok: result.components?.ready === true, state: result.components?.state ?? 'unknown' },
+      chat_saving: { ok: chatPauses.length === 0, paused: chatPauses },
     },
     ready: structural && result.ready,
   };
@@ -604,6 +629,10 @@ function doctor(options) {
     out(`${missing.length ? '✗' : '✓'} Core architecture`);
     out(`${result.setup.state === 'ready' ? '✓' : '!'} Setup: ${result.setup.state}`);
     out(`${result.components?.ready ? '✓' : '!'} Composed profile: ${result.components?.state}`);
+    for (const pause of chatPauses) {
+      const app = pause.app === 'claude' ? 'Claude Code' : pause.app === 'codex' ? 'Codex' : pause.app;
+      out(`! Chat saving is paused for ${app}${pause.app_version ? ` ${pause.app_version}` : ''}: its chat files changed shape. It starts again after the next AI-Verse OS update.`);
+    }
     out('Depth checked: structural, setup, attachment/discovery, runtime, dependency, system/composed.');
     out('Operational owner-specific checks are not claimed by the OS doctor.');
     out(doctorResult.ready ? '\nAI-Verse OS is ready.' : '\nAI-Verse OS is not ready.');

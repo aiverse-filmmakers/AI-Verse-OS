@@ -57,6 +57,9 @@ jobs:
       - name: Test public-beta component lifecycle and reconciliation
         run: node scripts/test-components.mjs
 
+      - name: Test doctor reports paused chat saving
+        run: node scripts/test-doctor-chat-saving.mjs
+
       - name: Test public-beta OS lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
 

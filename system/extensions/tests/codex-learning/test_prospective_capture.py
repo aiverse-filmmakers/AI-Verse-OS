@@ -19,6 +19,7 @@ class Host:
         self.config = {'chat_history': 'prospective'}
         self.saved = {'scope': 'operator'}
         self.allowed = True
+        self.runtime = root / 'runtime' / 'codex-learning'
     def state(self, session): return json.loads(json.dumps(self.saved))
     def save(self, state): self.saved = json.loads(json.dumps(state))
     def scope(self, cwd, prompt): return 'operator'
@@ -342,5 +343,89 @@ class ProspectiveCaptureTests(unittest.TestCase):
         self.event['hook_event_name'] = 'Stop'
         self.assertEqual(capture.capture(self.host, self.event)['saved'], 2)
         self.assertEqual([m['text'] for m in self.messages()], ['real user', 'real reply'])
+
+
+class FormatCheckTests(unittest.TestCase):
+    """FL-29: no app version is pinned. The shape of the records decides."""
+    setUp = ProspectiveCaptureTests.setUp
+    append = ProspectiveCaptureTests.append
+    files = ProspectiveCaptureTests.files
+    messages = ProspectiveCaptureTests.messages
+
+    def start(self):
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
+        self.event['hook_event_name'] = 'Stop'
+
+    def raw(self, row):
+        with self.source.open('ab') as f: f.write(json.dumps(row, ensure_ascii=False).encode() + b'\n')
+
+    def test_current_real_claude_format_is_saved_on_any_app_version(self):
+        self.start()
+        for version in ('2.1.316', '2.9.1', '10.0.0'):
+            self.raw({'type': 'user', 'version': version, 'sessionId': 'session', 'uuid': 'u-' + version, 'parentUuid': None,
+                      'timestamp': '2026-11-11T10:00:00Z', 'cwd': str(self.root), 'gitBranch': 'main', 'userType': 'external',
+                      'message': {'role': 'user', 'content': 'question ' + version}})
+            self.raw({'type': 'assistant', 'version': version, 'sessionId': 'session', 'uuid': 'a-' + version, 'parentUuid': 'u-' + version,
+                      'message': {'role': 'assistant', 'model': 'x', 'content': [
+                          {'type': 'thinking', 'thinking': 'hidden', 'signature': 'sig'},
+                          {'type': 'text', 'text': 'answer ' + version},
+                          {'type': 'tool_use', 'id': 't1', 'name': 'Read', 'input': {}}]}})
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 6)
+        self.assertEqual([m['text'] for m in self.messages()][:2], ['question 2.1.316', 'answer 2.1.316'])
+        self.assertIsNone(capture.active_pause(self.host))
+
+    def test_unknown_codex_version_with_known_shape_is_saved(self):
+        self.host.harness = 'codex'
+        self.source = self.root / 'rollout-session.jsonl'
+        self.event['transcript_path'] = str(self.source)
+        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cli_version': '9.9.9', 'cwd': str(self.root)}}) + '\n', encoding='utf-8')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
+        self.raw({'type': 'response_item', 'payload': {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'hi'}], 'internal_chat_message_metadata_passthrough': {'content_item_kinds': ['user.text'], 'content_item_metadata': [{'provenance': {'type': 'user'}}]}}})
+        self.raw({'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'hello'}]}})
+        self.event['hook_event_name'] = 'Stop'
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 2)
+
+    def test_changed_shape_pauses_saving_and_says_so_once(self):
+        self.start()
+        self.append('user', 'before')
+        self.assertEqual(capture.capture(self.host, self.event)['saved'], 1)
+        self.raw({'type': 'user', 'version': '3.0.0', 'sessionId': 'session', 'body': {'text': 'moved'}})
+        receipt = capture.capture(self.host, self.event)
+        self.assertEqual(receipt['status'], 'paused')
+        note = capture.active_pause(self.host)
+        self.assertEqual(note['app_version'], '3.0.0')
+        # Later events do not even read the file, and the earlier saved message is untouched.
+        self.append('assistant', 'reply')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'paused')
+        self.assertEqual([m['text'] for m in self.messages()], ['before'])
+        text = capture.pause_notice(self.host)
+        self.assertIn('Claude Code', text)
+        self.assertIn('next AI-Verse OS update', text)
+        self.assertIsNone(capture.pause_notice(self.host))
+
+    def test_pause_ends_when_the_reader_is_updated(self):
+        self.start()
+        self.raw({'type': 'assistant', 'version': '3.0.0', 'sessionId': 'session', 'message': {'role': 'assistant', 'content': {'odd': 1}}})
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'paused')
+        with mock.patch.object(capture, '_current_build', return_value='a-newer-reader'):
+            self.assertIsNone(capture.active_pause(self.host))
+        self.assertEqual(capture._read_pauses(self.host), {})
+
+    def test_replies_without_a_recognised_user_message_pause_saving(self):
+        self.start()
+        self.append('assistant', 'reply with no question in sight')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'paused')
+
+    def test_codex_shape_change_pauses(self):
+        self.host.harness = 'codex'
+        self.source = self.root / 'rollout-session.jsonl'
+        self.event['transcript_path'] = str(self.source)
+        self.source.write_text(json.dumps({'type': 'session_meta', 'payload': {'id': 'session', 'cli_version': '0.200.0', 'cwd': str(self.root)}}) + '\n', encoding='utf-8')
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'recording')
+        self.raw({'type': 'response_item', 'payload': {'type': 'message', 'role': 'assistant', 'content': 'plain string now'}})
+        self.event['hook_event_name'] = 'Stop'
+        self.assertEqual(capture.capture(self.host, self.event)['status'], 'paused')
+        self.assertIn('Codex', capture.pause_message(self.host))
+
 
 if __name__ == '__main__': unittest.main()

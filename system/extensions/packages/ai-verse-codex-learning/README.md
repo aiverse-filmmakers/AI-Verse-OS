@@ -187,6 +187,13 @@ A missing source, changed scope, modified prefix, credential-like visible text,
 or unsupported source shape blocks that snapshot and preserves prior records.
 The local diagnostic reports saved, pending or blocked without source text.
 
+No app version is required. Every transcript record is checked against the shape
+this reader knows, and a reply with no recognisable user message counts as a
+changed shape. If the shape has changed, saving is paused for that app only,
+the member sees one plain message, `ai-verse-os doctor` and `bridge.py status`
+(`chat_saving_paused`) say so, and saving restarts by itself after an OS update
+changes the reader. Messages saved before the pause are kept.
+
 Native transcript tests use the real Codex 0.167.0 release and Claude Code
 2.1.316 with isolated homes and local synthetic API replies. They verify visible
 user and assistant text while excluding harness context and hidden reasoning.

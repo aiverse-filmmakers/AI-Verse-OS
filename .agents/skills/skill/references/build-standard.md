@@ -84,7 +84,7 @@ Before saving, split what was collected into:
 - **Project details:** brand, client names, fonts, colours, tone, audience, steps
   that only make sense in one project.
 
-If there are no project details, skip the question. If there are, ask one plain question:
+For `/learn`, use the general version by default. Keep project details in the source workspace and create adjustments or an exact project version only on explicit request. For `/skill`, skip the question if there are no project details. If there are, ask one plain question:
 
 > This includes details specific to <project>. Keep it exactly as is, for this
 > project only? Or make a general version that works anywhere, and keep the

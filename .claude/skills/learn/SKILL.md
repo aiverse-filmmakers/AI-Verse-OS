@@ -61,7 +61,9 @@ For Brain-owned strategic intent, use `brain.intent.read` (`read_local`, empty p
 | Operational fact that is current | Scoped current-state owner, with its revision check |
 | Verified repeatable method | Existing Skills owner as a qualified create/update proposal |
 
-Reuse an existing skill when it matches. Propose only the focused change supported by the conversation; a read or a single unrelated task does not prove a successful method. A skill proposal must state its trigger, inputs, steps, verification, and failure behavior. Let the Skills owner apply its existing approval and activation policy.
+Reuse an existing skill when it matches. Propose only the focused change supported by the conversation; a read or a single unrelated task does not prove a successful method. A skill proposal must state its trigger, inputs, steps, verification, and failure behavior. Use [the skill creation and verification workflow](references/skill-workflow.md) for related skills, complete packages, approval, and discovery in a fresh chat.
+
+Apply changes to the shared `/learn` workflow for both Codex and Claude Code. Verify equivalent outcomes with each host's own history and startup discovery format. Where a tool or deliverable is host specific, define a portable route and report which hosts were actually checked.
 
 Build every skill candidate from the reconciled notes, following [the skill build standard](../skill/references/build-standard.md). For `/learn`, default to the general version. Treat project names, assets, file paths, accounts, existing structure, tool defaults, and incidental prompt wording as source evidence. Remove them from the skill and its bundled examples. Turn what the procedure really needs into explicit inputs, configurable choices, prerequisites, and fallbacks. Keep essential constraints and observable quality checks. Treat an external service as optional unless the evidence shows the method truly depends on it.
 

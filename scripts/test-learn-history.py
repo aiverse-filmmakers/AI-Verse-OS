@@ -2,6 +2,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -74,6 +76,7 @@ class LearnHistoryTest(unittest.TestCase):
             self.item("reasoning", summary=[{"text": "HIDDEN_REASONING"}]),
             self.item("function_call", name="external_image_tool", call_id="call-1",
                       arguments=json.dumps({"prompt": prompt})),
+            self.codex_user("Mid task: keep the old wall."),
             {"type": "compacted", "payload": {"message": "COMPRESSED_ONLY"}},
             self.item("function_call_output", call_id="call-1", output="result-1"),
             self.codex_user("Second day: the reflections in result-1 worked."),
@@ -87,10 +90,11 @@ class LearnHistoryTest(unittest.TestCase):
         records = self.collect(receipt)
         self.assertEqual(records[0]["content"][0]["text"], "First day")
         self.assertEqual(json.loads(records[1]["content"]["arguments"])["prompt"], prompt)
-        self.assertEqual(records[2]["content"]["call_id"], "call-1")
-        self.assertIn("reflections in result-1", records[3]["content"][0]["text"])
-        self.assertEqual(records[4]["content"][0]["text"], "/learn")
-        self.assertEqual(len(records), 5)
+        self.assertEqual(records[2]["content"][0]["text"], "Mid task: keep the old wall.")
+        self.assertEqual(records[3]["content"]["call_id"], "call-1")
+        self.assertIn("reflections in result-1", records[4]["content"][0]["text"])
+        self.assertEqual(records[5]["content"][0]["text"], "/learn")
+        self.assertEqual(len(records), 6)
         with source.open("r+b") as stream:
             stream.seek(source.read_bytes().index(b"First day"))
             stream.write(b"Different")
@@ -141,6 +145,59 @@ class LearnHistoryTest(unittest.TestCase):
                             "message": {"role": "user", "content": "/learn"}}])
         receipt = self.start("claude", source=source, turn=self.turn)
         self.assertTrue(receipt["gaps"])
+
+    def test_claude_reads_delivered_mid_task_feedback_once_and_flags_unknown_delivery(self):
+        source = self.root / f"{self.session}.jsonl"
+        first, call, delivered, original, result, other_branch = [str(uuid4()) for _ in range(6)]
+
+        def record(kind, key, parent, **fields):
+            return {"type": kind, "uuid": key, "parentUuid": parent,
+                    "sessionId": self.session, "cwd": str(self.root), **fields}
+
+        def queue(operation, content):
+            return {"type": "queue-operation", "operation": operation,
+                    "content": content, "sessionId": self.session}
+
+        prompt = "Preserve the camera but change the light." * 600
+        attachment = {"type": "queued_command", "source_uuid": original, "commandMode": "prompt",
+                      "prompt": [{"type": "text", "text": "Keep the old wall."}],
+                      "origin": {"kind": "human"}, "timestamp": "2026-11-23T12:00:00Z"}
+        self.write(source, [
+            record("user", first, None, message={"content": "First brief"}),
+            record("assistant", call, first, message={"content": [
+                {"type": "tool_use", "id": "job", "input": {"prompt": prompt}}]}),
+            queue("enqueue", "Cancelled before delivery."),
+            queue("remove", "Cancelled before delivery."),
+            queue("enqueue", "Keep the old wall."),
+            record("attachment", delivered, call, attachment=attachment),
+            record("attachment", other_branch, first, attachment={**attachment,
+                   "source_uuid": other_branch, "prompt": "Abandoned branch"}),
+            record("user", original, delivered, message={"content": "Keep the old wall."}),
+            record("user", result, original, message={"content": [{"type": "tool_result",
+                   "tool_use_id": "job", "content": "Rendered"}]}),
+            queue("enqueue", "No delivery recorded."),
+            record("user", self.turn, result, message={"content": "/learn"}),
+        ])
+        receipt = self.start("claude", source=source, turn=self.turn)
+        self.assertEqual(receipt["gaps"], [
+            "Claude queue entry at line 10 has no confirmed delivery on this branch."])
+        records = self.collect(receipt)
+        self.assertEqual([value.get("record_kind") for value in records].count("queued_user_message"), 1)
+        self.assertEqual(history.message_text(records[2]["content"]), "Keep the old wall.")
+        self.assertEqual(records[2]["submitted_at"], attachment["timestamp"])
+        self.assertEqual(records[3]["content"][0]["tool_use_id"], "job")
+        self.assertNotIn("Abandoned", json.dumps(records))
+
+        # Each page uses a fresh process, as after a context reset.
+        def run_page(cursor):
+            return json.loads(subprocess.check_output([
+                sys.executable, str(path), "page", "--index", receipt["index"],
+                "--cursor", *map(str, cursor)], text=True, encoding="utf-8"))
+        original_page = run_page(receipt["next"])
+        saved_cursor = json.loads(json.dumps(original_page["next"]))
+        next_page = run_page(saved_cursor)
+        self.assertEqual(next_page["records"][0]["line"], original_page["records"][-1]["line"])
+        self.assertEqual(next_page["records"][0]["start"], original_page["records"][-1]["end"])
 
     def test_claude_exact_text_cannot_pick_an_older_turn(self):
         source = self.root / f"{self.session}.jsonl"

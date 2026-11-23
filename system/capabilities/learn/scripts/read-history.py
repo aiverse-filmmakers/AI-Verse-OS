@@ -2,6 +2,7 @@
 """Page through the visible evidence in one bound native chat."""
 
 import argparse
+from collections import defaultdict, deque
 import hashlib
 import json
 import os
@@ -105,6 +106,26 @@ def review_content(content):
 
 def claude_event(record):
     role = record.get("type")
+    if role == "attachment":
+        attachment = record.get("attachment", {})
+        if (attachment.get("type") != "queued_command" or record.get("isSidechain")
+                or record.get("isMeta") or attachment.get("isMeta")
+                or attachment.get("carriedByCompaction")
+                or attachment.get("commandMode") not in {None, "prompt"}
+                or (attachment.get("origin") or {}).get("kind") not in {None, "human"}):
+            return None
+        prompt = attachment.get("prompt")
+        if not isinstance(prompt, (str, list)) or not prompt:
+            return {"coverage": "Claude queued user message has no supported prompt"}
+        event = {"role": "user", "content": review_content(prompt),
+                 "message_id": attachment.get("source_uuid") or record.get("uuid"),
+                 "record_kind": "queued_user_message"}
+        if attachment.get("timestamp"):
+            event["submitted_at"] = attachment["timestamp"]
+        for key in ("fileAttachments", "imageFileUuids"):
+            if attachment.get(key):
+                event[key] = review_content(attachment[key])
+        return event
     if role not in {"user", "assistant"} or any(record.get(key) for key in
             ("isMeta", "isSidechain", "isCompactSummary", "isSynthetic")):
         return None
@@ -174,8 +195,8 @@ def claude_lineage(nodes, tip, gaps):
             gaps.append("The active Claude branch has a missing or circular parent.")
             break
         seen.add(tip)
-        parent, entry, cwd, boundary = nodes[tip]
-        ordered.append((entry, cwd))
+        parent, entry, cwd, boundary, observed = nodes[tip]
+        ordered.append((entry, cwd, observed))
         if boundary and parent is None:
             gaps.append("A Claude compaction boundary has no original parent.")
         tip = parent
@@ -183,6 +204,35 @@ def claude_lineage(nodes, tip, gaps):
     if any(left[0][0] >= right[0][0] for left, right in zip(ordered, ordered[1:])):
         raise HistoryError("Claude's parent chain conflicts with the source order.")
     return ordered
+
+
+def claude_entries(lineage, queue, gaps):
+    """Reconcile delivered steering messages without inferring delivery from enqueue."""
+    written = []
+    seen = {}
+    delivered = []
+    for entry, _, observation in lineage:
+        if observation:
+            message_id, digest, queued = observation
+            previous = seen.get(message_id)
+            if previous and (queued or previous[1]):
+                if previous[0] != digest:
+                    gaps.append(f"Claude user message representations differ at line {entry[0]}.")
+                else:
+                    continue
+            seen[message_id] = (digest, queued)
+            delivered.append((entry[0], "delivery", digest))
+        written.append(entry)
+    last = lineage[-1][0][0]
+    unresolved = defaultdict(deque)
+    for line, operation, digest in sorted(delivered + [item for item in queue if item[0] <= last]):
+        if operation == "enqueue":
+            unresolved[digest].append(line)
+        elif unresolved[digest]:
+            unresolved[digest].popleft()
+    for line in sorted(line for pending in unresolved.values() for line in pending):
+        gaps.append(f"Claude queue entry at line {line} has no confirmed delivery on this branch.")
+    return written
 
 
 def prepare(args):
@@ -203,7 +253,7 @@ def prepare(args):
     if source.suffix != ".jsonl" or not expected:
         raise HistoryError("The native file name does not match the current session.")
 
-    gaps, entries, nodes = [], [], {}
+    gaps, entries, nodes, queue = [], [], {}, []
     tip = None
     current_turn = False
     seen_user = False
@@ -243,6 +293,12 @@ def prepare(args):
                         if current_turn:
                             tip = line
                             break
+            elif kind == "queue-operation":
+                content = record.get("content")
+                operation = record.get("operation")
+                if (record.get("sessionId") == session and operation in {"enqueue", "remove", "popOne", "popAll"}
+                        and isinstance(content, str) and content):
+                    queue.append((line, operation, fingerprint(content.encode("utf-8"))))
             elif not record.get("isSidechain") and record.get("uuid"):
                 key = record["uuid"]
                 if key in nodes:
@@ -251,9 +307,14 @@ def prepare(args):
                     raise HistoryError("The Claude transcript contains a different session.")
                 boundary = kind == "system" and record.get("subtype") == "compact_boundary"
                 parent = record.get("logicalParentUuid") if boundary else record.get("parentUuid")
-                nodes[key] = (parent, entry, record.get("cwd"), boundary)
                 event = claude_event(record)
-                if event and event["role"] == "user" and message_text(event["content"]):
+                observation = None
+                if event and event.get("role") == "user" and message_text(event["content"]):
+                    observed_text = message_text(event["content"])
+                    observation = (event["message_id"], fingerprint(observed_text.encode("utf-8")),
+                                   kind == "attachment")
+                nodes[key] = (parent, entry, record.get("cwd"), boundary, observation)
+                if observation:
                     if args.turn and key == anchor:
                         tip = key
                         break
@@ -263,10 +324,10 @@ def prepare(args):
             raise HistoryError("The current Learn request is not yet identifiable in the original file.")
         if args.host == "claude":
             all_entries = claude_lineage(nodes, tip, gaps)
-            project_paths = [Path(path).resolve() for _, path in all_entries if path]
+            project_paths = [Path(path).resolve() for _, path, _ in all_entries if path]
             if not project_paths or any(path != cwd for path in project_paths):
                 raise HistoryError("The Claude branch does not match the current project.")
-            entries = [entry for entry, _ in all_entries]
+            entries = claude_entries(all_entries, queue, gaps)
 
     index = {"source": str(source), "identity": source_id, "host": args.host, "entries": entries}
     with tempfile.NamedTemporaryFile(mode="w", prefix="aiverse-learn-", suffix=".json",

@@ -137,14 +137,104 @@ try {
   // 7. A broken source with credentials in its address: plain error, nothing changed, no credentials shown.
   const secret = 'sekrit-token-12345';
   write(readme, 'EDIT BEFORE BAD SOURCE\n');
-  const badUrl = `https://someone:${secret}@127.0.0.1:1/none.git`;
-  for (const command of [['reinstall', '--force', '--dir', a], ['reinstall', '--force', '--dir', a, '--json'], ['update', '--dir', a]]) {
-    r = cliRun(command, { AI_VERSE_OS_REPO_URL: badUrl });
-    assert.notEqual(r.status, 0);
-    assert.ok(!(r.stdout + r.stderr).includes(secret), `credentials leaked for ${command.join(' ')}`);
+  const backupsBefore = fs.readdirSync(path.join(a, '.aiverse-backups')).length;
+  const badUrls = [
+    `https://someone:${secret}@127.0.0.1:1/none.git`,
+    `https://127.0.0.1:1/none.git?access_token=${secret}`,
+    `https://127.0.0.1:1/none.git?password=${secret}&x=1`,
+  ];
+  for (const badUrl of badUrls) {
+    for (const command of [['reinstall', '--force', '--dir', a], ['reinstall', '--force', '--dir', a, '--json'], ['update', '--dir', a]]) {
+      r = cliRun(command, { AI_VERSE_OS_REPO_URL: badUrl });
+      assert.notEqual(r.status, 0);
+      assert.ok(!(r.stdout + r.stderr).includes(secret), `credentials leaked for ${command.join(' ')}`);
+    }
   }
   assert.equal(read(readme), 'EDIT BEFORE BAD SOURCE\n');
-  assert.ok(!fs.existsSync(path.join(a, '.aiverse-backups', 'none')));
+  assert.equal(fs.readdirSync(path.join(a, '.aiverse-backups')).length, backupsBefore, 'a failed fetch must not create a backup');
+  git(a, ['checkout', '--', 'README.md']);
+
+  // 8. Source line and success output never show credentials. A git rewrite rule points the secret address at the scratch source.
+  const secretUrls = [`https://someone:${secret}@example.invalid/os.git`, `https://example.invalid/os.git?access_token=${secret}`];
+  for (const secretUrl of secretUrls) {
+    fs.writeFileSync(path.join(home, '.gitconfig'), `[url "${source.replace(/\\/g, '/')}"]\n\tinsteadOf = ${secretUrl}\n`, 'utf8');
+    const target = path.join(temp, `secret-install-${counter += 1}`);
+    r = cliRun(['install', target], { AI_VERSE_OS_REPO_URL: secretUrl });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Source: /);
+    assert.ok(!(r.stdout + r.stderr).includes(secret), 'Source line leaked credentials');
+    write(path.join(target, 'README.md'), 'EDIT\n');
+    for (const extra of [[], ['--json']]) {
+      r = cliRun(['reinstall', '--force', '--dir', target, ...extra], { AI_VERSE_OS_REPO_URL: secretUrl });
+      assert.equal(r.status, 0, r.stderr);
+      assert.ok(!(r.stdout + r.stderr).includes(secret), 'success output leaked credentials');
+      write(path.join(target, 'README.md'), 'EDIT\n');
+    }
+  }
+  fs.rmSync(path.join(home, '.gitconfig'), { force: true });
+
+  // 9. A change that is only staged is backed up too (the backup holds the staged content).
+  const b2 = freshInstall();
+  write(path.join(b2, 'README.md'), 'STAGED ONLY\n');
+  git(b2, ['add', 'README.md']);
+  r = cliRun(['reinstall', '--force', '--dir', b2, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  let out = JSON.parse(r.stdout);
+  assert.deepEqual(out.backed_up_files, ['README.md']);
+  assert.equal(read(path.join(out.backup_dir, 'README.md')), 'STAGED ONLY\n');
+  assert.equal(git(b2, ['status', '--porcelain']).trim(), '');
+
+  // 10. An untracked file (or an ignored one) sitting where the accepted release has a file is backed up, not lost.
+  const c = freshInstall();
+  git(c, ['rm', '-q', '--cached', 'CLAUDE.md']);
+  git(c, ['rm', '-q', '--cached', 'skills/registry.yaml']);
+  git(c, ['commit', '-q', '-m', 'stop tracking two files']);
+  write(path.join(c, 'CLAUDE.md'), 'MY UNTRACKED CLAUDE\n');
+  write(path.join(c, 'skills', 'registry.yaml'), 'MY IGNORED REGISTRY\n');
+  fs.appendFileSync(path.join(c, '.git', 'info', 'exclude'), 'skills/registry.yaml\n');
+  r = cliRun(['reinstall', '--force', '--dir', c, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.deepEqual([...out.backed_up_untracked_files].sort(), ['CLAUDE.md', 'skills/registry.yaml']);
+  assert.equal(read(path.join(out.backup_dir, 'CLAUDE.md')), 'MY UNTRACKED CLAUDE\n');
+  assert.equal(read(path.join(out.backup_dir, 'skills', 'registry.yaml')), 'MY IGNORED REGISTRY\n');
+  assert.notEqual(read(path.join(c, 'CLAUDE.md')), 'MY UNTRACKED CLAUDE\n');
+  assert.equal(head(c), acceptedSha);
+
+  // 11. Inside someone's own git project nothing happens, even with CLAUDE.md, AGENTS.md and release files of their own.
+  const project = path.join(temp, 'own-project');
+  fs.mkdirSync(project, { recursive: true });
+  git(project, ['init', '-q', '-b', 'main']);
+  write(path.join(project, 'CLAUDE.md'), 'their file\n');
+  write(path.join(project, 'AGENTS.md'), 'their agents\n');
+  write(path.join(project, 'release', 'component-release.json'), '{}\n');
+  write(path.join(project, 'src', 'a.txt'), 'code\n');
+  git(project, ['add', '-A']);
+  git(project, ['commit', '-q', '-m', 'theirs']);
+  for (const cwd of [project, path.join(project, 'src')]) {
+    r = spawnSync(process.execPath, [cli, 'reinstall', '--force'], { cwd, encoding: 'utf8', env: { ...gitEnv, AI_VERSE_OS_REPO_URL: source, AI_VERSE_PRIVATE_TOOLCHAIN: 'off' } });
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /installation not found/);
+  }
+  r = cliRun(['reinstall', '--force', '--dir', project]);
+  assert.notEqual(r.status, 0);
+  assert.equal(read(path.join(project, 'CLAUDE.md')), 'their file\n');
+  assert.ok(!fs.existsSync(path.join(project, '.aiverse-backups')));
+  assert.equal(git(project, ['rev-list', '--count', 'HEAD']).trim(), '1');
+
+  // 12. Detached HEAD: still reinstalls, and a commit made while detached is saved to the backup ref.
+  const d = freshInstall();
+  git(d, ['checkout', '-q', '--detach']);
+  write(path.join(d, 'README.md'), 'DETACHED WORK\n');
+  git(d, ['commit', '-q', '-am', 'detached commit']);
+  const detachedCommit = head(d);
+  write(path.join(d, 'README.md'), 'DETACHED EDIT\n');
+  r = cliRun(['reinstall', '--force', '--dir', d, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.equal(git(d, ['rev-parse', out.backup_ref]).trim(), detachedCommit);
+  assert.equal(head(d), acceptedSha);
+  assert.equal(read(path.join(out.backup_dir, 'README.md')), 'DETACHED EDIT\n');
 
   console.log('Reinstall accepted release tests passed');
 } finally {

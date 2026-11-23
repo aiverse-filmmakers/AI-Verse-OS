@@ -302,6 +302,27 @@ try {
   assert.equal(read(path.join(out.backup_dir, 'CLAUDE.md', 'inner.txt')), 'MY FOLDER WHERE A FILE GOES\n');
   assert.ok(fs.statSync(path.join(k, 'scripts')).isDirectory() && fs.statSync(path.join(k, 'CLAUDE.md')).isFile());
 
+  // 17. A nested git project where the release has a file is copied whole (links kept as links), never dropped.
+  const m = freshInstall();
+  git(m, ['rm', '-q', 'CLAUDE.md']);
+  git(m, ['commit', '-q', '-m', 'drop CLAUDE.md']);
+  const nestedRepo = path.join(m, 'CLAUDE.md');
+  fs.mkdirSync(nestedRepo);
+  git(nestedRepo, ['init', '-q', '-b', 'main']);
+  write(path.join(nestedRepo, 'f.txt'), 'NESTED WORK\n');
+  fs.symlinkSync('f.txt', path.join(nestedRepo, 'link-to-f'));
+  git(nestedRepo, ['add', '-A']);
+  git(nestedRepo, ['commit', '-q', '-m', 'nested']);
+  r = cliRun(['reinstall', '--force', '--dir', m, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.deepEqual(out.backed_up_untracked_files, ['CLAUDE.md']);
+  const savedRepo = path.join(out.backup_dir, 'CLAUDE.md');
+  assert.equal(read(path.join(savedRepo, 'f.txt')), 'NESTED WORK\n');
+  assert.equal(fs.readlinkSync(path.join(savedRepo, 'link-to-f')), 'f.txt');
+  assert.equal(git(savedRepo, ['log', '--format=%s']).trim(), 'nested');
+  assert.ok(fs.statSync(path.join(m, 'CLAUDE.md')).isFile());
+
   console.log('Reinstall accepted release tests passed');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

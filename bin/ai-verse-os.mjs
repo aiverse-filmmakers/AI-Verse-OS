@@ -692,7 +692,7 @@ function saveBeforeReinstall(root, accepted, options) {
     ...gitRaw(['ls-files', '-z', '--others', '--exclude-standard']).split('\0'),
     ...gitRaw(['ls-files', '-z', '--others', '--ignored', '--exclude-standard']).split('\0'),
   ].filter((rel) => rel && !rel.startsWith('.aiverse-backups/'));
-  const colliding = [...new Set(loose)].filter(collides);
+  const colliding = [...new Set(loose)].filter((entry) => collides(entry.endsWith('/') ? entry.slice(0, -1) : entry));
 
   const stamp = backupStamp();
   let dir = null;
@@ -703,16 +703,27 @@ function saveBeforeReinstall(root, accepted, options) {
     dir = candidate;
     return dir;
   };
-  const copy = (rel, list) => {
+  // Copy a file, a symlink (as a link, never followed) or a whole folder. Anything else cannot be saved, so the reinstall stops.
+  const copyTree = (from, to) => {
+    const stat = fs.lstatSync(from);
+    if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from, { encoding: 'buffer' }), to);
+    else if (stat.isDirectory()) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const name of fs.readdirSync(from, { encoding: 'buffer' })) {
+        copyTree(Buffer.concat([from, Buffer.from('/'), name]), Buffer.concat([to, Buffer.from('/'), name]));
+      }
+    } else if (stat.isFile()) fs.copyFileSync(from, to);
+    else fail('Reinstall stopped before changing anything: a file of yours is of a kind that cannot be backed up (not a plain file, folder or link). Move it out of the way and run reinstall again.');
+  };
+  const copy = (entry, list) => {
+    const rel = entry.endsWith('/') ? entry.slice(0, -1) : entry;
     const from = bytesPath(rootBytes, rel);
     let stat = null;
     try { stat = fs.lstatSync(from); } catch {}
     if (!stat) { saved.deleted_files.push(shown(rel)); return; }
-    if (!stat.isSymbolicLink() && !stat.isFile()) return;
     const to = bytesPath(Buffer.from(ensureDir(), 'utf8'), rel);
     fs.mkdirSync(parentOf(to), { recursive: true });
-    if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from, { encoding: 'buffer' }), to);
-    else fs.copyFileSync(from, to);
+    copyTree(from, to);
     list.push(shown(rel));
   };
   for (const rel of files) copy(rel, saved.edited_files);

@@ -40,16 +40,14 @@ const REPO_URL = process.env.AI_VERSE_OS_REPO_URL || DEFAULT_REPO;
 const INSTALL_COMMAND = 'npx --yes https://codeload.github.com/aiverse-filmmakers/AI-Verse-OS/tar.gz/main install';
 const SETUP_MARKER_REL = '.aiverse/os/setup.json';
 
-// Remove credentials (user:password@ or tokens inside a URL) from any text before it is shown.
+// Remove credentials from any text before it is shown: user:password@ in an address, and token style query values.
 function redact(text) {
-  let value = String(text ?? '');
-  if (REPO_URL) value = value.split(REPO_URL).join(redactUrl(REPO_URL));
-  return value.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\/\s@]+@/gi, '$1');
+  return String(text ?? '')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\/\s@]+@/gi, '$1')
+    .replace(/([?&#;][^=&#;\s]*(?:token|password|passwd|pass|secret|key|auth|sig|credential)[^=&#;\s]*=)[^&#;\s]*/gi, '$1***');
 }
 
-function redactUrl(url) {
-  return String(url).replace(/([a-z][a-z0-9+.-]*:\/\/)[^\/\s@]+@/i, '$1');
-}
+const redactUrl = redact;
 
 function out(message = '') {
   process.stdout.write(`${message}\n`);
@@ -169,22 +167,23 @@ function realPathOrPlanned(candidate) {
   }
 }
 
-// A folder that is clearly an AI-Verse OS checkout even when AGENTS.md or AI-VERSE.yaml was deleted by mistake.
+// A damaged AI-Verse OS checkout (AGENTS.md or AI-VERSE.yaml deleted): needs git plus both the release descriptor and the component manager.
 function isRepairableRoot(candidate) {
-  if (!fs.existsSync(path.join(candidate, '.git'))) return false;
-  return ['AGENTS.md', 'AI-VERSE.yaml', 'CLAUDE.md', 'skills/registry.yaml', 'release/component-release.json', 'scripts/components.mjs']
-    .some((item) => fs.existsSync(path.join(candidate, item)));
+  return fs.existsSync(path.join(candidate, '.git')) &&
+    fs.existsSync(path.join(candidate, 'release', 'component-release.json')) &&
+    fs.existsSync(path.join(candidate, 'scripts', 'components.mjs'));
 }
 
+// Intact installs are found as usual. A damaged one is only accepted when it is exactly the named folder, or the current folder; parents are never searched.
 function resolveRepairableRoot(options) {
-  let current = path.resolve(options.dir || process.cwd());
-  while (true) {
-    if (isRoot(current) || isRepairableRoot(current)) return current;
-    if (options.dir) return null;
-    const parent = path.dirname(current);
-    if (parent === current) return null;
-    current = parent;
+  if (options.dir) {
+    const candidate = path.resolve(options.dir);
+    return isRoot(candidate) || isRepairableRoot(candidate) ? candidate : null;
   }
+  const intact = findRoot();
+  if (intact) return intact;
+  const here = path.resolve(process.cwd());
+  return isRepairableRoot(here) ? here : null;
 }
 
 function findRoot(start = process.cwd()) {
@@ -653,10 +652,11 @@ function backupStamp() {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 }
 
-// Save everything the reset would discard: edited tracked files as copies, local commits under a backup ref.
+// Save everything the reset would discard: edited tracked files, untracked or ignored files that sit where the
+// accepted release has a file, and local commits (under a backup ref).
 function saveBeforeReinstall(root, accepted, options) {
   const git = (args) => run('git', ['-C', root, ...args], { capture: true, allowFailure: true });
-  const saved = { backup_dir: null, edited_files: [], deleted_files: [], backup_ref: null };
+  const saved = { backup_dir: null, edited_files: [], deleted_files: [], colliding_files: [], backup_ref: null };
 
   const status = git(['status', '--porcelain', '-z', '--untracked-files=no']).stdout || '';
   const entries = status.split('\0').filter(Boolean);
@@ -666,22 +666,38 @@ function saveBeforeReinstall(root, accepted, options) {
     files.push(entries[k].slice(3));
     if (code.includes('R') || code.includes('C')) k += 1; // the next entry is the old name of a rename
   }
+
+  // Untracked or ignored files that the reset would overwrite (same path, or a file where the release has a folder).
+  const releasePaths = (git(['ls-tree', '-r', '-z', '--name-only', accepted]).stdout || '').split('\0').filter(Boolean);
+  const releaseSet = new Set(releasePaths);
+  const releaseDirs = new Set();
+  for (const rel of releasePaths) {
+    for (let at = rel.indexOf('/'); at !== -1; at = rel.indexOf('/', at + 1)) releaseDirs.add(rel.slice(0, at));
+  }
+  const loose = [
+    ...(git(['ls-files', '-z', '--others', '--exclude-standard']).stdout || '').split('\0'),
+    ...(git(['ls-files', '-z', '--others', '--ignored', '--exclude-standard']).stdout || '').split('\0'),
+  ].filter((rel) => rel && !rel.startsWith('.aiverse-backups/'));
+  const colliding = [...new Set(loose)].filter((rel) => releaseSet.has(rel) || releaseDirs.has(rel));
+
   const stamp = backupStamp();
-  if (files.length) {
+  if (files.length || colliding.length) {
     let dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}`);
     for (let n = 2; fs.existsSync(dir); n += 1) dir = path.join(root, '.aiverse-backups', `reinstall-${stamp}-${n}`);
-    for (const rel of files) {
+    const copy = (rel, list) => {
       const from = path.join(root, rel);
       let stat = null;
       try { stat = fs.lstatSync(from); } catch {}
-      if (!stat) { saved.deleted_files.push(rel); continue; }
+      if (!stat) { saved.deleted_files.push(rel); return; }
       const to = path.join(dir, rel);
       fs.mkdirSync(path.dirname(to), { recursive: true });
       if (stat.isSymbolicLink()) fs.symlinkSync(fs.readlinkSync(from), to);
       else if (stat.isFile()) fs.copyFileSync(from, to);
-      else continue;
-      saved.edited_files.push(rel);
-    }
+      else return;
+      list.push(rel);
+    };
+    for (const rel of files) copy(rel, saved.edited_files);
+    for (const rel of colliding) copy(rel, saved.colliding_files);
     saved.backup_dir = dir;
     // Keep the backups out of git so they are never swept up or removed by later git work.
     const excludeRel = git(['rev-parse', '--git-path', 'info/exclude']).stdout.trim();
@@ -740,6 +756,7 @@ function reinstall(options) {
     canonical_user_state_purged: false,
     backup_dir: saved.backup_dir,
     backed_up_files: saved.edited_files,
+    backed_up_untracked_files: saved.colliding_files,
     deleted_files_restored: saved.deleted_files,
     backup_ref: saved.backup_ref,
   };

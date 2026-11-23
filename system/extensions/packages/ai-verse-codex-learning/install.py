@@ -554,9 +554,25 @@ def claude_install(root, options):
             allow.append(rule)
             added.append(rule)
     record["added_allow_rules"] = added
-    settings["autoMemoryEnabled"] = False
+    requested = options.get("auto_memory")
+    if requested not in (None, "off", "keep"):
+        raise ValueError("auto memory choice must be off or keep")
+    # The choice is remembered, so a later refresh (for example after an update) never flips it.
+    choice = requested or record.get("auto_memory_choice") or "off"
+    if choice == "off":
+        settings["autoMemoryEnabled"] = False
+        record["written_auto_memory"] = False
+    else:
+        if record.get("written_auto_memory") is False and settings.get("autoMemoryEnabled") is False:
+            previous = record.get("original_auto_memory", {})
+            if previous.get("present"):
+                settings["autoMemoryEnabled"] = previous["value"]
+            else:
+                del settings["autoMemoryEnabled"]
+        record.pop("written_auto_memory", None)
+    record["auto_memory_choice"] = choice
 
-    record.update({"written_hooks": generated["hooks"], "written_auto_memory": False, "build": build,
+    record.update({"written_hooks": generated["hooks"], "build": build,
                    "python": python, "updated_at": utc()})
     data = _claude_dump(settings)
     record["settings_sha256"] = sha_bytes(data)
@@ -566,7 +582,8 @@ def claude_install(root, options):
         _claude_rollback(settings_file, record_file, before_settings, before_record)
         raise
     return {"state": "installed", "settings": str(settings_file), "build": build,
-            "allow_rules_added": list(added), "auto_memory": "off for this project",
+            "allow_rules_added": list(added),
+            "auto_memory": "off for this project" if choice == "off" else "left on, as chosen",
             "exact_restore_ok": record["exact_restore_ok"], "codex_modified": False,
             "next_step": "Start a new Claude Code chat from this folder. The first time, Claude Code may ask you to trust the folder."}
 
@@ -628,7 +645,7 @@ def claude_remove(root):
             del permissions["allow"]
         if "permissions" in settings and not permissions and "permissions" not in original:
             del settings["permissions"]
-        if settings.get("autoMemoryEnabled") == record.get("written_auto_memory") and "autoMemoryEnabled" in settings:
+        if "written_auto_memory" in record and settings.get("autoMemoryEnabled") == record["written_auto_memory"] and "autoMemoryEnabled" in settings:
             previous = record.get("original_auto_memory", {})
             if previous.get("present"):
                 settings["autoMemoryEnabled"] = previous["value"]
@@ -662,7 +679,9 @@ def claude_doctor(root, python=None):
         result["guidance"].append(str(error))
         return result
     if record_file.exists():
-        result["exact_restore_ok"] = read_json(record_file, root).get("exact_restore_ok")
+        saved = read_json(record_file, root)
+        result["exact_restore_ok"] = saved.get("exact_restore_ok")
+        result["auto_memory_choice"] = saved.get("auto_memory_choice", "off")
     bridge = root / f".aiverse/extensions/{ID}/bridge.py"
     build = sha(bridge) if bridge.is_file() else None
     builds = set()
@@ -705,7 +724,7 @@ def claude_doctor(root, python=None):
         result["state"] = "refresh-needed"
         result["guidance"].append("The Claude hooks point at an older build: run claude-install again to refresh.")
     elif (result["package_files_verified"] and result["hooks_present"] == 5 and not result["allow_rules_missing"]
-          and result["auto_memory_off"] and result["build_matches"]):
+          and (result["auto_memory_off"] or result.get("auto_memory_choice") == "keep") and result["build_matches"]):
         result["state"] = "ready" if result["execution_observed"] and result["review_observed"] else "installed"
         if result["state"] == "installed":
             result["guidance"].append("Hooks are in place. Open a new Claude Code chat in this folder to see them run.")
@@ -789,6 +808,7 @@ def main():
     p.add_argument("--output")
     for name in ("metadata", "python", "node", "skills-root", "skills-entrypoint", "codex"):
         p.add_argument("--" + name)
+    p.add_argument("--auto-memory", choices=["off", "keep"], help="claude-install only: switch Claude's own memory off for this project, or keep it on")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
     options = vars(args)

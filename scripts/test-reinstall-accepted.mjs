@@ -12,7 +12,7 @@ const cli = path.join(repo, 'bin', 'ai-verse-os.mjs');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-verse-reinstall-'));
 const home = path.join(temp, 'home');
 fs.mkdirSync(home, { recursive: true });
-const gitEnv = { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+const gitEnv = { ...process.env, HOME: home, USERPROFILE: home, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', AI_VERSE_OS_APPS: 'none', AI_VERSE_OS_TEST: '1' };
 
 function git(cwd, args, allowFailure = false) {
   const g = spawnSync('git', ['-c', 'user.name=test', '-c', 'user.email=test@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', env: gitEnv });

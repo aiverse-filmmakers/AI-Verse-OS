@@ -136,9 +136,9 @@ Use `profile` only for stable, useful, strongly-supported identity/preferences. 
 ```json
 {
   "identity": {
-    "name": "Bogdan",
-    "roles": ["Filmmaker"],
-    "domains": ["AI filmmaking"],
+    "name": "Alex",
+    "roles": ["Designer"],
+    "domains": ["Brand design"],
     "notes": []
   },
   "preferences": {

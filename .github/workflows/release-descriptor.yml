@@ -5,13 +5,11 @@ on:
     paths:
       - "release/component-release.json"
       - ".github/workflows/release-descriptor.yml"
-      - "docs/RELEASE-DESCRIPTOR.md"
   push:
     branches: [main]
     paths:
       - "release/component-release.json"
       - ".github/workflows/release-descriptor.yml"
-      - "docs/RELEASE-DESCRIPTOR.md"
 
 permissions:
   contents: read

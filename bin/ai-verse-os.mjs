@@ -661,7 +661,7 @@ function saveBeforeReinstall(root, accepted, options) {
     const result = run('git', ['-C', root, ...args], { capture: true, allowFailure: true, raw: true });
     return Buffer.isBuffer(result.stdout) ? result.stdout.toString('latin1') : '';
   };
-  const saved = { backup_dir: null, edited_files: [], deleted_files: [], colliding_files: [], backup_ref: null };
+  const saved = { backup_dir: null, edited_files: [], deleted_files: [], colliding_files: [], backup_ref: null, index_backup_ref: null };
   const shown = (rel) => Buffer.from(rel, 'latin1').toString('utf8');
   const rootBytes = Buffer.from(root, 'utf8');
   const bytesPath = (base, rel) => Buffer.concat([base, Buffer.from('/'), Buffer.from(rel, 'latin1')]);
@@ -745,6 +745,20 @@ function saveBeforeReinstall(root, accepted, options) {
   }
 
   const head = git(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']).stdout.trim();
+  // Staged work: when the index differs from HEAD, keep it as a commit under its own ref (neither the index nor the folder is touched).
+  const indexTree = git(['write-tree']);
+  if (indexTree.status === 0) {
+    const tree = indexTree.stdout.trim();
+    const headTree = head ? git(['rev-parse', '--verify', '--quiet', 'HEAD^{tree}']).stdout.trim() : '';
+    if (tree && tree !== headTree) {
+      const made = git(['-c', 'user.name=AI-Verse backup', '-c', 'user.email=backup@invalid.invalid', '-c', 'commit.gpgsign=false', 'commit-tree', tree, ...(head ? ['-p', head] : []), '-m', 'Staged changes saved before reinstall']);
+      const base = `refs/aiverse-backups/reinstall-${stamp}-index`;
+      let name = base;
+      for (let n = 2; git(['rev-parse', '--verify', '--quiet', name]).status === 0; n += 1) name = `${base}-${n}`;
+      if (made.status !== 0 || git(['update-ref', name, made.stdout.trim()]).status !== 0) fail('Reinstall stopped before changing anything: your staged changes could not be backed up.');
+      saved.index_backup_ref = name;
+    }
+  }
   if (head) {
     const lost = git(['rev-list', '--max-count=1', head, '--not', accepted]).stdout.trim();
     if (lost) {
@@ -791,11 +805,13 @@ function reinstall(options) {
     backed_up_untracked_files: saved.colliding_files,
     deleted_files_restored: saved.deleted_files,
     backup_ref: saved.backup_ref,
+    index_backup_ref: saved.index_backup_ref,
   };
   if (options.json) emit(result, true);
   else {
     out('✓ AI-Verse OS tracked runtime files reinstalled to the accepted release. Ignored canonical user state and setup state were preserved.');
     if (saved.backup_dir) out(`Your edited files were saved first in: ${saved.backup_dir}`);
+    if (saved.index_backup_ref) out(`Your staged changes were saved first under the git reference: ${saved.index_backup_ref} (see them with: git show ${saved.index_backup_ref})`);
     if (saved.backup_ref) out(`Your own commits were saved first under the git reference: ${saved.backup_ref}`);
   }
 }

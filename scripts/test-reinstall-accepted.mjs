@@ -323,6 +323,31 @@ try {
   assert.equal(git(savedRepo, ['log', '--format=%s']).trim(), 'nested');
   assert.ok(fs.statSync(path.join(m, 'CLAUDE.md')).isFile());
 
+  // 18. Staged versions are kept even when the folder no longer has them: a staged edit reverted on disk, and a new staged file deleted on disk.
+  const n = freshInstall();
+  write(path.join(n, 'README.md'), 'STAGED THEN REVERTED\n');
+  write(path.join(n, 'brand-new-staged.txt'), 'STAGED NEW FILE\n');
+  git(n, ['add', 'README.md', 'brand-new-staged.txt']);
+  const originalReadme = git(n, ['show', 'HEAD:README.md']);
+  write(path.join(n, 'README.md'), originalReadme);
+  fs.rmSync(path.join(n, 'brand-new-staged.txt'));
+  const indexBefore = git(n, ['ls-files', '-s']);
+  r = cliRun(['reinstall', '--force', '--dir', n, '--json']);
+  assert.equal(r.status, 0, r.stderr);
+  out = JSON.parse(r.stdout);
+  assert.match(out.index_backup_ref, /^refs\/aiverse-backups\/reinstall-.*-index/);
+  assert.equal(git(n, ['show', `${out.index_backup_ref}:README.md`]), 'STAGED THEN REVERTED\n');
+  assert.equal(git(n, ['show', `${out.index_backup_ref}:brand-new-staged.txt`]), 'STAGED NEW FILE\n');
+  assert.equal(head(n), acceptedSha);
+  // Nothing staged: no index backup, and the human output names the ref when there is one.
+  r = cliRun(['reinstall', '--force', '--dir', n, '--json']);
+  assert.equal(JSON.parse(r.stdout).index_backup_ref, null);
+  write(path.join(n, 'README.md'), 'STAGED AGAIN\n');
+  git(n, ['add', 'README.md']);
+  r = cliRun(['reinstall', '--force', '--dir', n]);
+  assert.match(r.stdout, /staged changes were saved first under the git reference: refs\/aiverse-backups\//);
+  assert.ok(indexBefore.length > 0);
+
   console.log('Reinstall accepted release tests passed');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });

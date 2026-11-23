@@ -24,6 +24,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -168,6 +169,59 @@ def _load_module(path: Path, name: str):
     finally:
         sys.dont_write_bytecode = _keep
     return module
+
+
+# Where a bot may send text, and which secret it may use as a password (FL-08).
+# Only https, or http to this computer, and only a short list of password variable names.
+_LOCAL_RUNTIME_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_ALLOWED_API_KEY_ENV = frozenset({
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "TOGETHER_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "AI_VERSE_BOT_API_KEY",
+})
+
+
+def _validated_runtime_endpoint(endpoint: Any, label: str) -> str:
+    if (
+        not isinstance(endpoint, str)
+        or len(endpoint) > 2048
+        or any(ch.isspace() for ch in endpoint)
+        or not endpoint.startswith(("http://", "https://"))
+    ):
+        raise AdapterError(f"{label} runtime endpoint must be a bounded HTTP(S) URL")
+    try:
+        parts = urlsplit(endpoint)
+        host = (parts.hostname or "").lower()
+        parts.port  # raises ValueError for a bad port
+    except ValueError:
+        raise AdapterError(f"{label} runtime endpoint is not a valid URL") from None
+    if not host:
+        raise AdapterError(f"{label} runtime endpoint has no host")
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+        raise AdapterError(f"{label} runtime endpoint must not carry a login in the address")
+    local = host in _LOCAL_RUNTIME_HOSTS or host.endswith(".localhost")
+    if parts.scheme != "https" and not local:
+        raise AdapterError(
+            f"{label} runtime endpoint must use https, or http only to this computer (localhost, 127.0.0.1 or ::1)"
+        )
+    return endpoint
+
+
+def _validated_api_key_env(handle: Any, label: str) -> str:
+    if not isinstance(handle, str) or handle not in _ALLOWED_API_KEY_ENV:
+        raise AdapterError(
+            f"{label} runtime api_key_env must be one of the approved variable names: "
+            + ", ".join(sorted(_ALLOWED_API_KEY_ENV))
+        )
+    return handle
 
 
 def _fingerprint(request: Mapping[str, Any]) -> str:
@@ -1637,13 +1691,7 @@ class AIverseOSHost:
             )
         endpoint = value.get("endpoint")
         model = value.get("model")
-        if (
-            not isinstance(endpoint, str)
-            or not endpoint.startswith(("http://", "https://"))
-            or len(endpoint) > 2048
-            or any(ch.isspace() for ch in endpoint)
-        ):
-            raise AdapterError("workers.temporary runtime endpoint must be a bounded HTTP(S) URL")
+        endpoint = _validated_runtime_endpoint(endpoint, "workers.temporary")
         if not isinstance(model, str) or not model.strip() or len(model.strip()) > 256:
             raise AdapterError("workers.temporary runtime model is invalid")
         result: Dict[str, Any] = {
@@ -1653,9 +1701,7 @@ class AIverseOSHost:
         }
         handle = value.get("api_key_env")
         if handle is not None:
-            if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", handle):
-                raise AdapterError("workers.temporary runtime api_key_env is invalid")
-            result["api_key_env"] = handle
+            result["api_key_env"] = _validated_api_key_env(handle, "workers.temporary")
         return result
 
     def _run_multiple_bots_temporary_worker(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
@@ -1878,13 +1924,7 @@ class AIverseOSHost:
             )
         endpoint = value.get("endpoint")
         model = value.get("model")
-        if (
-            not isinstance(endpoint, str)
-            or not endpoint.startswith(("http://", "https://"))
-            or len(endpoint) > 2048
-            or any(ch.isspace() for ch in endpoint)
-        ):
-            raise AdapterError("bots.permanent runtime endpoint must be a bounded HTTP(S) URL")
+        endpoint = _validated_runtime_endpoint(endpoint, "bots.permanent")
         if not isinstance(model, str) or not model.strip() or len(model.strip()) > 256:
             raise AdapterError("bots.permanent runtime model is invalid")
         result: Dict[str, Any] = {
@@ -1894,9 +1934,7 @@ class AIverseOSHost:
         }
         handle = value.get("api_key_env")
         if handle is not None:
-            if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,127}", handle):
-                raise AdapterError("bots.permanent runtime api_key_env is invalid")
-            result["api_key_env"] = handle
+            result["api_key_env"] = _validated_api_key_env(handle, "bots.permanent")
         return result
 
     def _run_multiple_bots_create_durable(self, manifest: Mapping[str, Any]) -> Dict[str, Any]:

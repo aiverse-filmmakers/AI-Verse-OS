@@ -27,7 +27,8 @@ function writeDescriptor(dir, version, revision) {
 }
 
 function cli(bin, args) {
-  const result = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // The installer takes updates from its own source; here that source is the scratch origin.
+  const result = spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, AI_VERSE_OS_REPO_URL: path.join(temp, 'origin.git') } });
   return { out: result.stdout.trim(), json: () => JSON.parse(result.stdout) };
 }
 

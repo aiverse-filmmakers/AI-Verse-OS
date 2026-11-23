@@ -501,7 +501,7 @@ export async function connectAll(root, options = {}) {
     const mid = connectionStatus(root, { apps });
     if (!mid.claude || !mid.claude.current) {
       const args = ['claude-install'];
-      if (memory.choice) args.push('--auto-memory', memory.choice);
+      if (memory.choice) args.push('--auto-memory', memory.how === 'not asked' ? 'unasked' : memory.choice);
       const r = runPackage(root, args);
       if (!r.ok) failure = r.error;
       else steps.push('Claude Code helpers switched on');

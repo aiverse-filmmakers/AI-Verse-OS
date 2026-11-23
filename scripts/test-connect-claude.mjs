@@ -107,6 +107,8 @@ try {
     assert.equal(settings.permissions.allow.length, 7);
     assert.ok(!('autoMemoryEnabled' in settings), 'memory is left on when the run could not ask');
     assert.ok(!fs.existsSync(connectFile), 'a choice that was never asked must not be stored');
+    const record = JSON.parse(fs.readFileSync(path.join(root, '.aiverse', 'extensions', PACKAGE_ID, 'claude-adapter.json'), 'utf8'));
+    assert.ok(!('auto_memory_choice' in record), 'the adapter record must not hold an unasked choice');
 
     // status and doctor print the same plain line, read only.
     const s = cli(['status'], 'claude');

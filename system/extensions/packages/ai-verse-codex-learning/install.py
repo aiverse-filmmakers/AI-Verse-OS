@@ -564,10 +564,14 @@ def claude_install(root, options):
             added.append(rule)
     record["added_allow_rules"] = added
     requested = options.get("auto_memory")
-    if requested not in (None, "off", "keep"):
-        raise ValueError("auto memory choice must be off or keep")
+    if requested not in (None, "off", "keep", "unasked"):
+        raise ValueError("auto memory choice must be off, keep or unasked")
     # The choice is remembered, so a later refresh (for example after an update) never flips it.
-    choice = requested or record.get("auto_memory_choice") or "off"
+    # "unasked" means nobody was asked: memory is not switched off and no choice is stored.
+    choice = requested if requested in ("off", "keep") else record.get("auto_memory_choice")
+    if not choice:
+        choice = "off" if (record.get("written_auto_memory") is False
+                           or (requested is None and before_record is None)) else "keep"
     if choice == "off":
         settings["autoMemoryEnabled"] = False
         record["written_auto_memory"] = False
@@ -579,7 +583,8 @@ def claude_install(root, options):
             else:
                 del settings["autoMemoryEnabled"]
         record.pop("written_auto_memory", None)
-    record["auto_memory_choice"] = choice
+    if requested != "unasked":
+        record["auto_memory_choice"] = choice
 
     record.update({"written_hooks": generated["hooks"], "build": build,
                    "python": python, "updated_at": utc()})
@@ -690,7 +695,7 @@ def claude_doctor(root, python=None):
     if record_file.exists():
         saved = read_json(record_file, root)
         result["exact_restore_ok"] = saved.get("exact_restore_ok")
-        result["auto_memory_choice"] = saved.get("auto_memory_choice", "off")
+        result["auto_memory_choice"] = saved.get("auto_memory_choice") or ("off" if saved.get("written_auto_memory") is False else "keep")
     bridge = root / f".aiverse/extensions/{ID}/bridge.py"
     build = sha(bridge) if bridge.is_file() else None
     builds = set()
@@ -817,7 +822,7 @@ def main():
     p.add_argument("--output")
     for name in ("metadata", "python", "node", "skills-root", "skills-entrypoint", "codex"):
         p.add_argument("--" + name)
-    p.add_argument("--auto-memory", choices=["off", "keep"], help="claude-install only: switch Claude's own memory off for this project, or keep it on")
+    p.add_argument("--auto-memory", choices=["off", "keep", "unasked"], help="claude-install only: switch Claude's own memory off for this project, keep it on, or (unasked) keep it on without storing a choice")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
     options = vars(args)

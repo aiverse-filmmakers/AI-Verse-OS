@@ -92,7 +92,7 @@ function samePath(a, b) {
 }
 
 function realRoot(root) {
-  try { return fs.realpathSync(root); } catch { return path.resolve(root); }
+  try { return fs.realpathSync.native(root); } catch { return path.resolve(root); }
 }
 
 function onPath(name) {

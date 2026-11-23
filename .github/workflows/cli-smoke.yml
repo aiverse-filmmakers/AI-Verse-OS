@@ -8,6 +8,7 @@ on:
       - 'scripts/components.mjs'
       - 'scripts/fixed-order.mjs'
       - 'scripts/test-cli-lifecycle.mjs'
+      - 'scripts/test-reinstall-accepted.mjs'
       - 'package.json'
       - '.gitignore'
       - '.github/workflows/cli-smoke.yml'
@@ -17,6 +18,7 @@ on:
       - 'scripts/components.mjs'
       - 'scripts/fixed-order.mjs'
       - 'scripts/test-cli-lifecycle.mjs'
+      - 'scripts/test-reinstall-accepted.mjs'
       - 'package.json'
       - '.gitignore'
       - '.github/workflows/cli-smoke.yml'
@@ -48,6 +50,9 @@ jobs:
 
       - name: Test lifecycle state machine
         run: node scripts/test-cli-lifecycle.mjs
+
+      - name: Test reinstall uses the accepted release and keeps member edits
+        run: node scripts/test-reinstall-accepted.mjs
 
       - name: Test first-run install then explicit setup
         shell: bash

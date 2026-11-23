@@ -68,11 +68,18 @@ try:
     package = root / "workspaces/alpha/inbox/method"
     package.mkdir(parents=True)
     (package / "SKILL.md").write_text('---\nname: reusable-method\ndescription: >-\n  Verify a portable\n  procedure\n---\nUse explicit inputs and verify the result.\n', encoding="utf-8")
+    (package / "assets").mkdir()
+    (package / "assets" / "starter.txt").write_text("Portable starter", encoding="utf-8")
     parameters = {"source_relative": "workspaces/alpha/inbox/method", "admission": library.PORTABILITY}
     preview = request("skills.library-import", parameters)
     assert preview["status"] == "succeeded" and not preview["effect_occurred"], preview
+    assert not (root / ".agents/skills/reusable-method").exists()
     applied = request("skills.library-import", {**parameters, "plan": preview["result"]})
     assert applied["status"] == "succeeded" and applied["effect_occurred"]
+    listing = applied["result"]["chat_listing"]
+    assert listing["state"] == "listed" and len(listing["targets"]) == 2, listing
+    for target in listing["targets"]:
+        assert (root / target / "assets" / "starter.txt").read_text(encoding="utf-8") == "Portable starter"
     identity = applied["result"]["qualified_id"]
     candidate = next(x for x in host.list_capabilities("workspace:beta") if x["id"] == identity)
     checks += 1
@@ -124,6 +131,7 @@ try:
     assert learned["status"] == "succeeded", learned
     result = learned["result"]
     assert result["skills_result"]["state"] == "pending_approval", result
+    assert "chat_listing" not in result
     assert len(library.read_index(personal)["skills"]) == 2
     proposal_id = result["skills_submission"]["proposal_id"]
     promoted = subprocess.run([*command, "proposals", "apply", proposal_id, "--approved-by", "fixture-user", "--json"], capture_output=True, text=True, check=True, encoding="utf-8")

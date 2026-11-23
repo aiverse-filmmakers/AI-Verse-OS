@@ -887,6 +887,45 @@ class AIverseOSHost:
         except AdapterError as exc:
             raise AdapterError(f"{label} returned invalid JSON: {exc}") from exc
 
+    def _refresh_member_skill_listing(self, scope: str, applied: Mapping[str, Any]) -> Dict[str, Any]:
+        """Refresh the two native catalogs after the member library commits a revision."""
+        skill_id = applied.get("qualified_id")
+        revision = applied.get("revision")
+        receipt: Dict[str, Any] = {"qualified_id": skill_id, "revision": revision}
+        if not isinstance(skill_id, str) or not isinstance(revision, str):
+            return {**receipt, "state": "pending", "reason": "Skills did not return an exact identity and revision."}
+        try:
+            selected = self._pinned_selection(scope, skill_id)
+            if selected.get("digest", {}).get("value") != revision:
+                return {**receipt, "state": "pending", "reason": "The activated revision is no longer current."}
+            if selected.get("visibility") != "shared":
+                return {**receipt, "state": "workspace_only"}
+            name = selected.get("name", "")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}", name):
+                raise AdapterError("The skill name cannot be used in a native listing.")
+            sync = self._safe_repo_file("scripts/sync-my-skills.mjs", "member skill listing")
+            proc = subprocess.run(
+                [_node(), str(sync), "--json", "--local-skills-root", str(self.local_skills_root)],
+                cwd=self.root, text=True, encoding="utf-8",
+                capture_output=True, check=False, timeout=20,
+            )
+            if proc.returncode:
+                raise AdapterError("The local chat listing could not be refreshed.")
+            report = _json_object(proc.stdout, "member skill listing")
+            targets = [f".agents/skills/{name}", f".claude/skills/{name}"]
+            for target in targets:
+                package = self.root / target
+                if (not package.is_dir() or package.is_symlink()
+                        or not (package / "SKILL.md").is_file()
+                        or self._package_digest_v1(package) != revision):
+                    reason = next((entry for entry in report.get("skipped", [])
+                                   if entry.startswith((target + ":", name + ":"))),
+                                  "The startup copy does not match the active skill.")
+                    return {**receipt, "state": "pending", "reason": reason}
+            return {**receipt, "state": "listed", "targets": targets}
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+            return {**receipt, "state": "pending", "reason": str(error)}
+
     def _request_skills_learning_candidate(
         self,
         request: Mapping[str, Any],
@@ -1035,6 +1074,8 @@ class AIverseOSHost:
                         },
                     }
 
+        member_import = final.get("member_import") if final.get("state") == "applied" else None
+        chat_listing = self._refresh_member_skill_listing(scope, member_import) if isinstance(member_import, Mapping) else None
         return {
             "status": "succeeded",
             "effect_occurred": not replay,
@@ -1043,6 +1084,7 @@ class AIverseOSHost:
                 "skills_submission": submitted,
                 "skills_result": final,
                 "idempotent_replay": replay,
+                **({"chat_listing": chat_listing} if chat_listing is not None else {}),
             },
             "execution_binding": {
                 "request_fingerprint": _fingerprint(request),
@@ -3574,6 +3616,8 @@ class AIverseOSHost:
                     file.write_text(json.dumps(parameters.get(key, {}), allow_nan=False), encoding="utf-8")
                     args.extend([flag, str(file)])
                 result = self._run_skills_owner_cli(args, "Skills member import")
+            if result.get("state") in {"imported", "already-imported"}:
+                result["chat_listing"] = self._refresh_member_skill_listing(scope, result)
         return {"status": "blocked" if result.get("owner_refused") else "succeeded",
                 "effect_occurred": result.get("state") in {"imported", "saved"}, "result": result,
                 "execution_binding": {"scope": scope, "operation": operation, "request_fingerprint": _fingerprint(request)}}
